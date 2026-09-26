@@ -66,7 +66,7 @@ await suite('e2e', async t => {
         return await ev(`return RD.desktop.logOf(${pane})`)
     }
     const hotkey = async () => {
-        const mods = process.platform === 'darwin' ? ['Meta', 'Shift'] : ['Control', 'Shift']
+        const mods = t.platform === 'darwin' ? ['Meta', 'Shift'] : ['Control', 'Shift']
         await t.key('G', 'KeyG', 71, mods)
         await sleep(500)
     }
@@ -173,7 +173,7 @@ await suite('e2e', async t => {
     check('still one desktop session', desktops === 1, desktops)
 
     // 8. A plain local terminal running `ssh` is recognized as the same account (not on Windows).
-    if (process.platform === 'win32') {
+    if (t.platform === 'win32') {
         t.skip('local terminal running ssh', 'not detected on Windows')
     } else {
         check('local terminal opened', await ev('H.local = await H.openLocal(); return !!H.local'))
@@ -207,7 +207,7 @@ await suite('e2e', async t => {
     check('menu offers "Open remote desktop" again', await labels(false) === 'Open remote desktop')
     check('the second tab no longer offers switching', await labels(false, 'H.pane2') === 'Open remote desktop')
 
-    if (process.platform !== 'win32') {
+    if (t.platform !== 'win32') {
         // 10. The local terminal opens its own desktop, through the system ssh.
         await select('H.local')
         await sleep(2500)

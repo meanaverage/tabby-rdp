@@ -6,6 +6,8 @@ Prepares a Windows 10/11 Pro (or Server) machine, preferably a VM, as a tabby-rd
 - Turns on Remote Desktop (with Network Level Authentication) and its firewall rules.
 - Turns on WinRM over HTTP (NTLM with message encryption), which the Windows suite uses to check what happened
   inside Windows: typing, clipboard, sound and files.
+  Marks the network private first (WinRM's settings can't be changed on a public one), and lets the test account
+  use WinRM's command shell, which the suite's checks run in.
 - Creates a local test account that can sign in over Remote Desktop and WinRM, without administrator rights.
 
 Run in an elevated PowerShell:
@@ -36,8 +38,18 @@ Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' 
 Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name UserAuthentication -Value 1
 Enable-NetFirewallRule -Group '@FirewallAPI.dll,-28752'
 
+# WinRM's settings can't be changed while a network is Public (and it only answers the local subnet there): a test
+# machine's network is a private one.
+Get-NetConnectionProfile | Where-Object NetworkCategory -eq Public | Set-NetConnectionProfile -NetworkCategory Private
+
 # WinRM over HTTP. NTLM with message encryption (what the suite uses) needs no HTTPS listener.
 Enable-PSRemoting -SkipNetworkProfileCheck -Force | Out-Null
+# Remote Management Users may use PowerShell remoting, but not WinRM's command shell, which the suite's checks run
+# in (pywinrm): only administrators may by default. Let the group use it too.
+$rootSddl = (Get-Item WSMan:\localhost\Service\RootSDDL).Value
+if ($rootSddl -notmatch '\(A;;GA;;;RM\)') {
+    Set-Item WSMan:\localhost\Service\RootSDDL -Value ($rootSddl -replace '^(O:[^:]+G:[^:]+D:P?)', '$1(A;;GA;;;RM)') -Force
+}
 
 # The test account: Remote Desktop and WinRM, not an administrator.
 $account = Get-LocalUser -Name $UserName -ErrorAction SilentlyContinue

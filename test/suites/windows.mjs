@@ -3,7 +3,6 @@
 // reconnecting with the saved account. With WinRM (TRD_TEST_WIN_WINRM), also typing, the clipboard both ways,
 // sound, and files both ways with Explorer, each checked inside Windows. See test/README.md for the test machine.
 import fs from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { suite } from '../lib/harness.mjs'
@@ -27,13 +26,21 @@ await suite('windows', async t => {
     /** Runs PowerShell inside Windows (WinRM, from the SSH host). */
     const guest = script => t.remote('H.pane', `${win.winrmPython} -`,
         `${WINRM_HELPER}\nmain(${JSON.stringify({ address: win.winrm, user: win.account, password: win.password, script })})\n`)
-    /** Runs PowerShell in the signed-in Windows session (an interactive scheduled task), where the desktop is. */
+    /**
+     * Runs PowerShell in the signed-in Windows session, where the desktop is: a task with the account's interactive
+     * token, through the Task Scheduler's COM interface (the ScheduledTasks cmdlets use WMI, which is for
+     * administrators only over WinRM).
+     */
     const inSession = (name, command) => guest(`
-$a = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument '-NoProfile -WindowStyle Hidden -Command "${command.replace(/"/g, '\\"').replace(/'/g, "''")}"'
-$p = New-ScheduledTaskPrincipal -UserId "$env:COMPUTERNAME\\${win.account.replace(/^.*\\/, '')}" -LogonType Interactive
-Register-ScheduledTask -TaskName '${name}' -Action $a -Principal $p -Force | Out-Null
-Start-ScheduledTask -TaskName '${name}'`)
-    const dropTask = name => guest(`Unregister-ScheduledTask -TaskName '${name}' -Confirm:$false -ErrorAction SilentlyContinue`)
+$s = New-Object -ComObject Schedule.Service; $s.Connect()
+$d = $s.NewTask(0)
+$d.Principal.LogonType = 3
+$a = $d.Actions.Create(0)
+$a.Path = 'powershell.exe'
+$a.Arguments = '-NoProfile -WindowStyle Hidden -Command "${command.replace(/"/g, '\\"').replace(/'/g, "''")}"'
+$s.GetFolder('\\').RegisterTaskDefinition('${name}', $d, 6, $null, $null, 3) | Out-Null
+$s.GetFolder('\\').GetTask('${name}').Run($null) | Out-Null`)
+    const dropTask = name => guest(`$s = New-Object -ComObject Schedule.Service; $s.Connect(); try { $s.GetFolder('\\').DeleteTask('${name}', 0) } catch { }`)
     await ev(`Object.assign(H, {
         signin () {
             const f = H.overlay(H.pane)?.querySelector('.trd-signin form')
@@ -175,18 +182,24 @@ if (Test-Path $state) { Get-ChildItem $state -File | Where-Object { $keep -notco
         // 7. Sound: a system sound played in the session arrives here.
         const audio = () => ev('const a = H.session(H.pane)?.audio; return a ? { received: a.received, peak: a.peak } : null')
         const before = await audio()
-        await inSession('trd-sound', "(New-Object Media.SoundPlayer 'C:\\Windows\\Media\\Alarm01.wav').PlaySync()")
+        const play = () => inSession('trd-sound', "(New-Object Media.SoundPlayer 'C:\\Windows\\Media\\Alarm01.wav').PlaySync()")
         t.onCleanup(() => dropTask('trd-sound'))
         let after = before
-        for (let i = 0; i < 30 && (after?.received ?? 0) - (before?.received ?? 0) < 1; i++) {
-            await sleep(500)
-            after = await audio()
+        // Windows now and then drops the first sound of a new session: play it once more if nothing came.
+        for (let attempt = 1; attempt <= 2 && (after?.received ?? 0) - (before?.received ?? 0) < 1; attempt++) {
+            if (attempt === 2) console.log('NOTE  sound: nothing arrived, playing it again')
+            await play()
+            for (let i = 0; i < 30 && (after?.received ?? 0) - (before?.received ?? 0) < 1; i++) {
+                await sleep(500)
+                after = await audio()
+            }
         }
         const seconds = (after?.received ?? 0) - (before?.received ?? 0)
         check(`sound: a Windows sound arrived (${seconds.toFixed(1)} s)`, seconds > 1 && (after?.peak ?? 0) > 0.05, { before, after })
 
         // 8. Files: Explorer on a folder with a file made on Windows.
-        const folder = 'C:\\Users\\Public\\trd-test-files'
+        // In the account's own profile: a non-administrator can't create folders in C:\Users\Public.
+        const folder = (await guest('$env:USERPROFILE')).trim() + '\\trd-test-files'
         await guest(`New-Item -ItemType Directory -Force -Path '${folder}' | Out-Null; Set-Content -Path '${folder}\\from-windows.txt' -Value 'made on Windows' -NoNewline`)
         t.onCleanup(() => guest(`Remove-Item -Recurse -Force '${folder}' -ErrorAction SilentlyContinue`))
         await inSession('trd-explorer', `explorer.exe ${folder}`)
@@ -196,11 +209,10 @@ if (Test-Path $state) { Get-ChildItem $state -File | Where-Object { $keep -notco
         await t.press('c', ['Control'])
         const offered = await t.waitFor('const f = H.session(H.pane)?.files?.offered ?? []; return f.length ? f.map(x => x.name) : null', 10, 300)
         check('files: copied in Explorer, offered here', offered?.includes('from-windows.txt'), offered)
-        const here = fs.mkdtempSync(path.join(os.tmpdir(), 'trd-winfiles-'))
-        t.onCleanup(() => fs.rmSync(here, { recursive: true, force: true }))
+        const here = await t.tempDir('trd-winfiles-')
         const saved = offered ? await ev(`return await H.session(H.pane).files.saveAll(${JSON.stringify(here)})`) : []
         const savedFile = saved.find(f => f.endsWith('from-windows.txt'))
-        check('files: saved here, same content', !!savedFile && fs.readFileSync(savedFile, 'utf8') === 'made on Windows', saved)
+        check('files: saved here, same content', !!savedFile && await t.readFile(savedFile) === 'made on Windows', saved)
         const content = `made here ${Date.now()}`
         await ev(`const overlay = H.overlay(H.pane); const dt = new DataTransfer(); dt.items.add(new File([${JSON.stringify(content)}], 'from-here.txt', { type: 'text/plain' }))
             overlay.dispatchEvent(new DragEvent('dragover', { dataTransfer: dt, bubbles: true, cancelable: true })); overlay.dispatchEvent(new DragEvent('drop', { dataTransfer: dt, bubbles: true, cancelable: true }))`)

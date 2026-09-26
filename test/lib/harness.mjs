@@ -40,8 +40,8 @@ export function env () {
             password: e.TRD_TEST_WIN_PASSWORD || '',
             /** WinRM address as seen from that host, for checks inside Windows (optional). */
             winrm: e.TRD_TEST_WIN_WINRM || '',
-            /** Python with pywinrm on that host. */
-            winrmPython: e.TRD_TEST_WINRM_PYTHON || 'python3',
+            /** Python with pywinrm on that host: the one provision.sh installs, if there, or python3. */
+            winrmPython: e.TRD_TEST_WINRM_PYTHON || '"$(command -v /opt/tabby-rdp-test/winrm/bin/python || echo python3)"',
         },
     }
 }
@@ -167,6 +167,8 @@ export async function suite (name, body, { needsHost = true } = {}) {
     const t = {
         c,
         env: config,
+        /** The platform Tabby runs on (with --port, not necessarily this machine's). */
+        platform: await ev('return process.platform'),
         ev,
         sleep,
         check (label, ok, detail) {
@@ -186,6 +188,14 @@ export async function suite (name, body, { needsHost = true } = {}) {
             }
             return null
         },
+        /** A temporary folder on the machine Tabby runs on, removed when the suite ends. */
+        async tempDir (prefix) {
+            const dir = await ev(`return require('fs').mkdtempSync(require('path').join(require('os').tmpdir(), ${JSON.stringify(prefix)}))`)
+            t.onCleanup(() => ev(`require('fs').rmSync(${JSON.stringify(dir)}, { recursive: true, force: true })`))
+            return dir
+        },
+        /** A text file on the machine Tabby runs on (null if it isn't there). */
+        readFile (file) { return ev(`try { return require('fs').readFileSync(${JSON.stringify(file)}, 'utf8') } catch { return null }`) },
         /** Runs a command on the remote of `pane` (a page expression, e.g. 'H.pane'), with optional stdin. */
         remote (pane, command, stdin = '') { return ev(`return RD.execRemote(${pane}, ${JSON.stringify(command)}, ${JSON.stringify(stdin)})`) },
         /** Changes plugin settings for the suite; the previous values come back at the end. */

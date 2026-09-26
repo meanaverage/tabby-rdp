@@ -37,8 +37,22 @@ automatically in the test profile.
 | `TRD_TEST_WIN_ADDRESS` | windows | Its RDP address as seen from that host (default `127.0.0.1:3389`). |
 | `TRD_TEST_WIN_USER`, `TRD_TEST_WIN_PASSWORD` | windows | The Windows test account. |
 | `TRD_TEST_WIN_WINRM` | windows | Its WinRM address as seen from that host, e.g. `192.168.122.20:5985`. Enables the checks inside Windows. |
-| `TRD_TEST_WINRM_PYTHON` | windows | Python with `pywinrm` on that host (default `python3`). |
+| `TRD_TEST_WINRM_PYTHON` | windows | Python with `pywinrm` on that host (default: the one `provision.sh` installs, else `python3`). |
 | `TRD_TEST_DUMP` | all | A folder to save pictures of the remote screen at checkpoints. |
+
+## Tabby on another machine
+
+The suites can also drive a Tabby running elsewhere, such as on the Windows test machine. Start it there with this
+plugin in its profile and `--remote-debugging-port=9222`, make that port reachable here as `127.0.0.1:9222` (DevTools
+listens on the loopback only: on Windows, `netsh interface portproxy` plus an SSH tunnel does it), and run:
+
+```sh
+TRD_TEST_HOST=192.168.122.10 TRD_TEST_USER=ubuntu TRD_TEST_SSH_KEY='C:\Users\tabbyrdp\.ssh\id_ed25519' \
+    npm test -- --port 9222 e2e desk resize keyboard clipboard files audio reconnect desktops
+```
+
+The test host, user and key are then as that machine sees them. The suites take the platform (shortcuts, local
+terminals) from that Tabby, and put local files on its machine.
 
 ## Suites
 

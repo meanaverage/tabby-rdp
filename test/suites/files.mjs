@@ -2,9 +2,6 @@
 // - remote → here: a file selected and copied in Files is offered; saving writes it (into a temporary folder here);
 // - here → remote: a file dropped on the desktop is offered on the remote clipboard; Ctrl+V in Files copies it
 //   there, content intact, and nothing lands in the console under the desktop.
-import fs from 'node:fs'
-import os from 'node:os'
-import path from 'node:path'
 import { suite } from '../lib/harness.mjs'
 
 await suite('files', async t => {
@@ -12,8 +9,7 @@ await suite('files', async t => {
     await t.settings({ desk: true })
     const DIR = `/tmp/trd-files-${Date.now() % 100000}`
     const openFolder = `W=$(systemctl --user show-environment | sed -n 's/^WAYLAND_DISPLAY=//p'); WAYLAND_DISPLAY=\${W:-wayland-0} setsid nautilus --new-window ${DIR} >/dev/null 2>&1 < /dev/null & sleep 3; echo ok`
-    const here = fs.mkdtempSync(path.join(os.tmpdir(), 'trd-files-'))
-    t.onCleanup(() => fs.rmSync(here, { recursive: true, force: true }))
+    const here = await t.tempDir('trd-files-')
 
     check('SSH tab connected', await ev('H.pane = await H.openSSH(); return !!H.pane'))
     t.onCleanup(() => t.remote('H.pane', `rm -rf ${DIR}`))
@@ -40,7 +36,7 @@ await suite('files', async t => {
     const saved = await ev(`return await H.session(H.pane).files.saveAll(${JSON.stringify(here)})`)
     t.time('save → file here', Date.now() - t0)
     const got = saved?.find(p => p.endsWith('from-remote.txt'))
-    check('saved here, same content', !!got && fs.readFileSync(got, 'utf8') === 'made on the remote\n', saved)
+    check('saved here, same content', !!got && await t.readFile(got) === 'made on the remote\n', saved)
 
     // 2. Here → remote: drop a file on the desktop, paste in the Files window.
     const content = `made here ${Date.now()}\n`

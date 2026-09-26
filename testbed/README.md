@@ -36,17 +36,27 @@ VM 2 CPUs, 4 GB of memory and 20 GB of disk. No GPU is needed.
 
 ## Windows machine
 
-Windows 10 or 11 Pro (or Windows Server), for example a VM on the same virtual network as the Linux test host. In an
-elevated PowerShell on it:
+Windows 10 or 11 Pro (or Windows Server), for example a VM on the same virtual network as the Linux test host.
+
+**A libvirt VM**, next to the Linux one, installed unattended from Microsoft's Windows 11 Enterprise evaluation ISO
+(90 days; downloaded the first time, 7 GB) and prepared with `setup.ps1`. It needs `virtinst`, `genisoimage` and
+`swtpm` (Windows 11 wants UEFI Secure Boot and a TPM), and takes 15 to 30 minutes:
+
+```sh
+TEST_PASSWORD='<a password for the test account>' testbed/windows/libvirt.sh   # on the libvirt host
+# prints the settings for the Windows suite, and the administrator's password
+```
+
+**Or any Windows machine.** In an elevated PowerShell on it:
 
 ```powershell
 Set-ExecutionPolicy -Scope Process Bypass
 .\setup.ps1 -Password '<a password for the test account>'
 ```
 
-[`setup.ps1`](windows/setup.ps1) turns on Remote Desktop (with Network Level Authentication) and WinRM, and creates a
-local test account, `tabbyrdp`, that can use both without being an administrator. Sign in with it once over Remote
-Desktop so it has a profile.
+[`setup.ps1`](windows/setup.ps1) turns on Remote Desktop (with Network Level Authentication) and WinRM (marking the
+network private, which WinRM's settings require), and creates a local test account, `tabbyrdp`, that can use both
+without being an administrator.
 
 The suite reaches Windows through an SSH host, as users do: the Linux test host works, if it can reach the Windows
 machine. It runs its checks inside Windows over WinRM from that host (`provision.sh` installs `pywinrm`):

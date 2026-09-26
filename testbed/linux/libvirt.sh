@@ -36,7 +36,11 @@ printf 'instance-id: %s\nlocal-hostname: %s\n' "$NAME" "$NAME" > "$WORK/meta-dat
     printf '#cloud-config\nhostname: %s\nusers:\n  - default\nssh_pwauth: false\nssh_authorized_keys:\n' "$NAME"
     grep -v '^[[:space:]]*$' "$KEY" | sed 's/^/  - /'
 } > "$WORK/user-data"
-cloud-localds "$WORK/seed.iso" "$WORK/user-data" "$WORK/meta-data"
+# DHCP by MAC address: the desktop packages bring NetworkManager, which asks for a lease by MAC, and the address
+# would change at the first reboot otherwise.
+printf 'version: 2\nethernets:\n  lan:\n    match: {name: "en*"}\n    dhcp4: true\n    dhcp-identifier: mac\n' \
+    > "$WORK/network-config"
+cloud-localds -N "$WORK/network-config" "$WORK/seed.iso" "$WORK/user-data" "$WORK/meta-data"
 
 # Disks in a storage pool of the VM's name, uploaded through libvirt, so no root is needed.
 if ! $V pool-info "$NAME" >/dev/null 2>&1; then
@@ -72,6 +76,12 @@ done
 $SSH cloud-init status --wait >/dev/null 2>&1 || true
 $SSH 'cat > /tmp/provision.sh' < "$HERE/provision.sh"
 $SSH sudo sh /tmp/provision.sh ubuntu
+# Restart into the provisioned system (text mode, NetworkManager), as it will run from now on.
+$SSH sudo reboot >/dev/null 2>&1 || true
+sleep 10
+i=0; until $SSH true 2>/dev/null; do
+    i=$((i+1)); [ $i -lt 60 ] || { echo "no SSH to ubuntu@$IP after restarting" >&2; exit 1; }; sleep 3
+done
 
 echo
 echo "Test host ready at $IP (on this host's libvirt network). For the suites, on this host:"

@@ -5,10 +5,9 @@
 //   isn't. Uses the Mac clipboard (put back afterwards).
 import { suite } from '../lib/harness.mjs'
 
-const MAC = process.platform === 'darwin'
-
 await suite('keyboard', async t => {
     const { ev, check, sleep } = t
+    const MAC = t.platform === 'darwin'
     const cmd = MAC ? 'Meta' : 'Control'
     await t.settings({ desk: true, macShortcuts: true })
     await t.clipboard()
@@ -78,10 +77,13 @@ await suite('keyboard', async t => {
     // 7. Tabby shortcuts that stay: switching tabs, and the desktop/console switch.
     const hotkey = await ev(`return RD.injector.get(require('tabby-core').ConfigService).store.hotkeys['remote-desktop-toggle'][0] ?? ''`)
     const other = await ev('return RD.app.tabs.findIndex(x => x !== H.topOf(H.pane))')
-    if (other >= 0 && other < 9) {
-        await t.press(String(other + 1), [cmd])
+    // Tabby's own tab-<n> shortcut: ⌘<n> on macOS, Alt+<n> elsewhere by default.
+    const tabKey = other >= 0 && other < 9 ? await ev(`return RD.injector.get(require('tabby-core').ConfigService).store.hotkeys['tab-${other + 1}']?.[0] ?? ''`) : ''
+    const tabMods = tabKey.split('-').slice(0, -1).map(m => ({ '⌘': 'Meta', Cmd: 'Meta', Ctrl: 'Control', '⌃': 'Control', Alt: 'Alt', '⌥': 'Alt', Shift: 'Shift', '⇧': 'Shift' })[m])
+    if (tabKey && tabMods.every(Boolean) && tabKey.endsWith(`-${other + 1}`)) {
+        await t.press(String(other + 1), tabMods)
         await sleep(500)
-        check('⌘<n> still switches Tabby tabs', await ev(`return RD.app.activeTab === RD.app.tabs[${other}]`))
+        check(`${tabKey} still switches Tabby tabs`, await ev(`return RD.app.activeTab === RD.app.tabs[${other}]`))
         await ev('H.inZone(() => RD.app.selectTab(H.topOf(H.pane)))')
         await sleep(500)
         await t.clickDesktop('H.pane')
