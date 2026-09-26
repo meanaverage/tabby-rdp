@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.1
+
+The 0.2.0 release, published again: npm never released 0.2.0 (it stayed in a staged state), and a version number
+can't be reused there.
+
 ## 0.2.0
 
 **New**
