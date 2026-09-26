@@ -1,0 +1,6 @@
+node_modules/
+dist/
+.ironrdp/
+__pycache__/
+*.tgz
+.DS_Store

@@ -1,0 +1,141 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: meanaverage <18336095+meanaverage@users.noreply.github.com>
+Date: Fri, 25 Sep 2026 18:41:52 -0700
+Subject: [PATCH 2/6] fix(web): fit the canvas to the host element, not the
+ window
+
+The fit and real scalings measured the space available from the wrapper to
+the window's bottom-right corner, which assumes the component reaches the
+window's edges. Embedded in anything smaller (a split pane, a sidebar), the
+canvas was sized past the host's edges and got cropped.
+
+Measure to the host element's box instead (falling back to the window while
+the host has no size). The full scaling still uses the window.
+---
+ .../src/iron-remote-desktop.svelte            | 18 +++++------
+ .../src/lib/availableArea.test.ts             | 26 +++++++++++++++
+ .../src/lib/availableArea.ts                  | 32 +++++++++++++++++++
+ 3 files changed, 67 insertions(+), 9 deletions(-)
+ create mode 100644 web-client/iron-remote-desktop/src/lib/availableArea.test.ts
+ create mode 100644 web-client/iron-remote-desktop/src/lib/availableArea.ts
+
+diff --git a/web-client/iron-remote-desktop/src/iron-remote-desktop.svelte b/web-client/iron-remote-desktop/src/iron-remote-desktop.svelte
+index fda0e270..5ba68929 100644
+--- a/web-client/iron-remote-desktop/src/iron-remote-desktop.svelte
++++ b/web-client/iron-remote-desktop/src/iron-remote-desktop.svelte
+@@ -24,6 +24,7 @@
+     import { isComponentDestroyed } from './lib/stores/componentLifecycleStore';
+     import { runWhenFocusedQueue } from './lib/stores/runWhenFocusedStore';
+     import { ClipboardService } from './services/clipboard.service';
++    import { availableAreaCorner, windowCorner } from './lib/availableArea';
+ 
+     let {
+         scale,
+@@ -203,7 +204,7 @@
+     }
+ 
+     function fitResize(realSizeLimit = false) {
+-        const windowSize = getWindowSize();
++        const windowSize = getAvailableCorner();
+         const wrapperBoundingBox = wrapper.getBoundingClientRect();
+ 
+         const containerWidth = windowSize.x - wrapperBoundingBox.x;
+@@ -227,7 +228,7 @@
+     }
+ 
+     function realResize() {
+-        const windowSize = getWindowSize();
++        const windowSize = getAvailableCorner();
+         const wrapperBoundingBox = wrapper.getBoundingClientRect();
+ 
+         const containerWidth = windowSize.x - wrapperBoundingBox.x;
+@@ -285,13 +286,12 @@
+     }
+ 
+     function getWindowSize() {
+-        const win = window;
+-        const doc = document;
+-        const docElem = doc.documentElement;
+-        const body = doc.getElementsByTagName('body')[0];
+-        const x = win.innerWidth ?? docElem.clientWidth ?? body.clientWidth;
+-        const y = win.innerHeight ?? docElem.clientHeight ?? body.clientHeight;
+-        return { x, y };
++        return windowCorner();
++    }
++
++    // The fit and real scalings stay within the host element, which can be smaller than the window.
++    function getAvailableCorner() {
++        return availableAreaCorner($host());
+     }
+ 
+     async function initcanvas() {
+diff --git a/web-client/iron-remote-desktop/src/lib/availableArea.test.ts b/web-client/iron-remote-desktop/src/lib/availableArea.test.ts
+new file mode 100644
+index 00000000..d1bb3942
+--- /dev/null
++++ b/web-client/iron-remote-desktop/src/lib/availableArea.test.ts
+@@ -0,0 +1,26 @@
++import { describe, expect, it } from 'vitest';
++import { availableAreaCorner, windowCorner } from './availableArea';
++
++function hostWithBox(box: Partial<DOMRect>): Element {
++    const host = document.createElement('div');
++    host.getBoundingClientRect = () =>
++        ({ x: 0, y: 0, top: 0, left: 0, right: 0, bottom: 0, width: 0, height: 0, ...box }) as DOMRect;
++    return host;
++}
++
++describe('availableAreaCorner', () => {
++    it("uses the host element's box when the host is smaller than the window", () => {
++        // e.g. the left half of a split pane
++        const host = hostWithBox({ left: 0, top: 40, right: 600, bottom: 700, width: 600, height: 660 });
++        expect(availableAreaCorner(host)).toEqual({ x: 600, y: 700 });
++    });
++
++    it('falls back to the window when the host has no size yet', () => {
++        expect(availableAreaCorner(hostWithBox({}))).toEqual(windowCorner());
++    });
++
++    it('falls back to the window without a host', () => {
++        expect(availableAreaCorner(undefined)).toEqual(windowCorner());
++        expect(windowCorner()).toEqual({ x: window.innerWidth, y: window.innerHeight });
++    });
++});
+diff --git a/web-client/iron-remote-desktop/src/lib/availableArea.ts b/web-client/iron-remote-desktop/src/lib/availableArea.ts
+new file mode 100644
+index 00000000..cbba7f06
+--- /dev/null
++++ b/web-client/iron-remote-desktop/src/lib/availableArea.ts
+@@ -0,0 +1,32 @@
++export interface Corner {
++    x: number;
++    y: number;
++}
++
++/** Bottom-right corner of the window's viewport. */
++export function windowCorner(win: Window = window): Corner {
++    const docElem = win.document.documentElement;
++    const body = win.document.getElementsByTagName('body')[0];
++    return {
++        x: win.innerWidth ?? docElem.clientWidth ?? body.clientWidth,
++        y: win.innerHeight ?? docElem.clientHeight ?? body.clientHeight,
++    };
++}
++
++/**
++ * Bottom-right corner, in viewport coordinates, of the area the component may draw in.
++ *
++ * The fit and real scalings measure from the component's wrapper to this corner. When the component is
++ * embedded in something smaller than the window (a split pane, a sidebar), that is the host element's box,
++ * not the window: measuring to the window's corner would size the canvas past the host's edges. A host
++ * without a size yet (not laid out) falls back to the window.
++ */
++export function availableAreaCorner(host: Element | null | undefined, win: Window = window): Corner {
++    if (host) {
++        const box = host.getBoundingClientRect();
++        if (box.width > 0 && box.height > 0) {
++            return { x: box.right, y: box.bottom };
++        }
++    }
++    return windowCorner(win);
++}

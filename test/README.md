@@ -1,0 +1,78 @@
+# Tests
+
+The suites drive a real Tabby window over the Chrome DevTools protocol, against real remote desktops: key presses,
+clicks, the clipboard, menus, the plugin's own state, and checks on the remote side over SSH. There are no mocks.
+
+```sh
+export TRD_TEST_HOST=192.168.64.5 TRD_TEST_USER=ubuntu   # a Linux test host, see ../testbed/README.md
+npm test                          # the Linux-desktop suites
+npm test -- keyboard files        # some suites
+npm test -- trd-pty               # trd-pty's own tests, on the test host
+npm test -- windows               # the Windows suite (TRD_TEST_WIN_*)
+npm test -- --packed e2e          # with the plugin installed as npm would install it (npm pack)
+npm test -- --keep e2e            # leave the test Tabby open afterwards
+npm test -- --port 9334 e2e       # use a Tabby already running with --remote-debugging-port=9334
+npm test -- screenshots           # regenerate docs/images from the test host
+```
+
+`npm test` ([`run.mjs`](run.mjs)) starts a separate Tabby with a fresh, minimal profile in a temporary folder, this
+plugin linked in, and DevTools on a free port; runs the suites one after another; and closes that Tabby when done,
+also on failure or Ctrl+C. Your own Tabby isn't touched. Tabby is found at its usual install path, or pass
+`--tabby <path>` / set `TABBY_BIN`.
+
+The suites need an SSH key or agent that logs in to the test host without a password. A new host key is accepted
+automatically in the test profile.
+
+## Settings
+
+| Variable | For | |
+|---|---|---|
+| `TRD_TEST_HOST` | all | The Linux test host (hostname or address). Suites that need it are skipped without it. |
+| `TRD_TEST_USER` | all | SSH user (default: your local user name). |
+| `TRD_TEST_PORT` | all | SSH port (default 22). |
+| `TRD_TEST_SSH_KEY` | all | A private key for the test profile (default: the SSH agent and default keys). |
+| `TRD_TEST_SSH` | e2e, trd-pty | Destination for the system `ssh` (default `user@host`). |
+| `TRD_TEST_BACKEND` | desk | `native` (default) or `tmux`. |
+| `TRD_TEST_WIN_SSH_HOST`, `TRD_TEST_WIN_SSH_USER` | windows | The SSH host the Windows machine is reached through (default: the Linux test host). |
+| `TRD_TEST_WIN_ADDRESS` | windows | Its RDP address as seen from that host (default `127.0.0.1:3389`). |
+| `TRD_TEST_WIN_USER`, `TRD_TEST_WIN_PASSWORD` | windows | The Windows test account. |
+| `TRD_TEST_WIN_WINRM` | windows | Its WinRM address as seen from that host, e.g. `192.168.122.20:5985`. Enables the checks inside Windows. |
+| `TRD_TEST_WINRM_PYTHON` | windows | Python with `pywinrm` on that host (default `python3`). |
+| `TRD_TEST_DUMP` | all | A folder to save pictures of the remote screen at checkpoints. |
+
+## Suites
+
+| Suite | What it covers |
+|---|---|
+| [e2e](suites/e2e.mjs) | Every entry point (toolbar button, hotkey, menus, header), focus and typing, one desktop per account across tabs, a local terminal running `ssh`, Disconnect. |
+| [desk](suites/desk.mjs) | Logins in the shared session, `desk`, typing in the desktop terminal, RDP and SSH disconnects keeping the session, turning `desk` off and on. |
+| [resize](suites/resize.mjs) | Resize to fit, reconnect at the new size, keep the resolution, Retina with GNOME's scale. |
+| [keyboard](suites/keyboard.mjs) | Tabby shortcuts kept off the covered console, ⌘ as Ctrl, no stuck keys, the shortcuts that stay Tabby's. |
+| [clipboard](suites/clipboard.mjs) | Text both ways, through the terminal `desk` opens. |
+| [files](suites/files.mjs) | Files both ways with Files (Nautilus): copy there and save here; drop here and paste there. |
+| [audio](suites/audio.mjs) | A tone played on the desktop arrives as sound; with sound off, none is set up. |
+| [reconnect](suites/reconnect.mjs) | A dropped SSH connection: "Reconnect SSH", automatic reconnect (also while hidden), Stop, Try again. |
+| [desktops](suites/desktops.mjs) | "Add a desktop behind…", its sign-in and keychain entry, "Remove a desktop" (using the host's own GNOME desktop as the extra one). |
+| [windows](suites/windows.mjs) | A Windows desktop behind an SSH host: sign-in, keychain, picture, resize, reconnect; with WinRM, typing, clipboard, sound and files, each checked inside Windows. |
+| [trd-pty](unit/trd-pty.py) | The shared-session helper on its own, on the test host. |
+
+Checks print `PASS`, `FAIL` or `SKIP`; some suites also print `TIME` lines (connection and reconnection times, for
+example). Everything a suite opens (tabs, desktops, settings, keychain entries, files on either side, the local
+clipboard's text) is put back when it ends, also after a failure. The clipboard suites use your real clipboard for a
+few seconds.
+
+## Writing a suite
+
+```js
+import { suite } from '../lib/harness.mjs'
+
+await suite('example', async t => {
+    t.check('SSH tab connected', await t.ev('H.pane = await H.openSSH(); return !!H.pane'))
+    await t.ev('await H.inZone(() => RD.desktop.showDesktop(H.pane))')
+    t.check('desktop connected', !!(await t.waitFor('return H.connected(H.pane)', 40)))
+})
+```
+
+`t.ev` runs in Tabby's page, where `RD` is the plugin's test handle and `H` the helpers in
+[`lib/harness.mjs`](lib/harness.mjs). Node-side, `t` has input (`key`, `press`, `type`, `clickDesktop`), the
+clipboard, remote commands, settings, waiting, and cleanup registration.

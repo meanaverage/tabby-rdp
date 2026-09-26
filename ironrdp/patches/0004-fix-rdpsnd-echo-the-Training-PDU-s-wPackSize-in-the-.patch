@@ -1,0 +1,61 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: meanaverage <18336095+meanaverage@users.noreply.github.com>
+Date: Sat, 26 Sep 2026 10:46:00 -0700
+Subject: [PATCH 4/6] fix(rdpsnd): echo the Training PDU's wPackSize in the
+ Training Confirm
+
+---
+ crates/ironrdp-rdpsnd/src/client.rs            | 10 +++++++++-
+ .../tests/rdpsnd/client.rs                     | 18 ++++++++++++++++++
+ 2 files changed, 27 insertions(+), 1 deletion(-)
+
+diff --git a/crates/ironrdp-rdpsnd/src/client.rs b/crates/ironrdp-rdpsnd/src/client.rs
+index 7135f49e..4f7ddcad 100644
+--- a/crates/ironrdp-rdpsnd/src/client.rs
++++ b/crates/ironrdp-rdpsnd/src/client.rs
+@@ -166,7 +166,15 @@ impl Rdpsnd {
+     }
+ 
+     pub fn training_confirm(&mut self, pdu: &TrainingPdu) -> PduResult<RdpsndSvcMessages> {
+-        let pack_size: EncodeResult<_> = cast_length!("wPackSize", pdu.data.len());
++        // MS-RDPEA 2.2.3.2: wPackSize echoes the Training PDU's wPackSize, which counts the whole PDU
++        // (header included), or is 0 when it carries no data. Servers may check it (GNOME Remote Desktop
++        // ignores a mismatching confirm and never starts playback).
++        let pack_size = if pdu.data.is_empty() {
++            0
++        } else {
++            pdu::ServerAudioOutputPdu::Training(pdu.clone()).size()
++        };
++        let pack_size: EncodeResult<_> = cast_length!("wPackSize", pack_size);
+         let pack_size = pack_size.map_err(|e| encode_err!(e))?;
+         let pdu = pdu::TrainingConfirmPdu {
+             timestamp: pdu.timestamp,
+diff --git a/crates/ironrdp-testsuite-core/tests/rdpsnd/client.rs b/crates/ironrdp-testsuite-core/tests/rdpsnd/client.rs
+index bb8838a1..430ef0aa 100644
+--- a/crates/ironrdp-testsuite-core/tests/rdpsnd/client.rs
++++ b/crates/ironrdp-testsuite-core/tests/rdpsnd/client.rs
+@@ -411,6 +411,24 @@ fn client_format_negotiation_ignores_derived_fields() {
+     assert_eq!(client_fmt.formats[0].n_samples_per_sec, 44100);
+ }
+ 
++#[test]
++fn training_confirm_echoes_the_training_pdu_size() {
++    let mut client = client_in_ready(pdu::Version::V8);
++    let training = encode_vec(&pdu::ServerAudioOutputPdu::Training(pdu::TrainingPdu {
++        timestamp: 0x1234,
++        data: vec![0xAB; 32],
++    }))
++    .unwrap();
++
++    let confirm = decode_single_response(&client.process(&training).unwrap());
++    let pdu::ClientAudioOutputPdu::TrainingConfirm(confirm) = confirm else {
++        panic!("expected TrainingConfirm");
++    };
++    assert_eq!(confirm.timestamp, 0x1234);
++    // MS-RDPEA 2.2.3.2: the Training PDU's wPackSize, i.e. the size of the whole PDU.
++    assert_eq!(usize::from(confirm.pack_size), training.len());
++}
++
+ #[test]
+ fn ready_training_sends_confirm() {
+     let mut client = client_in_ready(pdu::Version::V8);

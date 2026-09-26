@@ -1,0 +1,53 @@
+{
+  "name": "tabby-rdp",
+  "version": "0.2.0",
+  "description": "Remote desktops in Tabby's SSH tabs: Linux (GNOME) and Windows, through the SSH connection, with clipboard, files and sound. Built on IronRDP.",
+  "keywords": [
+    "tabby-plugin",
+    "tabby",
+    "rdp",
+    "remote-desktop",
+    "ironrdp",
+    "gnome",
+    "gnome-remote-desktop",
+    "windows",
+    "ssh"
+  ],
+  "homepage": "https://github.com/meanaverage/tabby-rdp#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/meanaverage/tabby-rdp.git"
+  },
+  "bugs": {
+    "url": "https://github.com/meanaverage/tabby-rdp/issues"
+  },
+  "author": "meanaverage",
+  "license": "MIT",
+  "main": "dist/index.js",
+  "files": [
+    "dist",
+    "vendor",
+    "remote",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "watch": "tsc -p tsconfig.json --watch",
+    "test": "node test/run.mjs",
+    "build:ironrdp": "scripts/build-ironrdp.sh",
+    "prepublishOnly": "npm run build"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@angular/core": "15.2.10",
+    "@types/node": "^20.19.0",
+    "rxjs": "7.8.2",
+    "typescript": "~5.9.3"
+  }
+}

@@ -1,0 +1,233 @@
+// A Windows desktop behind an SSH host (TRD_TEST_WIN_*): configured under remoteDesktop.desktops and offered in the
+// host's menus; the sign-in form (a wrong password, then the right one); the keychain; the picture; live resize;
+// reconnecting with the saved account. With WinRM (TRD_TEST_WIN_WINRM), also typing, the clipboard both ways,
+// sound, and files both ways with Explorer, each checked inside Windows. See test/README.md for the test machine.
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { suite } from '../lib/harness.mjs'
+
+const WINRM_HELPER = fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'lib', 'winrm.py'), 'utf8')
+const NAME = 'Windows (test)'
+
+await suite('windows', async t => {
+    const { ev, check, sleep } = t
+    const win = t.env.windows
+    if (!win.host || !win.account || !win.password) {
+        t.skip('windows', 'set TRD_TEST_WIN_USER and TRD_TEST_WIN_PASSWORD (and TRD_TEST_WIN_SSH_HOST / TRD_TEST_WIN_ADDRESS)')
+        return
+    }
+    const [winHost, winPort] = [win.address.replace(/:\d+$/, ''), Number(/:(\d+)$/.exec(win.address)?.[1] ?? 3389)]
+    const ID = `${winHost}:${winPort}`
+    const log = () => ev('return RD.desktop.logOf(H.pane)')
+    // Waits for the latest connection attempt to end one way or another.
+    const outcome = () => t.waitFor(`const log = RD.desktop.logOf(H.pane); const after = log.slice(log.findLastIndex(l => /Connecting to/.test(l)) + 1)
+        return after.find(l => /Z $/.test(l)) ?? after.find(l => /failed|ended|cancelled/.test(l)) ?? (H.signin() ? 'signin' : null)`, 40)
+    /** Runs PowerShell inside Windows (WinRM, from the SSH host). */
+    const guest = script => t.remote('H.pane', `${win.winrmPython} -`,
+        `${WINRM_HELPER}\nmain(${JSON.stringify({ address: win.winrm, user: win.account, password: win.password, script })})\n`)
+    /** Runs PowerShell in the signed-in Windows session (an interactive scheduled task), where the desktop is. */
+    const inSession = (name, command) => guest(`
+$a = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument '-NoProfile -WindowStyle Hidden -Command "${command.replace(/"/g, '\\"').replace(/'/g, "''")}"'
+$p = New-ScheduledTaskPrincipal -UserId "$env:COMPUTERNAME\\${win.account.replace(/^.*\\/, '')}" -LogonType Interactive
+Register-ScheduledTask -TaskName '${name}' -Action $a -Principal $p -Force | Out-Null
+Start-ScheduledTask -TaskName '${name}'`)
+    const dropTask = name => guest(`Unregister-ScheduledTask -TaskName '${name}' -Confirm:$false -ErrorAction SilentlyContinue`)
+    await ev(`Object.assign(H, {
+        signin () {
+            const f = H.overlay(H.pane)?.querySelector('.trd-signin form')
+            if (!f) return null
+            return { user: f.querySelector('[name=username]').value, error: f.querySelector('.trd-signin-error').textContent, focused: document.activeElement?.name ?? null }
+        },
+        submit (password) {
+            const f = H.overlay(H.pane).querySelector('.trd-signin form')
+            f.querySelector('[name=password]').value = password
+            f.requestSubmit()
+        },
+        async entries () { return (await H.menu(H.pane)).filter(i => /desktop|console|Windows/i.test(i.label ?? '') && i.label !== 'Remote desktop settings' && !/^(Send files|Add a desktop)/.test(i.label ?? '')).map(i => i.label) },
+    })`)
+
+    // 0. The desktop behind the host.
+    const desktops = await ev('return JSON.stringify(H.config.store.remoteDesktop.desktops ?? [])')
+    t.onCleanup(() => ev(`H.inZone(() => { H.config.store.remoteDesktop.desktops = ${desktops}; H.config.save() })`))
+    await ev(`H.inZone(() => { H.config.store.remoteDesktop.desktops = [{ name: ${JSON.stringify(NAME)}, via: ${JSON.stringify(win.host)}, host: ${JSON.stringify(winHost)}, port: ${winPort}, kind: 'windows', username: ${JSON.stringify(win.account)} }]; H.config.save() })`)
+    await t.settings({ sound: true, macShortcuts: true })
+    check('SSH tab connected', await ev(`H.pane = await H.openSSH({ host: ${JSON.stringify(win.host)}, user: ${JSON.stringify(win.user)} }); return !!H.pane`))
+    const key = await ev(`return (await RD.targets.targetOf(H.pane)).key + '#' + ${JSON.stringify(ID)}`)
+    const keychain = expr => ev(`return await require('keytar').${expr}`)
+    await keychain(`deletePassword('tabby-rdp', ${JSON.stringify(key)})`)
+    t.onCleanup(() => keychain(`deletePassword('tabby-rdp', ${JSON.stringify(key)})`))
+    const reachable = (await t.remote('H.pane', `timeout 3 bash -c '</dev/tcp/${winHost}/${winPort}' && echo open`)).trim()
+    check(`RDP port ${ID} reachable from ${win.host}`, reachable === 'open', reachable)
+    const winrm = !!win.winrm && /ready/.test(await guest("'ready'").catch(() => ''))
+    if (!winrm) {
+        t.skip('checks inside Windows (typing, clipboard, sound, files)', win.winrm ? `no answer from WinRM at ${win.winrm} (pywinrm installed on ${win.host}?)` : 'set TRD_TEST_WIN_WINRM')
+    }
+
+    // 1. The menus offer both desktops.
+    const menu = await ev('return await H.entries()')
+    check('the menu offers the host\'s own desktop and the Windows one', menu.includes(`Open ${win.host} desktop`) && menu.includes(`Open ${NAME}`), menu)
+
+    // 2. The sign-in form; a wrong password brings it back with an error.
+    const t0 = Date.now()
+    await ev(`await H.inZone(() => RD.desktop.showDesktop(H.pane, ${JSON.stringify(ID)}))`)
+    let form = await t.waitFor('return H.signin()', 10)
+    check('sign-in form, user name filled in, password focused', form?.user === win.account && form?.focused === 'password', form)
+    check('terminal input disabled under the form', await ev(`return [...H.pane.element.nativeElement.querySelectorAll('textarea.xterm-helper-textarea')].every(x => x.disabled)`))
+    await ev('H.submit("definitely-not-the-password")')
+    await sleep(500)
+    form = await t.waitFor('const f = H.signin(); return f?.error ? f : null', 40)
+    check('wrong password: the form again, with an error', /wrong|refused/i.test(form?.error ?? ''), { form, log: (await log()).slice(-3) })
+    check('a wrong password is not saved', !(await keychain(`getPassword('tabby-rdp', ${JSON.stringify(key)})`)))
+
+    // 3. The right password: connected, saved in the keychain, the picture drawn.
+    const t1 = Date.now()
+    await ev(`H.submit(${JSON.stringify(win.password)})`)
+    check('desktop connected', /Z $/.test(await outcome() ?? ''), (await log()).slice(-4))
+    t.time('sign-in → connected', Date.now() - t1)
+    const frame = await t.waitFor('const c = H.canvas(H.pane); return c?.colors > 10 ? c : null', 10)
+    t.time('open → first frame', Date.now() - t0)
+    check('Windows frame decoded', !!frame, await ev('return H.canvas(H.pane)'))
+    await t.dump('H.pane', 'windows-connected')
+    check('resolution = pane size', frame && Math.abs(frame.w - frame.paneW) <= 2 && Math.abs(frame.h - frame.paneH) <= 2, frame)
+    check('the account is saved in the keychain', !!(await t.waitFor(`return await require('keytar').getPassword('tabby-rdp', ${JSON.stringify(key)})`, 5)))
+    check('the header names the desktop', /Windows|console/.test(await ev(`return document.querySelector('.trd-header-toggle')?.title ?? ''`)))
+
+    if (winrm) {
+        // 4. Typing: Start (the Windows key), "notepad", Enter; Windows runs Notepad.
+        const notepad = async () => {
+            let id = ''
+            for (let i = 0; i < 20 && !/\d/.test(id); i++) {
+                await sleep(500)
+                id = (await guest('(Get-Process notepad -ErrorAction SilentlyContinue | Select-Object -First 1).Id')).trim()
+            }
+            return id
+        }
+        // Notepad keeps unsaved tabs across restarts. Note its saved tabs before this suite touches it; at the end,
+        // stop it and remove the ones that appeared since (this suite's), nothing else.
+        const TAB_STATE = "$state = Join-Path $env:LOCALAPPDATA 'Packages\\Microsoft.WindowsNotepad_8wekyb3d8bbwe\\LocalState\\TabState'"
+        const stopNotepad = () => guest('Get-Process notepad -ErrorAction SilentlyContinue | Stop-Process -Force; Start-Sleep -Milliseconds 500')
+        await stopNotepad()
+        const notepadTabs = (await guest(`${TAB_STATE}; if (Test-Path $state) { (Get-ChildItem $state -File | ForEach-Object Name) -join '|' }`)).trim()
+        t.onCleanup(async () => {
+            await stopNotepad()
+            await guest(`${TAB_STATE}; $keep = '${notepadTabs}'.Split('|')
+if (Test-Path $state) { Get-ChildItem $state -File | Where-Object { $keep -notcontains $_.Name } | Remove-Item -Force }`)
+        })
+        // The first sign-in after a boot shows "Welcome" for a while: wait for the desktop shell.
+        for (let i = 0; i < 40 && !/\d/.test((await guest('(Get-Process explorer -ErrorAction SilentlyContinue | Select-Object -First 1).Id')).trim()); i++) {
+            await sleep(1500)
+        }
+        await sleep(3000)
+        await t.clickDesktop('H.pane')
+        // Right after a first sign-in, Start can take a while to accept typing: one more try if needed.
+        let typed = ''
+        for (let attempt = 0; attempt < 2 && !/\d/.test(typed); attempt++) {
+            await t.escape()
+            await t.tap('Meta')  // the Windows key (on macOS a ⌘ tap, with Mac shortcuts on)
+            await sleep(3000)    // Start takes a moment to take keys
+            await t.type('notepad')
+            await sleep(2000)
+            await t.enter()
+            typed = await notepad()
+        }
+        check('typing reaches Windows (Start, "notepad", Enter: Notepad runs)', /\d/.test(typed))
+        await stopNotepad()
+
+        // 5. Clipboard, here → Windows: "notepad" copied here, pasted into Start search.
+        await t.clipboard('notepad')
+        await sleep(600)
+        await t.tap('Meta')
+        await sleep(3000)
+        await t.press('v', ['Control'])
+        await sleep(2000)
+        await t.enter()
+        const running = await notepad()
+        check('clipboard here → Windows: pasted into Start search, Notepad runs', /\d/.test(running))
+
+        // 6. Clipboard, Windows → here: type in Notepad, select all, copy.
+        if (/\d/.test(running)) {
+            await sleep(2500)
+            await t.clickDesktop('H.pane')  // Notepad opens over the middle of the screen: give it the keyboard
+            await t.press('n', ['Control'])
+            await sleep(1500)
+            const marker = `winclip${Date.now() % 100000}`
+            await t.type(marker)
+            await t.clipboard('placeholder')
+            let got = ''
+            for (let attempt = 0; attempt < 2 && !got.includes(marker); attempt++) {
+                await t.press('a', ['Control'])
+                await t.press('c', ['Control'])
+                for (let i = 0; i < 25 && !got.includes(marker); i++) {
+                    await sleep(200)
+                    got = await t.clipboard()
+                }
+            }
+            check('clipboard Windows → here: text copied in Notepad', got.includes(marker), got.slice(0, 80))
+            // Leave nothing for Notepad to restore: clear the tab and close it.
+            await t.press('a', ['Control'])
+            await t.key('Delete', 'Delete', 46)
+            await t.press('w', ['Control'])
+        }
+        await stopNotepad()
+
+        // 7. Sound: a system sound played in the session arrives here.
+        const audio = () => ev('const a = H.session(H.pane)?.audio; return a ? { received: a.received, peak: a.peak } : null')
+        const before = await audio()
+        await inSession('trd-sound', "(New-Object Media.SoundPlayer 'C:\\Windows\\Media\\Alarm01.wav').PlaySync()")
+        t.onCleanup(() => dropTask('trd-sound'))
+        let after = before
+        for (let i = 0; i < 30 && (after?.received ?? 0) - (before?.received ?? 0) < 1; i++) {
+            await sleep(500)
+            after = await audio()
+        }
+        const seconds = (after?.received ?? 0) - (before?.received ?? 0)
+        check(`sound: a Windows sound arrived (${seconds.toFixed(1)} s)`, seconds > 1 && (after?.peak ?? 0) > 0.05, { before, after })
+
+        // 8. Files: Explorer on a folder with a file made on Windows.
+        const folder = 'C:\\Users\\Public\\trd-test-files'
+        await guest(`New-Item -ItemType Directory -Force -Path '${folder}' | Out-Null; Set-Content -Path '${folder}\\from-windows.txt' -Value 'made on Windows' -NoNewline`)
+        t.onCleanup(() => guest(`Remove-Item -Recurse -Force '${folder}' -ErrorAction SilentlyContinue`))
+        await inSession('trd-explorer', `explorer.exe ${folder}`)
+        await sleep(4000)
+        await dropTask('trd-explorer')
+        await t.press('a', ['Control'])
+        await t.press('c', ['Control'])
+        const offered = await t.waitFor('const f = H.session(H.pane)?.files?.offered ?? []; return f.length ? f.map(x => x.name) : null', 10, 300)
+        check('files: copied in Explorer, offered here', offered?.includes('from-windows.txt'), offered)
+        const here = fs.mkdtempSync(path.join(os.tmpdir(), 'trd-winfiles-'))
+        t.onCleanup(() => fs.rmSync(here, { recursive: true, force: true }))
+        const saved = offered ? await ev(`return await H.session(H.pane).files.saveAll(${JSON.stringify(here)})`) : []
+        const savedFile = saved.find(f => f.endsWith('from-windows.txt'))
+        check('files: saved here, same content', !!savedFile && fs.readFileSync(savedFile, 'utf8') === 'made on Windows', saved)
+        const content = `made here ${Date.now()}`
+        await ev(`const overlay = H.overlay(H.pane); const dt = new DataTransfer(); dt.items.add(new File([${JSON.stringify(content)}], 'from-here.txt', { type: 'text/plain' }))
+            overlay.dispatchEvent(new DragEvent('dragover', { dataTransfer: dt, bubbles: true, cancelable: true })); overlay.dispatchEvent(new DragEvent('drop', { dataTransfer: dt, bubbles: true, cancelable: true }))`)
+        await sleep(800)
+        await t.press('v', ['Control'])
+        let arrived = ''
+        for (let i = 0; i < 20 && arrived !== content; i++) {
+            await sleep(500)
+            arrived = (await guest(`Get-Content -Raw -ErrorAction SilentlyContinue '${folder}\\from-here.txt'`)).trim()
+        }
+        check('files: dropped on the desktop, pasted in Explorer, same content', arrived === content, arrived)
+        await t.key('F4', 'F4', 115, ['Alt'])  // close Explorer
+    }
+
+    // 9. Live resize: Windows follows the pane.
+    await ev(`const el = H.pane.element.nativeElement; el.style.flex = 'none'; el.style.width = '760px'; el.style.height = '540px'`)
+    const resized = await t.waitFor(`const c = H.canvas(H.pane); return c && Math.abs(c.w - c.paneW) <= 2 && Math.abs(c.h - c.paneH) <= 2 && c.w !== ${frame?.w ?? 0} ? c : null`, 10, 250)
+    check('live resize: the Windows resolution follows the pane', !!resized, { before: frame, now: await ev('return H.canvas(H.pane)') })
+    check('live resize: same session', (await log()).filter(l => /Connecting to/.test(l)).length === 2)  // wrong password, then right
+
+    // 10. Back to the console; then the toggle reopens Windows with the saved account (no form).
+    await ev('H.inZone(() => RD.desktop.showConsole(H.pane))')
+    check('the toggle names the Windows desktop', (await ev('return await H.entries()'))[0] === `Show ${NAME}`, await ev('return await H.entries()'))
+    await ev('H.inZone(() => RD.desktop.disconnect(H.pane))')
+    const t2 = Date.now()
+    await ev('await H.inZone(() => RD.desktop.toggle(H.pane))')  // the last-used desktop: Windows
+    const last = await outcome()
+    t.time('reconnect with the saved account', Date.now() - t2)
+    check('the toggle reopens Windows with the saved account, no form', /Z $/.test(last ?? '') && !(await ev('return H.signin()')), last)
+})

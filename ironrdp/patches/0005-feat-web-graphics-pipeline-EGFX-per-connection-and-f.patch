@@ -1,0 +1,268 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: meanaverage <18336095+meanaverage@users.noreply.github.com>
+Date: Sat, 26 Sep 2026 11:26:22 -0700
+Subject: [PATCH 5/6] feat(web): graphics pipeline (EGFX) per connection, and
+ follow its resets
+
+GNOME Remote Desktop requires the graphics pipeline ([MS-RDPEGFX]) and
+closes connections that don't advertise it. The web client now registers
+the EGFX channel (GraphicsPipelineClient, CAPVERSION_8 without H.264) when
+the new `graphicsPipeline(true)` extension asks for it; it stays off by
+default, as before.
+
+EGFX servers answer a display-control monitor layout with ResetGraphics
+rather than a deactivation-reactivation sequence. The session now resizes
+the canvas to the new surface and fires the canvas-resized callback, so
+live resize works against them.
+---
+ Cargo.lock                                    |  1 +
+ crates/ironrdp-web/Cargo.toml                 |  1 +
+ crates/ironrdp-web/src/canvas.rs              |  4 ++
+ crates/ironrdp-web/src/session.rs             | 61 +++++++++++++++++--
+ .../iron-remote-desktop-rdp/src/main.ts       |  5 ++
+ 5 files changed, 67 insertions(+), 5 deletions(-)
+
+diff --git a/Cargo.lock b/Cargo.lock
+index 9cccb138..08eb89da 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -3555,6 +3555,7 @@ dependencies = [
+  "ironrdp",
+  "ironrdp-cliprdr-format",
+  "ironrdp-core 0.2.1",
++ "ironrdp-egfx",
+  "ironrdp-futures",
+  "ironrdp-pdu",
+  "ironrdp-propertyset",
+diff --git a/crates/ironrdp-web/Cargo.toml b/crates/ironrdp-web/Cargo.toml
+index c964d7ce..8c496225 100644
+--- a/crates/ironrdp-web/Cargo.toml
++++ b/crates/ironrdp-web/Cargo.toml
+@@ -39,6 +39,7 @@ ironrdp = { path = "../ironrdp", features = [
+     "pdu",
+ ] }
+ ironrdp-core.path = "../ironrdp-core"
++ironrdp-egfx.path = "../ironrdp-egfx"
+ ironrdp-cliprdr-format.path = "../ironrdp-cliprdr-format"
+ ironrdp-futures.path = "../ironrdp-futures"
+ ironrdp-pdu.path = "../ironrdp-pdu"
+diff --git a/crates/ironrdp-web/src/canvas.rs b/crates/ironrdp-web/src/canvas.rs
+index 30ba5be7..2f172675 100644
+--- a/crates/ironrdp-web/src/canvas.rs
++++ b/crates/ironrdp-web/src/canvas.rs
+@@ -31,6 +31,10 @@ impl Canvas {
+ 
+     /// Resizes the backing store. Note: this also clears the canvas and resets 2D context state;
+     /// the cached `ctx` stays valid.
++    pub(crate) fn size(&self) -> (u32, u32) {
++        (self.canvas.width(), self.canvas.height())
++    }
++
+     pub(crate) fn resize(&mut self, width: NonZeroU32, height: NonZeroU32) {
+         self.canvas.set_width(width.get());
+         self.canvas.set_height(height.get());
+diff --git a/crates/ironrdp-web/src/session.rs b/crates/ironrdp-web/src/session.rs
+index a47bd3d0..57b0603c 100644
+--- a/crates/ironrdp-web/src/session.rs
++++ b/crates/ironrdp-web/src/session.rs
+@@ -73,6 +73,7 @@ struct SessionBuilderInner {
+     set_cursor_style_callback_context: Option<JsValue>,
+     remote_clipboard_changed_callback: Option<js_sys::Function>,
+     force_clipboard_update_callback: Option<js_sys::Function>,
++    canvas_resized_callback: Option<js_sys::Function>,
+     // File transfer callbacks
+     files_available_callback: Option<js_sys::Function>,
+     file_contents_request_callback: Option<js_sys::Function>,
+@@ -90,6 +91,7 @@ struct SessionBuilderInner {
+     printer_driver_name: Option<String>,
+ 
+     use_display_control: bool,
++    use_graphics_pipeline: bool,
+     enable_credssp: bool,
+     enable_server_pointer: bool,
+     legacy_graphics: bool,
+@@ -119,6 +121,7 @@ impl Default for SessionBuilderInner {
+             set_cursor_style_callback_context: None,
+             remote_clipboard_changed_callback: None,
+             force_clipboard_update_callback: None,
++            canvas_resized_callback: None,
+             files_available_callback: None,
+             file_contents_request_callback: None,
+             file_contents_response_callback: None,
+@@ -134,6 +137,7 @@ impl Default for SessionBuilderInner {
+             printer_driver_name: None,
+ 
+             use_display_control: false,
++            use_graphics_pipeline: false,
+             enable_credssp: true,
+             enable_server_pointer: true,
+             legacy_graphics: false,
+@@ -242,8 +246,10 @@ impl iron_remote_desktop::SessionBuilder for SessionBuilder {
+         self.clone()
+     }
+ 
+-    /// Because the server does not resize the framebuffer in the RDP protocol, this feature is unused in IronRDP.
+-    fn canvas_resized_callback(&self, _callback: js_sys::Function) -> Self {
++    /// Called after the framebuffer changes size: EGFX servers (e.g. GNOME Remote Desktop) resize it with
++    /// ResetGraphics in response to a display-control monitor layout.
++    fn canvas_resized_callback(&self, callback: js_sys::Function) -> Self {
++        self.0.borrow_mut().canvas_resized_callback = Some(callback);
+         self.clone()
+     }
+ 
+@@ -254,6 +260,7 @@ impl iron_remote_desktop::SessionBuilder for SessionBuilder {
+             |vmconnect: String| { self.0.borrow_mut().vmconnect = Some(vmconnect) };
+             |kdc_proxy_url: String| { self.0.borrow_mut().kdc_proxy_url = Some(kdc_proxy_url) };
+             |display_control: bool| { self.0.borrow_mut().use_display_control = display_control };
++            |graphics_pipeline: bool| { self.0.borrow_mut().use_graphics_pipeline = graphics_pipeline };
+             |enable_credssp: bool| { self.0.borrow_mut().enable_credssp = enable_credssp };
+             |enable_server_pointer: bool| { self.0.borrow_mut().enable_server_pointer = enable_server_pointer };
+             |legacy_graphics: bool| { self.0.borrow_mut().legacy_graphics = legacy_graphics };
+@@ -426,6 +433,10 @@ impl iron_remote_desktop::SessionBuilder for SessionBuilder {
+ 
+         let enable_credssp = self.0.borrow().enable_credssp;
+         config.enable_credssp = enable_credssp;
++        // Graphics pipeline (EGFX): required by GNOME Remote Desktop. Off by default: without an H.264
++        // decoder only CAPVERSION_8 is advertised, and Windows servers do better with the bitmap path.
++        let use_graphics_pipeline = self.0.borrow().use_graphics_pipeline;
++        config.support_dyn_vc_gfx_protocol = use_graphics_pipeline;
+ 
+         let enable_server_pointer = self.0.borrow().enable_server_pointer;
+         config.enable_server_pointer = enable_server_pointer;
+@@ -516,6 +527,7 @@ impl iron_remote_desktop::SessionBuilder for SessionBuilder {
+             printer_driver_name,
+             computer_name: client_name.clone(),
+             use_display_control,
++            use_graphics_pipeline,
+         })
+         .await?;
+ 
+@@ -527,6 +539,8 @@ impl iron_remote_desktop::SessionBuilder for SessionBuilder {
+ 
+         spawn_local(writer_task(writer_rx, rdp_writer, outbound_message_size_limit));
+ 
++        let canvas_resized_callback = self.0.borrow().canvas_resized_callback.clone();
++
+         Ok(Session {
+             desktop_size: connection_result.desktop_size,
+             input_database: RefCell::new(ironrdp::input::Database::new()),
+@@ -536,6 +550,7 @@ impl iron_remote_desktop::SessionBuilder for SessionBuilder {
+             render_canvas,
+             set_cursor_style_callback,
+             set_cursor_style_callback_context,
++            canvas_resized_callback,
+ 
+             input_events_rx: RefCell::new(Some(input_events_rx)),
+             rdp_reader: RefCell::new(Some(rdp_reader)),
+@@ -584,6 +599,7 @@ pub(crate) struct Session {
+     render_canvas: HtmlCanvasElement,
+     set_cursor_style_callback: js_sys::Function,
+     set_cursor_style_callback_context: JsValue,
++    canvas_resized_callback: Option<js_sys::Function>,
+ 
+     // Consumed when `run` is called
+     input_events_rx: RefCell<Option<mpsc::UnboundedReceiver<RdpInputEvent>>>,
+@@ -594,6 +610,14 @@ pub(crate) struct Session {
+ }
+ 
+ impl Session {
++    fn notify_canvas_resized(&self) {
++        if let Some(callback) = &self.canvas_resized_callback {
++            if let Err(error) = callback.call0(&JsValue::NULL) {
++                warn!(?error, "canvas resized callback failed");
++            }
++        }
++    }
++
+     fn h_send_inputs(&self, inputs: smallvec::SmallVec<[FastPathInputEvent; 2]>) -> Result<(), IronError> {
+         if !inputs.is_empty() {
+             trace!("Inputs: {inputs:?}");
+@@ -923,6 +947,18 @@ impl iron_remote_desktop::Session for Session {
+                             .context("Send frame to writer task")?;
+                     }
+                     ActiveStageOutput::GraphicsUpdate(region) => {
++                        // EGFX servers resize with ResetGraphics (no deactivation-reactivation): the session has
++                        // already resized `image`, so follow it before drawing.
++                        if let (Some(width), Some(height)) = (
++                            NonZeroU32::new(u32::from(image.width())),
++                            NonZeroU32::new(u32::from(image.height())),
++                        ) {
++                            if gui.size() != (width.get(), height.get()) {
++                                gui.resize(width, height);
++                                requested_resize = None;
++                                self.notify_canvas_resized();
++                            }
++                        }
+                         let region = extract_partial_image(&image, region, &mut draw_buffer);
+                         gui.draw(draw_buffer.filled_mut(), region)
+                             .context("draw updated region")?;
+@@ -1047,6 +1083,7 @@ impl iron_remote_desktop::Session for Session {
+                         if let Some((width, height)) = requested_resize {
+                             gui.resize(width, height);
+                             requested_resize = None;
++                            self.notify_canvas_resized();
+                         }
+ 
+                         let mut connection_activation = activation_factory.create();
+@@ -1584,6 +1621,7 @@ struct ConnectParams {
+     /// `computer_name` when constructing the `Rdpdr` processor.
+     computer_name: String,
+     use_display_control: bool,
++    use_graphics_pipeline: bool,
+ }
+ 
+ fn default_printer_driver_name() -> String {
+@@ -1634,6 +1672,7 @@ async fn connect(
+         printer_driver_name,
+         computer_name,
+         use_display_control,
++        use_graphics_pipeline,
+     }: ConnectParams,
+ ) -> Result<(connector::ConnectionResult, WebSocket), IronError> {
+     let mut framed = ironrdp_futures::LocalFuturesFramed::new(ws);
+@@ -1661,10 +1700,19 @@ async fn connect(
+         );
+     }
+ 
++    let mut drdynvc = DrdynvcClient::new();
++    if use_graphics_pipeline {
++        // The session drains the EGFX compositor into the image.
++        drdynvc = drdynvc.with_dynamic_channel(ironrdp_egfx::client::GraphicsPipelineClient::new(
++            Box::new(NoopEgfxHandler),
++            None,
++        ));
++    }
+     if use_display_control {
+-        connector.attach_static_channel(
+-            DrdynvcClient::new().with_dynamic_channel(DisplayControlClient::new(|_| Ok(Vec::new()))),
+-        );
++        drdynvc = drdynvc.with_dynamic_channel(DisplayControlClient::new(|_| Ok(Vec::new())));
++    }
++    if use_graphics_pipeline || use_display_control {
++        connector.attach_static_channel(drdynvc);
+     }
+ 
+     let kerberos_config = url::Url::parse(kdc_proxy_url.unwrap_or_default().as_str())
+@@ -2331,3 +2379,6 @@ mod tests {
+         }
+     }
+ }
++
++struct NoopEgfxHandler;
++impl ironrdp_egfx::client::GraphicsPipelineHandler for NoopEgfxHandler {}
+diff --git a/web-client/iron-remote-desktop-rdp/src/main.ts b/web-client/iron-remote-desktop-rdp/src/main.ts
+index acd28b2e..fd0f5bd8 100644
+--- a/web-client/iron-remote-desktop-rdp/src/main.ts
++++ b/web-client/iron-remote-desktop-rdp/src/main.ts
+@@ -45,6 +45,11 @@ export function displayControl(enable: boolean): Extension {
+     return new Extension('display_control', enable);
+ }
+ 
++/** Graphics pipeline (MS-RDPEGFX, CAPVERSION_8 without H.264). Required by GNOME Remote Desktop. */
++export function graphicsPipeline(enable: boolean): Extension {
++    return new Extension('graphics_pipeline', enable);
++}
++
+ export function kdcProxyUrl(url: string): Extension {
+     return new Extension('kdc_proxy_url', url);
+ }

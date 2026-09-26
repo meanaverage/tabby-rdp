@@ -1,0 +1,200 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: meanaverage <18336095+meanaverage@users.noreply.github.com>
+Date: Sat, 26 Sep 2026 09:52:41 -0700
+Subject: [PATCH 3/6] fix(web): dispatch the ready event after clipboard
+ initialization
+
+`ready` was dispatched at the end of canvas initialization, before
+`ClipboardService.initClipboard()` had run: that awaits a permissions
+query, and only then installs the clipboard callbacks. `connect()`
+registers those callbacks on the session builder only if they are
+installed, so a host that connects as soon as `ready` fires got a
+session without a clipboard channel. Connecting after a user action
+(as iron-svelte-client does) hides the race.
+
+Dispatch `ready` once the clipboard is initialized (or its
+initialization failed), so connecting on it always sets up the
+clipboard.
+
+Adds a component test for it. Mounting the component under vitest needs
+Svelte's browser build (`resolve.conditions`) and skipping
+vite-plugin-svelte's style preprocessing, which fails under vitest 2's
+bundled Vite 5; the component's styles are plain CSS.
+---
+ .../src/iron-remote-desktop.svelte            |  11 +-
+ .../src/readyEvent.test.ts                    | 113 ++++++++++++++++++
+ web-client/iron-remote-desktop/vite.config.ts |   5 +-
+ 3 files changed, 127 insertions(+), 2 deletions(-)
+ create mode 100644 web-client/iron-remote-desktop/src/readyEvent.test.ts
+
+diff --git a/web-client/iron-remote-desktop/src/iron-remote-desktop.svelte b/web-client/iron-remote-desktop/src/iron-remote-desktop.svelte
+index 5ba68929..f045fd68 100644
+--- a/web-client/iron-remote-desktop/src/iron-remote-desktop.svelte
++++ b/web-client/iron-remote-desktop/src/iron-remote-desktop.svelte
+@@ -305,7 +305,11 @@
+         remoteDesktopService.setOnCanvasResized(canvasResized);
+ 
+         initListeners();
++    }
+ 
++    // Tells the host the component can connect. Only after the clipboard is set up too: connect() only opens the
++    // clipboard channel when the clipboard callbacks are registered by then.
++    function dispatchReady() {
+         let result = { irgUserInteraction: publicAPI.getExposedFunctions() };
+ 
+         loggingService.info('Component ready');
+@@ -344,7 +348,12 @@
+         loggingService.verbose = verbose === 'true';
+         loggingService.info('Dom ready');
+         await initcanvas();
+-        await clipboardService.initClipboard();
++        try {
++            await clipboardService.initClipboard();
++        } catch (err) {
++            loggingService.error('Clipboard initialization failed: ' + err);
++        }
++        dispatchReady();
+     });
+ 
+     onDestroy(() => {
+diff --git a/web-client/iron-remote-desktop/src/readyEvent.test.ts b/web-client/iron-remote-desktop/src/readyEvent.test.ts
+new file mode 100644
+index 00000000..7f2b036e
+--- /dev/null
++++ b/web-client/iron-remote-desktop/src/readyEvent.test.ts
+@@ -0,0 +1,113 @@
++import { describe, it, expect, vi, afterEach } from 'vitest';
++import { mount, unmount } from 'svelte';
++import IronRemoteDesktop from './iron-remote-desktop.svelte';
++import type { RemoteDesktopModule } from './interfaces/RemoteDesktopModule';
++
++/**
++ * Regression test: the `ready` event must come after the clipboard is initialized.
++ *
++ * `connect()` only registers the clipboard callbacks on the session builder (and so only gets a clipboard
++ * channel) when `ClipboardService.initClipboard()` has already installed them. `initClipboard()` awaits a
++ * permissions query, so a host that connects as soon as `ready` fires used to get a session without clipboard.
++ */
++
++// Session builder that records which methods were called, and never actually connects.
++function createRecordingModule(calls: string[]): RemoteDesktopModule {
++    const SessionBuilder = class {
++        constructor() {
++            return new Proxy(this, {
++                get: (_target, name: string) =>
++                    name === 'connect'
++                        ? () => Promise.reject(new Error('not connecting in tests'))
++                        : () => {
++                              calls.push(name);
++                          },
++            });
++        }
++    };
++    return {
++        SessionBuilder,
++        DesktopSize: class {},
++        InputTransaction: class {},
++        ClipboardData: class {},
++        DeviceEvent: {},
++    } as unknown as RemoteDesktopModule;
++}
++
++function stubClipboardApi(permissionQuery: () => Promise<{ state: string }>) {
++    vi.stubGlobal('isSecureContext', true);
++    vi.stubGlobal('navigator', {
++        ...navigator,
++        clipboard: { read: vi.fn(), write: vi.fn(), readText: vi.fn(), writeText: vi.fn() },
++        permissions: { query: vi.fn(permissionQuery) },
++    });
++}
++
++describe('ready event', () => {
++    let component: ReturnType<typeof mount> | null = null;
++
++    afterEach(() => {
++        if (component) {
++            unmount(component);
++            component = null;
++        }
++        vi.unstubAllGlobals();
++        document.body.innerHTML = '';
++    });
++
++    it('fires only after the clipboard is initialized, so connecting on it opens the clipboard channel', async () => {
++        let grantPermission!: () => void;
++        stubClipboardApi(
++            () =>
++                new Promise((resolve) => {
++                    grantPermission = () => resolve({ state: 'granted' });
++                }),
++        );
++
++        const calls: string[] = [];
++        const target = document.createElement('div');
++        document.body.appendChild(target);
++        const ready = vi.fn();
++        target.addEventListener('ready', ready);
++
++        component = mount(IronRemoteDesktop, {
++            target,
++            props: { scale: 'fit', verbose: 'false', flexcenter: 'true', module: createRecordingModule(calls) },
++        });
++
++        // The clipboard setup is waiting on the permission query: not ready yet.
++        await vi.waitFor(() => expect(navigator.permissions.query).toHaveBeenCalled());
++        await new Promise((resolve) => setTimeout(resolve, 20));
++        expect(ready).not.toHaveBeenCalled();
++
++        grantPermission();
++        await vi.waitFor(() => expect(ready).toHaveBeenCalledTimes(1));
++
++        // A host connecting right away gets the clipboard callbacks registered.
++        const ui = (ready.mock.calls[0][0] as CustomEvent).detail.irgUserInteraction;
++        const config = ui
++            .configBuilder()
++            .withDestination('host:3389')
++            .withProxyAddress('ws://proxy')
++            .withAuthToken('token')
++            .build();
++        await ui.connect(config).catch(() => undefined);
++        expect(calls).toContain('remoteClipboardChangedCallback');
++    });
++
++    it('still fires when the clipboard is unavailable', async () => {
++        vi.stubGlobal('isSecureContext', false);
++
++        const target = document.createElement('div');
++        document.body.appendChild(target);
++        const ready = vi.fn();
++        target.addEventListener('ready', ready);
++
++        component = mount(IronRemoteDesktop, {
++            target,
++            props: { scale: 'fit', verbose: 'false', flexcenter: 'true', module: createRecordingModule([]) },
++        });
++
++        await vi.waitFor(() => expect(ready).toHaveBeenCalledTimes(1));
++    });
++});
+diff --git a/web-client/iron-remote-desktop/vite.config.ts b/web-client/iron-remote-desktop/vite.config.ts
+index d54de00f..fa8ec9ec 100644
+--- a/web-client/iron-remote-desktop/vite.config.ts
++++ b/web-client/iron-remote-desktop/vite.config.ts
+@@ -13,13 +13,16 @@ export default defineConfig({
+             formats: ['es'],
+         },
+     },
++    // Component tests mount Svelte components, which needs Svelte's browser build.
++    resolve: process.env.VITEST ? { conditions: ['browser'] } : undefined,
+     server: {
+         fs: {
+             strict: false,
+         },
+     },
+     plugins: [
+-        svelte(),
++        // Under vitest (which runs its own Vite 5), vite-plugin-svelte 5 can't preprocess styles; they are plain CSS.
++        svelte(process.env.VITEST ? { preprocess: [] } : {}),
+         wasm(),
+         topLevelAwait(),
+         dtsPlugin({

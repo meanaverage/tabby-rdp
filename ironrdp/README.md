@@ -1,0 +1,50 @@
+# IronRDP, patched
+
+tabby-rdp's remote desktop is [IronRDP](https://github.com/Devolutions/IronRDP)'s web client (Rust compiled to
+WebAssembly, plus its `iron-remote-desktop` web component), bundled in `vendor/`. Released IronRDP connects to
+Windows, but not to GNOME Remote Desktop, and its web client has no sound. The patches here close those gaps. The
+fixes among them are meant for upstream, and are submitted there one by one.
+
+`vendor/` is built from IronRDP at [`BASE_COMMIT`](BASE_COMMIT) with the patches in [`patches/`](patches) applied in
+order, by `npm run build:ironrdp` ([`scripts/build-ironrdp.sh`](../scripts/build-ironrdp.sh)).
+
+## The patches
+
+| # | Patch | Why | Upstream |
+|---|---|---|---|
+| 1 | **fix(dvc): drop data for a channel that is not open** | GNOME Remote Desktop sends data on a dynamic channel the client declined (`AUDIO_PLAYBACK_DVC`); IronRDP ended the whole session. | [#2005](https://github.com/Devolutions/IronRDP/pull/2005) |
+| 2 | **fix(web): fit the canvas to the host element** | The component sized itself to the browser window. Embedded in anything smaller (a tab pane, a split), it was cropped. | [#2006](https://github.com/Devolutions/IronRDP/pull/2006) |
+| 3 | **fix(web): dispatch `ready` after clipboard initialization** | `ready` fired before the clipboard was set up, so a host that connects on `ready` got no clipboard channel at all. | [#2018](https://github.com/Devolutions/IronRDP/pull/2018) |
+| 4 | **fix(rdpsnd): echo the Training PDU's `wPackSize`** | The Training Confirm carried the data length instead of the PDU size ([MS-RDPEA] 2.2.3.2). GNOME Remote Desktop checks it and never started sound. | To submit |
+| 5 | **feat(web): graphics pipeline (EGFX) per connection, following its resets** | GNOME Remote Desktop only speaks the graphics pipeline. A `graphicsPipeline(true)` extension turns it on per connection (off by default, as before), and the canvas follows EGFX ResetGraphics, which is how GNOME answers a resize. | Ours for now |
+| 6 | **feat(web): audio playback through an `audioPlayback` callback** | The web client had no sound. An RDPSND backend hands 16-bit PCM to a JavaScript callback; with sound on, a device-less RDPDR is attached too, since Windows only starts playback once RDPDR is up. | Ours for now |
+
+Each patch carries its own tests where IronRDP has a place for them (`ironrdp-testsuite-core`, the web component's
+vitest suite).
+
+## Working on them
+
+```sh
+npm run build:ironrdp            # clone (first time) into .ironrdp/, apply the series, build, copy into vendor/
+```
+
+The checkout in `.ironrdp/` is reset to `BASE_COMMIT` on every build. To change the series, work on a branch there
+and export it again:
+
+```sh
+cd .ironrdp
+git checkout -b work "$(cat ../ironrdp/BASE_COMMIT)"
+git am ../ironrdp/patches/*.patch
+# ...edit, test (cargo test -p ironrdp-testsuite-core; npm test in web-client/iron-remote-desktop), commit...
+rm ../ironrdp/patches/*.patch
+git format-patch --no-signature --zero-commit -o ../ironrdp/patches "$(cat ../ironrdp/BASE_COMMIT)"..work
+cd .. && npm run build:ironrdp
+```
+
+Moving to a newer IronRDP: rebase that branch onto the new commit, drop the patches upstream has merged, update
+`BASE_COMMIT`, and export as above.
+
+The build pins IronRDP's Rust toolchain and remaps local paths, so no paths from the build machine end up in the
+WebAssembly.
+
+[MS-RDPEA]: https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-rdpea/

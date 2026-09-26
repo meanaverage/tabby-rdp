@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build and package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - name: Test scripts parse
+        run: for f in test/run.mjs test/lib/*.mjs test/suites/*.mjs; do node --check "$f"; done
+      - name: Package contents
+        run: |
+          npm pack --dry-run 2>&1 | tee pack.txt
+          grep -q 'dist/index.js' pack.txt
+          grep -q 'vendor/iron-remote-desktop-rdp.js' pack.txt
+          grep -q 'remote/trd-pty.py' pack.txt
+          ! grep -qE ' (src|test|testbed|docs|ironrdp)/' pack.txt
+
+  trd-pty:
+    name: trd-pty
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 test/unit/trd-pty.py remote/trd-pty.py
+
+  ironrdp-patches:
+    name: IronRDP patches apply
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Apply the series to the base commit
+        run: |
+          git init -q ironrdp-src
+          cd ironrdp-src
+          git fetch -q --depth 1 https://github.com/Devolutions/IronRDP.git "$(cat ../ironrdp/BASE_COMMIT)"
+          git checkout -q FETCH_HEAD
+          for patch in ../ironrdp/patches/*.patch; do
+            echo "applying $(basename "$patch")"
+            git apply --whitespace=nowarn "$patch"
+          done
