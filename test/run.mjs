@@ -102,7 +102,9 @@ for (const signal of ['SIGINT', 'SIGTERM']) {
 
 /** trd-pty's own tests run on the test host (Linux), over the system ssh. */
 function runTrdPty () {
-    const destination = process.env.TRD_TEST_SSH || (process.env.TRD_TEST_HOST ? `${process.env.TRD_TEST_USER || os.userInfo().username}@${process.env.TRD_TEST_HOST}` : '')
+    // TRD_TEST_SSH: arguments for the system ssh (a destination, possibly with options such as -p).
+    const e = process.env
+    const destination = e.TRD_TEST_SSH || (e.TRD_TEST_HOST ? `${e.TRD_TEST_PORT ? `-p ${e.TRD_TEST_PORT} ` : ''}${e.TRD_TEST_USER || os.userInfo().username}@${e.TRD_TEST_HOST}` : '')
     if (!destination) {
         console.log('SKIP  trd-pty: set TRD_TEST_HOST (or TRD_TEST_SSH)')
         return 0
@@ -110,7 +112,7 @@ function runTrdPty () {
     const script = 'd=$(mktemp -d) && trap "rm -rf $d" EXIT && tar -xf - -C "$d" && python3 "$d/test/unit/trd-pty.py" "$d/remote/trd-pty.py"'
     const tar = execFileSync('tar', ['-cf', '-', '-C', ROOT, 'remote/trd-pty.py', 'test/unit/trd-pty.py'])
     try {
-        execFileSync('ssh', ['-o', 'BatchMode=yes', destination, script], { input: tar, stdio: ['pipe', 'inherit', 'inherit'] })
+        execFileSync('ssh', ['-o', 'BatchMode=yes', ...destination.split(/\s+/), script], { input: tar, stdio: ['pipe', 'inherit', 'inherit'] })
         return 0
     } catch {
         return 1

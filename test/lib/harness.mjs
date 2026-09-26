@@ -28,8 +28,8 @@ export function env () {
         port,
         /** A private key for the SSH profile (else the SSH agent and default keys). */
         key: e.TRD_TEST_SSH_KEY || '',
-        /** Destination for the system `ssh` (the local-terminal checks). */
-        sshDestination: e.TRD_TEST_SSH || `${user}@${host}`,
+        /** Arguments for the system `ssh` (the local-terminal checks): a destination, possibly with options. */
+        sshDestination: e.TRD_TEST_SSH || `${port !== 22 ? `-p ${port} ` : ''}${user}@${host}`,
         windows: {
             /** SSH host the Windows machine is reached through (default: TRD_TEST_HOST). */
             host: e.TRD_TEST_WIN_SSH_HOST || host,

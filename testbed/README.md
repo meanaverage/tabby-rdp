@@ -15,6 +15,14 @@ testbed/linux/multipass.sh                 # creates "tabby-rdp-linux", provisio
 # prints: export TRD_TEST_HOST=<address> TRD_TEST_USER=ubuntu
 ```
 
+**A libvirt VM** on a Linux host, from Ubuntu's cloud image, without root (as a user in the `libvirt` group; needs
+`virtinst` and `cloud-image-utils`):
+
+```sh
+testbed/linux/libvirt.sh [name] [keys.pub]   # on the libvirt host; keys.pub: this host's key and your test machine's
+# prints the address, and how to forward a port to it from another machine
+```
+
 **Or any Ubuntu 24.04 VM** (virt-manager, UTM, Hyper-V, a cloud instance), with SSH set up for your key:
 
 ```sh

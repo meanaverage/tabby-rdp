@@ -31,7 +31,7 @@ automatically in the test profile.
 | `TRD_TEST_USER` | all | SSH user (default: your local user name). |
 | `TRD_TEST_PORT` | all | SSH port (default 22). |
 | `TRD_TEST_SSH_KEY` | all | A private key for the test profile (default: the SSH agent and default keys). |
-| `TRD_TEST_SSH` | e2e, trd-pty | Destination for the system `ssh` (default `user@host`). |
+| `TRD_TEST_SSH` | e2e, trd-pty | Arguments for the system `ssh`: a destination, with options if needed (default `user@host`, with `-p` for another port). |
 | `TRD_TEST_BACKEND` | desk | `native` (default) or `tmux`. |
 | `TRD_TEST_WIN_SSH_HOST`, `TRD_TEST_WIN_SSH_USER` | windows | The SSH host the Windows machine is reached through (default: the Linux test host). |
 | `TRD_TEST_WIN_ADDRESS` | windows | Its RDP address as seen from that host (default `127.0.0.1:3389`). |
