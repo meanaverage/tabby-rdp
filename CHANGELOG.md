@@ -2,8 +2,7 @@
 
 ## 0.2.1
 
-The 0.2.0 release, published again: npm never released 0.2.0 (it stayed in a staged state), and a version number
-can't be reused there.
+Same as 0.2.0. (npm took long enough to make 0.2.0 available that it was published again under a new version.)
 
 ## 0.2.0
 
