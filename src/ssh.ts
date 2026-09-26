@@ -69,6 +69,7 @@ const END = '__trd_exec_end__'
  * Picks up data for a closed channel that Tabby's russh binding received after the close. Its data, EOF and close
  * events come through separate callbacks, in no fixed order, and the close drops the channel's data subscription:
  * later data waits in a new buffer that nothing reads (seen with Tabby 1.0.237 on Windows).
+ * Reported upstream: https://github.com/Eugeny/russh-napi/issues/3
  */
 function drainLateData (ssh: any, id: unknown, out: Buffer[]) {
     const data = ssh.events?.data$
