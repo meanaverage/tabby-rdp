@@ -51,7 +51,11 @@ installed beforehand:
 2. **grd, headless mode:** `grdctl --headless` with the user `tabby` and that password, view-only off.
 3. **A headless GNOME session:** if none runs, `systemd-run --user --unit=tabby-headless-shell gnome-shell --headless`,
    with a session identity (`XDG_CURRENT_DESKTOP`, Ubuntu's session mode when present) so that Settings and
-   `xdg-open` behave. The activation environment is updated so that D-Bus-activated apps find the display.
+   `xdg-open` behave. The activation environment is updated so that D-Bus-activated apps find the display, and
+   `graphical-session.target` is held up for as long as the shell runs (a small transient unit bound to it), as
+   gnome-session would: GNOME's portal requires it, and without the portal every GTK app waits 25 seconds to start.
+   PipeWire's user sockets are started if they aren't yet (installed after the user's systemd started), since screen
+   casting goes through PipeWire, and a virtual audio output is added if the machine has none, for sound.
 4. **`desk`** (only when that setting is on): the login hook and helpers ([desk.md](desk.md)); when off, removes them.
 5. **grd restarts only when its configuration changed:** it reads credentials at startup, and a restart drops open
    sessions.

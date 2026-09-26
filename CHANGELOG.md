@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.2
+
+**Fixed**
+- On a freshly set-up machine, GNOME desktops connected but showed nothing: PipeWire, which screen casting goes
+  through, hadn't been started for the user when it was installed after the user's systemd was up. The plugin now
+  starts it.
+- Apps such as Terminal and Files took 25 seconds to open on the desktop: GNOME's portal wouldn't start without a
+  graphical session. The headless session now provides one, as a regular login does.
+- No sound from machines without sound hardware (VMs, servers): a virtual output is added when there is none.
+
 ## 0.2.1
 
 Same as 0.2.0. (npm took long enough to make 0.2.0 available that it was published again under a new version.)

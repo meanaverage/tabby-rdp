@@ -149,6 +149,9 @@ if [ -n "$SHELL_PID" ] && ! tr '\0' '\n' < /proc/$SHELL_PID/environ 2>/dev/null 
     i=0; while [ $i -lt 40 ] && kill -0 "$SHELL_PID" 2>/dev/null; do sleep 0.25; i=$((i+1)); done
     SHELL_PID=
 fi
+# Screen casting (and sound) goes through PipeWire. Its sockets are normally up with the user's systemd, but not
+# when PipeWire was installed after that started (a lingering user on a freshly set-up server); start them.
+systemctl --user start pipewire.socket pipewire-pulse.socket wireplumber.service >/dev/null 2>&1
 if [ -z "$SHELL_PID" ]; then
     # Apps from a previous headless session (marked below) outlive their display; single-instance apps
     # would then swallow new launches without showing a window. End them before starting afresh.
@@ -173,6 +176,22 @@ dbus-update-activation-environment --systemd WAYLAND_DISPLAY=${"$"}{WL:-wayland-
     XDG_CURRENT_DESKTOP=$DESK XDG_SESSION_DESKTOP=$SESS DESKTOP_SESSION=$SESS >/dev/null 2>&1
 # Mark D-Bus-activated apps as part of this session too (not in systemd's environment: user services would inherit it).
 dbus-update-activation-environment TABBY_RD_SESSION=$SESSION_VERSION >/dev/null 2>&1
+# Also what gnome-session does: bring up graphical-session.target, which the GNOME portal requires. Without it the
+# portal service hangs, and every GTK app waits 25 seconds for it before showing a window. Held for as long as the
+# shell runs (the target can't be started directly).
+if ! systemctl --user is-active -q graphical-session.target; then
+    systemctl --user stop tabby-graphical-session >/dev/null 2>&1
+    systemctl --user reset-failed tabby-graphical-session >/dev/null 2>&1
+    systemd-run --user --unit=tabby-graphical-session --remain-after-exit \
+        -p BindsTo=tabby-headless-shell.service -p After=tabby-headless-shell.service \
+        -p Wants=graphical-session.target -p Before=graphical-session.target true >/dev/null 2>&1
+fi
+# Remote sound is what plays on the default output. A machine without sound hardware (a VM, most servers) has
+# none: add a virtual one, which lasts until PipeWire restarts.
+if command -v pw-cli >/dev/null && ! timeout 5 pw-cli ls Node 2>/dev/null | grep -q '"Audio/Sink"'; then
+    timeout 5 pw-cli create-node adapter '{ factory.name=support.null-audio-sink node.name=tabby-rdp-output
+        node.description="Remote desktop" media.class=Audio/Sink object.linger=true audio.position=[FL FR] }' >/dev/null 2>&1
+fi
 if [ $RESTART = 1 ] || ! systemctl --user is-active -q gnome-remote-desktop-headless.service; then
     systemctl --user restart gnome-remote-desktop-headless.service >/dev/null 2>&1 || fail "could not start gnome-remote-desktop-headless"
 fi

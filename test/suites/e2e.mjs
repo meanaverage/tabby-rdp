@@ -99,7 +99,7 @@ await suite('e2e', async t => {
     // 3. Focus and typing: a terminal on the desktop reads one line into a file.
     await t.remote('H.pane', `rm -f /tmp/trd-typed; systemctl --user stop 'trd-typing-test*' 2>/dev/null; systemd-run --user --collect --unit=trd-typing-test --setenv=WAYLAND_DISPLAY=wayland-0 --setenv=XDG_SESSION_TYPE=wayland gnome-terminal --wait -- sh -c 'read l; printf %s "$l" > /tmp/trd-typed' >/dev/null 2>&1; echo started`)
     t.onCleanup(() => t.remote('H.pane', `systemctl --user stop 'trd-typing-test*' 2>/dev/null; rm -f /tmp/trd-typed; true`))
-    // Wait for the terminal's shell (gnome-terminal can be slow to start cold), then for its window to map.
+    // Wait for the terminal's shell, then for its window to map.
     await t.remote('H.pane', `for i in $(seq 60); do pgrep -u "$(id -u)" -f 'read l; printf' >/dev/null && break; sleep 0.25; done; sleep 1.5`)
     check('the component keeps its container first in its shadow root (it only forwards keys then)',
         await ev(`return H.overlay(H.pane).querySelector('iron-remote-desktop').shadowRoot.firstElementChild?.tagName === 'DIV'`))
