@@ -169,7 +169,7 @@ tabby-rdp ships IronRDP with a short series of patches ([ironrdp/](ironrdp)). Th
 | Keep the session when a server sends data on a channel the client declined | [Devolutions/IronRDP#2005](https://github.com/Devolutions/IronRDP/pull/2005) |
 | Fit the web component to its container, not the whole window | [Devolutions/IronRDP#2006](https://github.com/Devolutions/IronRDP/pull/2006) |
 | Set up the clipboard before signaling `ready`, so it works for apps that connect right away | [Devolutions/IronRDP#2018](https://github.com/Devolutions/IronRDP/pull/2018) |
-| Echo the correct size in the sound channel's Training Confirm | Next |
+| Echo the correct size in the sound channel's Training Confirm | [Devolutions/IronRDP#2019](https://github.com/Devolutions/IronRDP/pull/2019) |
 | The graphics pipeline in the web client, per connection, following its resets | Planned |
 | Sound in the web client | Planned |
 
