@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.3
+
+**Fixed**
+Tabby on Windows, tested end to end for the first time (Windows 11, Tabby 1.0.237):
+- The remote desktop didn't load ("A dynamic import callback was not specified"). The IronRDP modules now load
+  through the page's own module loader.
+- Remote commands could come back empty, so a desktop failed with "Remote setup gave no result". Tabby's SSH binding
+  sometimes delivers a command's last output after the channel's close, and then drops it; the plugin now picks it
+  up.
+
 ## 0.2.2
 
 **Fixed**

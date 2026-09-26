@@ -13,8 +13,28 @@ import { prepareRemoteDesktop } from './remoteSetup'
 import { RDCleanPathProxy, startRDCleanPathProxy } from './rdcleanpath'
 import { askCredentials, Credentials, forgetCredentials, forgetCredentialsFor, loadCredentials, saveCredentials, STYLE as SIGNIN_STYLE } from './signin'
 
-// tsc turns import() into require(); the vendored IronRDP bundles are ES modules.
-const importESM = new Function('u', 'return import(u)') as (u: string) => Promise<any>
+// The vendored IronRDP bundles are ES modules. tsc turns import() into require(), and Node's import() is refused in
+// Tabby on Windows (no dynamic import callback), so they go through a module script: the page's own loader.
+let imports = 0
+function importESM (url: string): Promise<any> {
+    return new Promise((resolve, reject) => {
+        const key = `__trdImport${imports++}`
+        const w = window as any
+        const timer = setTimeout(() => {
+            delete w[key]
+            reject(new Error(`could not load ${url}`))
+        }, 20000)
+        w[key] = {
+            resolve: (m: any) => { clearTimeout(timer); resolve(m) },
+            reject: (e: any) => { clearTimeout(timer); reject(e) },
+        }
+        const script = document.createElement('script')
+        script.type = 'module'
+        script.textContent = `const r = window.${key}; delete window.${key}; import(${JSON.stringify(url)}).then(r.resolve, r.reject)`
+        document.head.appendChild(script)
+        script.remove()
+    })
+}
 const vendor = (f: string) => pathToFileURL(path.join(__dirname, '..', 'vendor', f)).href
 
 const STYLE = `

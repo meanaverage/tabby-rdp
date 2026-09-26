@@ -144,15 +144,17 @@ They are stored in Tabby's config under `remoteDesktop`:
 
 ## Requirements
 
-- **Tabby 1.0.236 or newer.** Developed and tested on macOS. On Windows, the plugin loads and runs; connecting from a
-  Windows Tabby hasn't been tested end to end yet. Linux hasn't been tested.
+- **Tabby 1.0.236 or newer**, on macOS or Windows (tested with 1.0.236 and 1.0.237). Tabby on Linux hasn't been
+  tested yet. On a fresh Windows, Tabby itself needs the
+  [Microsoft Visual C++ Redistributable](https://learn.microsoft.com/cpp/windows/latest-supported-vc-redist) for SSH.
 - **Linux desktops:** GNOME Shell and GNOME Remote Desktop 46 or newer (Ubuntu 24.04, for example), a systemd user
   session, and SSH access with a key or agent. `desk` also needs `python3` and GNOME Terminal. No root, no display, no
   login screen.
 - **Windows desktops:** Windows 10 or 11 Pro, or Windows Server, with Remote Desktop turned on, reachable from an SSH
   host.
 
-Tested with Ubuntu 24.04 (GNOME Remote Desktop 46.3) and Windows 11 Pro.
+Tested with Ubuntu 24.04 (GNOME Remote Desktop 46.3) and Windows 11 (Pro and Enterprise), from Tabby on macOS and on
+Windows 11.
 
 ## Built on IronRDP
 

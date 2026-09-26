@@ -62,14 +62,32 @@ export async function openTcpStream (tab: SSHTab, host: string, port: number): P
     return stream
 }
 
+// Printed after a command's output, so that execRemote knows all of it arrived.
+const END = '__trd_exec_end__'
+
+/**
+ * Picks up data for a closed channel that Tabby's russh binding received after the close. Its data, EOF and close
+ * events come through separate callbacks, in no fixed order, and the close drops the channel's data subscription:
+ * later data waits in a new buffer that nothing reads (seen with Tabby 1.0.237 on Windows).
+ */
+function drainLateData (ssh: any, id: unknown, out: Buffer[]) {
+    const data = ssh.events?.data$
+    if (typeof data?.subscribe !== 'function') {
+        return
+    }
+    data.subscribe(id).subscribe((d: Uint8Array) => out.push(Buffer.from(d))).unsubscribe()
+    data.closeChannel?.(id)
+}
+
 /** Runs `command` on the remote with `stdin`, returns stdout. No PTY, no exit status (russh doesn't expose it). */
 export async function execRemote (tab: SSHTab, command: string, stdin = '', timeoutMs = 60000): Promise<string> {
     const ssh = client(tab)
     const channel = await ssh.activateChannel(await ssh.openSessionChannel())
     const out: Buffer[] = []
+    const text = () => Buffer.concat(out).toString('utf8')
     const closed = new Promise<void>(resolve => channel.closed$.subscribe(() => resolve()))
     channel.data$.subscribe((d: Uint8Array) => out.push(Buffer.from(d)))
-    await channel.requestExec(command)
+    await channel.requestExec(`${command}\necho ${END}`)
     if (stdin) {
         await channel.write(new Uint8Array(Buffer.from(stdin)))
     }
@@ -84,5 +102,11 @@ export async function execRemote (tab: SSHTab, command: string, stdin = '', time
         clearTimeout(timer)
         channel.close().catch(() => null)
     }
-    return Buffer.concat(out).toString('utf8')
+    for (let i = 0; i < 40 && !text().includes(END); i++) {
+        await new Promise(resolve => setTimeout(resolve, 50))
+        drainLateData(ssh, channel.id, out)
+    }
+    const result = text()
+    const end = result.lastIndexOf(END)
+    return end < 0 ? result : result.slice(0, end)
 }
