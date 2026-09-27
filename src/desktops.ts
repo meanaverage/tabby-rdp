@@ -3,7 +3,8 @@ import { RemoteTarget } from './targets'
 /**
  * What kind of RDP server a desktop is. 'gnome': the SSH host's own desktop, set up automatically (headless
  * GNOME Remote Desktop, generated credentials). 'windows': a Windows machine the SSH host can reach (e.g. a
- * VM with its RDP port forwarded to the host's loopback); signs in with the Windows account.
+ * VM with its RDP port forwarded to the host's loopback), or the SSH host itself when it runs Windows; signs in
+ * with the Windows account.
  */
 export type DesktopKind = 'gnome' | 'windows'
 
@@ -14,7 +15,7 @@ export interface DesktopSpec {
     /** For menus and status messages. */
     name: string
     kind: DesktopKind
-    /** Where the RDP server is, as seen from the SSH host (unused for 'own': the setup reports the port). */
+    /** Where the RDP server is, as seen from the SSH host (unused for GNOME's own desktop: the setup reports the port). */
     host: string
     port: number
     username?: string
@@ -54,9 +55,15 @@ export function viaMatches (via: string, target: RemoteTarget): boolean {
     return !!v && [key, userHost, hostname, target.label.toLowerCase()].includes(v)
 }
 
-/** The SSH host's own desktop, then the configured desktops behind it. */
-export function desktopsFor (target: RemoteTarget, extras: ExtraDesktopConfig[] | undefined): DesktopSpec[] {
-    const specs: DesktopSpec[] = [{ id: OWN_DESKTOP, name: `${target.label} desktop`, kind: 'gnome', host: '127.0.0.1', port: 0 }]
+/**
+ * The SSH host's own desktop, then the configured desktops behind it. The own desktop of a Windows host (`ownKind`) is
+ * its RDP server, signed in to with the Windows account (the SSH user, to start with).
+ */
+export function desktopsFor (target: RemoteTarget, extras: ExtraDesktopConfig[] | undefined, ownKind: DesktopKind = 'gnome'): DesktopSpec[] {
+    const own: DesktopSpec = ownKind === 'windows'
+        ? { id: OWN_DESKTOP, name: `${target.label} desktop`, kind: 'windows', host: '127.0.0.1', port: 3389, username: target.key.replace(/@[^@]*$/, '') || undefined }
+        : { id: OWN_DESKTOP, name: `${target.label} desktop`, kind: 'gnome', host: '127.0.0.1', port: 0 }
+    const specs: DesktopSpec[] = [own]
     for (const extra of Array.isArray(extras) ? extras : []) {
         const port = Number(extra?.port ?? 3389)
         if (!extra?.via || !viaMatches(extra.via, target) || !Number.isInteger(port) || port <= 0 || port > 65535) {

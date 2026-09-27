@@ -15,6 +15,8 @@ export interface RemoteDesktopEndpoint {
 const SETUP_SCRIPT = String.raw`
 say () { printf '%s\n' "$*"; }
 fail () { say "RD_ERR $*"; exit 0; }
+# A Windows host whose PATH has a POSIX sh (Git, MSYS2, Cygwin): its desktop is Windows' own RDP server.
+case "$(uname -s 2>/dev/null)" in CYGWIN*|MINGW*|MSYS*) say "RD_WINDOWS"; exit 0 ;; esac
 command -v grdctl >/dev/null 2>&1 || fail "GNOME Remote Desktop (grdctl) is not installed"
 command -v gnome-shell >/dev/null 2>&1 || fail "gnome-shell is not installed"
 if systemctl --user is-active -q gnome-remote-desktop.service; then
@@ -211,11 +213,38 @@ function trdPty (): string {
     return trdPtySource
 }
 
-/** Makes sure the remote user has a headless GNOME session served by grd, with fresh credentials. */
+/** The SSH host runs Windows (OpenSSH server on Windows): its own desktop is its RDP server, not GNOME. */
+export class WindowsHostError extends Error {
+    constructor () {
+        super('the SSH host runs Windows')
+    }
+}
+
+/**
+ * Whether the SSH host is Windows, i.e. its shell is cmd.exe or PowerShell. One command each of the three shells answers
+ * differently: cmd expands %OS%, PowerShell $env:OS (both to Windows_NT), sh neither.
+ */
+async function isWindows (target: RemoteTarget): Promise<boolean> {
+    try {
+        return /Windows_NT/.test(await target.exec('echo %OS% $env:OS', ''))
+    } catch {
+        return false
+    }
+}
+
+/**
+ * Makes sure the remote user has a headless GNOME session served by grd, with fresh credentials. Throws
+ * WindowsHostError when the host turns out to be Windows.
+ */
 export async function prepareRemoteDesktop (target: RemoteTarget, desk: boolean, backend: SessionBackend = 'native'): Promise<RemoteDesktopEndpoint> {
     const script = `TRD_DESK=${desk ? 1 : 0}\nTRD_BACKEND=${backend === 'tmux' ? 'tmux' : 'native'}\n` +
         SETUP_SCRIPT.replace('@@TRD_PTY_PY@@', trdPty().trimEnd())
     const out = await target.exec('sh -s', script)
+    // Without a sh, Windows prints its complaint on stderr, which exec() doesn't return: nothing came back. Only then is
+    // it worth asking, so a Linux host costs nothing extra.
+    if (/^RD_WINDOWS$/m.test(out) || !/^RD_(OK|ERR) /m.test(out) && await isWindows(target)) {
+        throw new WindowsHostError()
+    }
     const err = /^RD_ERR (.*)$/m.exec(out)
     if (err) {
         throw new Error(err[1])

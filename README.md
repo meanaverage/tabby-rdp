@@ -23,7 +23,7 @@ nothing is opened on the network, and nothing has to be installed on the remote 
 
 - **Linux desktops without a monitor or a login.** The plugin starts a headless GNOME session for your SSH user with
   GNOME Remote Desktop, on the fly, without root. A server in a rack works as well as a workstation.
-- **Windows desktops** behind any SSH host, such as a VM on your build server.
+- **Windows desktops** behind any SSH host, such as a VM on your build server, or of a Windows machine you SSH into.
 - **A proper desktop experience:** clipboard and files both ways, sound, live resize to the pane, sharp Retina
   rendering, Mac keyboard shortcuts, and automatic reconnects after sleep.
 - **`desk`:** type `desk` in the console and the same shell, with its history and running programs, moves into a
@@ -117,6 +117,10 @@ remoteDesktop:
 The connection runs through the same SSH connection; the Windows machine needs Remote Desktop turned on, and nothing
 else.
 
+**An SSH host that is itself Windows** (with OpenSSH Server): its own desktop is Windows' Remote Desktop, at
+127.0.0.1:3389 as seen from the host. The plugin finds this out the first time you open the desktop there, and asks
+for the Windows account instead (your SSH user name is filled in), with the same keychain option.
+
 ## desk: the console on the desktop
 
 Type `desk` in an SSH console, and the tab switches to that machine's desktop with a terminal attached to the very same
@@ -156,7 +160,7 @@ They are stored in Tabby's config under `remoteDesktop`:
   session, and SSH access with a key or agent. `desk` also needs `python3` and GNOME Terminal. No root, no display, no
   login screen.
 - **Windows desktops:** Windows 10 or 11 Pro, or Windows Server, with Remote Desktop turned on, reachable from an SSH
-  host.
+  host or running OpenSSH Server itself.
 
 Tested with Ubuntu 24.04 (GNOME Remote Desktop 46.3) and Windows 11 (Pro and Enterprise), from Tabby on macOS,
 Windows 11 and Ubuntu 24.04 (arm64).

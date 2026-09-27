@@ -72,6 +72,17 @@ RDP scale factor: the plugin sets it through Mutter's `DisplayConfig` (temporari
 itself, but only when the layout also carries the monitor's physical size, which the plugin derives from the pane (96
 CSS pixels to the inch). A desktop can have its own sharpness (`desktopSharpness`), overriding the default.
 
+## Windows as the SSH host
+
+With OpenSSH Server on Windows, the SSH host's own desktop is Windows' RDP server at 127.0.0.1:3389. The setup script
+assumes a POSIX shell, and Windows' default shell (cmd.exe or PowerShell) has no `sh`, so the setup comes back empty
+(the complaint goes to stderr). Only then does the plugin ask the host `echo %OS% $env:OS`, which cmd.exe and
+PowerShell both answer with `Windows_NT` and `sh` doesn't; a Windows host with a `sh` on its PATH (Git, MSYS2,
+Cygwin) is caught by the script itself, from `uname`. Linux hosts pay nothing for this. A Windows host's own desktop
+then connects like a desktop behind a host (sign-in form with the SSH user filled in, keychain, bitmaps rather than
+the graphics pipeline, no GNOME scale script), keyed by `user@host:port` like any own desktop. The finding is kept in
+memory for as long as Tabby runs; after a restart, the first open finds out again (one failed setup and one `echo`).
+
 ## Desktops behind a host
 
 A configured desktop (`remoteDesktop.desktops`) is reached through the same SSH connection, as `host:port` from the

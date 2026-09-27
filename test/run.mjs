@@ -18,7 +18,7 @@ import { waitForPort } from './lib/cdp.mjs'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const LINUX_SUITES = ['e2e', 'desk', 'resize', 'keyboard', 'clipboard', 'files', 'audio', 'reconnect', 'desktops']
-const ALL_SUITES = [...LINUX_SUITES, 'windows', 'trd-pty', 'screenshots']
+const ALL_SUITES = [...LINUX_SUITES, 'windows', 'winhost', 'trd-pty', 'screenshots']
 
 const args = process.argv.slice(2)
 const flag = name => args.includes(name)

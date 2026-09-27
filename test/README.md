@@ -9,6 +9,7 @@ npm test                          # the Linux-desktop suites
 npm test -- keyboard files        # some suites
 npm test -- trd-pty               # trd-pty's own tests, on the test host
 npm test -- windows               # the Windows suite (TRD_TEST_WIN_*)
+npm test -- winhost               # SSH to Windows itself (TRD_TEST_WIN_OPENSSH)
 npm test -- --packed e2e          # with the plugin installed as npm would install it (npm pack)
 npm test -- --keep e2e            # leave the test Tabby open afterwards
 npm test -- --port 9334 e2e       # use a Tabby already running with --remote-debugging-port=9334
@@ -38,6 +39,7 @@ automatically in the test profile.
 | `TRD_TEST_WIN_USER`, `TRD_TEST_WIN_PASSWORD` | windows | The Windows test account. |
 | `TRD_TEST_WIN_WINRM` | windows | Its WinRM address as seen from that host, e.g. `192.168.122.20:5985`. Enables the checks inside Windows. |
 | `TRD_TEST_WINRM_PYTHON` | windows | Python with `pywinrm` on that host (default: the one `provision.sh` installs, else `python3`). |
+| `TRD_TEST_WIN_OPENSSH` | winhost | `user@host[:port]` of a Windows machine running OpenSSH Server, accepting the test key (`TRD_TEST_SSH_KEY` or the agent). Signs in with `TRD_TEST_WIN_USER` / `TRD_TEST_WIN_PASSWORD`. |
 | `TRD_TEST_DUMP` | all | A folder to save pictures of the remote screen at checkpoints. |
 
 ## Tabby on another machine
@@ -71,6 +73,7 @@ system keychain doesn't answer (Linux without an unlocked keyring), the keychain
 | [reconnect](suites/reconnect.mjs) | A dropped SSH connection: "Reconnect SSH", automatic reconnect (also while hidden), Stop, Try again. |
 | [desktops](suites/desktops.mjs) | "Add a desktop behind…", its sign-in and keychain entry, "Edit a desktop" (keychain entry and sharpness following a new address), "Remove a desktop" (using the host's own GNOME desktop as the extra one). |
 | [windows](suites/windows.mjs) | A Windows desktop behind an SSH host: sign-in, keychain, picture, resize, reconnect; with WinRM, typing, clipboard, sound and files, each checked inside Windows. |
+| [winhost](suites/winhost.mjs) | An SSH host that is itself Windows: detected on the first open, its own desktop signed in to with the Windows account, no setup the second time. |
 | [trd-pty](unit/trd-pty.py) | The shared-session helper on its own, on the test host. |
 
 Checks print `PASS`, `FAIL` or `SKIP`; some suites also print `TIME` lines (connection and reconnection times, for

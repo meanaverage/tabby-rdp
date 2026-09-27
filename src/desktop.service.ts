@@ -9,7 +9,7 @@ import { AudioPlayer } from './audio'
 import { askDesktop } from './desktopForm'
 import { FileTransfer, STYLE as FILES_STYLE } from './fileTransfer'
 import { desktopIdOf, DesktopSpec, desktopsFor, ExtraDesktopConfig, OWN_DESKTOP, sessionKey } from './desktops'
-import { prepareRemoteDesktop } from './remoteSetup'
+import { prepareRemoteDesktop, WindowsHostError } from './remoteSetup'
 import { RDCleanPathProxy, startRDCleanPathProxy } from './rdcleanpath'
 import {
     askCredentials, Credentials, forgetCredentials, forgetCredentialsFor, loadCredentials, moveCredentialsFor, saveCredentials,
@@ -119,6 +119,11 @@ for _ in range(100):
     time.sleep(0.1)
 print('RD_OK scaled' if applied else 'RD_ERR the new mode never became current')
 `
+
+/** The SSH host's own GNOME desktop: set up by the plugin, with an account it made, so no sign-in. */
+function isManaged (spec: DesktopSpec): boolean {
+    return spec.id === OWN_DESKTOP && spec.kind === 'gnome'
+}
 
 /** The remote display size for a pane of this size under these settings. */
 function remoteSizeFor (rect: { width: number, height: number }, settings: DesktopSettings): RemoteSize {
@@ -290,8 +295,14 @@ export class RemoteDesktopService {
 
     /** The desktops this pane's SSH host offers: its own, then those configured behind it. */
     desktopsOf (target: RemoteTarget): DesktopSpec[] {
-        return desktopsFor(target, this.config.store.remoteDesktop?.desktops)
+        return desktopsFor(target, this.config.store.remoteDesktop?.desktops, this.windowsHosts.has(target.key) ? 'windows' : 'gnome')
     }
+
+    /**
+     * SSH targets (keys) found to run Windows: their own desktop is Windows' RDP server. Found out on the first connect
+     * there (see prepareRemoteDesktop), which costs a failed setup, so it is remembered for as long as Tabby runs.
+     */
+    private windowsHosts = new Set<string>()
 
     /** The desktop a plain toggle (hotkey, header, toolbar) opens for this target: the last one used there. */
     defaultDesktop (target: RemoteTarget): DesktopSpec {
@@ -781,7 +792,7 @@ export class RemoteDesktopService {
             session.ui.resize(size.width, size.height, size.scale)
         }
         // grd ignores the scale in the monitor layout: it's set through Mutter (also back to 100%).
-        if ((size.scale !== 100 || (before?.scale ?? 100) !== 100) && session.remote && session.spec.id === OWN_DESKTOP) {
+        if ((size.scale !== 100 || (before?.scale ?? 100) !== 100) && session.remote && isManaged(session.spec)) {
             session.remote.exec(`python3 - ${size.width} ${size.height} ${size.scale / 100}`, SCALE_SCRIPT).then(out => {
                 session.log.push(`scale: ${/^RD_(OK|ERR) (.*)$/m.exec(out)?.[2] ?? out.trim().slice(-120)}`)
             }, e => session.log.push(`scale: ${e?.message ?? e}`))
@@ -812,7 +823,7 @@ export class RemoteDesktopService {
      * Others: the saved account, or the sign-in form (retry=true after a failed sign-in).
      */
     private async endpointFor (target: RemoteTarget, spec: DesktopSpec, session: DesktopSession, retryError?: string): Promise<{ host: string, port: number, credentials: Credentials, remember: boolean } | null> {
-        if (spec.id === OWN_DESKTOP) {
+        if (isManaged(spec)) {
             session.status(`Preparing the remote desktop on ${target.label}…`)
             const endpoint = await prepareRemoteDesktop(target, this.settings().desk, this.config.store.remoteDesktop?.sessionBackend)
             return { host: '127.0.0.1', port: endpoint.port, credentials: { username: endpoint.username, password: endpoint.password }, remember: false }
@@ -823,7 +834,7 @@ export class RemoteDesktopService {
         }
         session.status('')
         const asked = askCredentials(session.overlay, {
-            title: `Sign in to ${spec.name} (via ${target.label})`,
+            title: spec.id === OWN_DESKTOP ? `Sign in to ${spec.name}` : `Sign in to ${spec.name} (via ${target.label})`,
             username: spec.username,
             error: retryError,
             canRemember: true,
@@ -839,7 +850,7 @@ export class RemoteDesktopService {
         const alive = () => this.sessions.get(pane) === session
         let retryError: string | undefined
         try {
-            // Signing in to a desktop behind the host can take a few tries; the host's own one can't fail that way.
+            // Signing in to a Windows account can take a few tries; a GNOME desktop the plugin set up can't fail that way.
             for (let attempt = 0; ; attempt++) {
                 const [endpoint, rdp] = await Promise.all([this.endpointFor(target, spec, session, retryError), this.loadIronRDP()])
                 if (!alive()) {
@@ -855,7 +866,7 @@ export class RemoteDesktopService {
                 session.remote = target
                 session.proxy ??= await startRDCleanPathProxy(() => target.openTcp(endpoint.host, endpoint.port), m => session.log.push(m))
                 const outcome = await this.run(pane, target, spec, session, rdp, endpoint)
-                if (outcome.signInFailed && spec.id !== OWN_DESKTOP && attempt < 5 && alive()) {
+                if (outcome.signInFailed && !isManaged(spec) && attempt < 5 && alive()) {
                     await forgetCredentials(session.key)
                     retryError = outcome.signInFailed
                     continue
@@ -866,6 +877,14 @@ export class RemoteDesktopService {
                 return
             }
         } catch (e: any) {
+            if (e instanceof WindowsHostError && alive()) {
+                // Start over with the host's own desktop as a Windows one: sign-in instead of the GNOME setup.
+                session.log.push('setup: the SSH host runs Windows; its own desktop is its RDP server')
+                this.windowsHosts.add(target.key)
+                this.changed$.next()
+                await this.reopen(pane, spec, true)
+                return
+            }
             if (alive()) {
                 this.afterEnd(pane, target, spec, session, { connected: false, error: e?.message ?? String(e) })
             }
