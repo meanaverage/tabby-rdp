@@ -6,6 +6,7 @@ import { pathToFileURL } from 'url'
 import { DesktopPane, RemoteTarget, RemoteTargets } from './targets'
 import { consoleScript, DeskRequest } from './deskScript'
 import { AudioPlayer } from './audio'
+import { ConnectionStatus, STYLE as STATS_STYLE } from './connectionStatus'
 import { askNewDesktop } from './desktopForm'
 import { FileTransfer, STYLE as FILES_STYLE } from './fileTransfer'
 import { DesktopSpec, desktopsFor, ExtraDesktopConfig, OWN_DESKTOP, sessionKey } from './desktops'
@@ -69,6 +70,8 @@ export interface DesktopSettings {
     macShortcuts: boolean
     /** Play the remote desktop's sound here (applies on the next connect). */
     sound: boolean
+    /** A small indicator on the desktop: throughput, frames per second, SSH round trip, connection path. */
+    connectionStatus: boolean
 }
 
 interface RemoteSize {
@@ -144,6 +147,10 @@ class DesktopSession {
     audio: AudioPlayer | null = null
     /** Files through the clipboard (drop on the desktop, or copy on the remote). */
     files: FileTransfer | null = null
+    /** The connection-status indicator, made the first time it shows. */
+    indicator: ConnectionStatus | null = null
+    /** How the pictures come (for the indicator): the graphics pipeline, bitmaps, or IronRDP's choice. */
+    graphics = ''
     /** Resolves when the session is disposed (ends a pending sign-in). */
     readonly disposed: Promise<void>
     private markDisposed!: () => void
@@ -240,6 +247,7 @@ class DesktopSession {
         this.setVisible(false)
         this.container.removeEventListener('focusin', this.reclaimFocus, true)
         this.disposers.forEach(f => f())
+        this.indicator?.dispose()
         try { this.ui?.shutdown() } catch { }
         this.audio?.close()
         this.files?.dispose()
@@ -417,6 +425,7 @@ export class RemoteDesktopService {
             return
         }
         session.setVisible(true)
+        this.syncIndicator(session)
         this.changed$.next()
         const shown = session
         setTimeout(() => this.followPane(pane, shown))
@@ -504,6 +513,7 @@ export class RemoteDesktopService {
         const session = this.sessions.get(pane)
         if (session) {
             session.setVisible(false)
+            this.syncIndicator(session)
             this.changed$.next()
         }
         pane.frontend?.focus()
@@ -551,6 +561,7 @@ export class RemoteDesktopService {
     /** After a desktop ended: reconnect by itself if it dropped, otherwise offer to. */
     private afterEnd (pane: DesktopPane, target: RemoteTarget, spec: DesktopSpec, session: DesktopSession, outcome: { connected: boolean, error?: string, reason?: string }): void {
         session.state = 'ended'
+        this.syncIndicator(session)
         this.changed$.next()
         if (this.sessions.get(pane) !== session) {
             return
@@ -611,6 +622,7 @@ export class RemoteDesktopService {
             desk: store.desk === true,
             macShortcuts: store.macShortcuts !== false,
             sound: store.sound !== false,
+            connectionStatus: store.connectionStatus === true,
         }
     }
 
@@ -655,8 +667,33 @@ export class RemoteDesktopService {
         Object.assign(store, change)
         this.config.save()
         for (const [pane, session] of this.sessions) {
+            this.syncIndicator(session)
             this.followPane(pane, session)
         }
+    }
+
+    /** Shows the desktop's connection-status indicator while the setting is on and the desktop shows, connected. */
+    private syncIndicator (session: DesktopSession): void {
+        const on = this.settings().connectionStatus && session.visible && session.state === 'connected'
+        if (on && !session.indicator) {
+            const remote = session.remote
+            session.indicator = new ConnectionStatus(session.overlay, this.zone, {
+                path: () => {
+                    const spec = session.spec
+                    const size = session.remoteSize
+                    return [
+                        spec.id === OWN_DESKTOP ? spec.name : `${spec.name} via ${remote?.label ?? '?'}`,
+                        size ? `${size.width}×${size.height}` : '',
+                        session.graphics,
+                        this.settingsFor(session).sharpness === 'retina' ? 'Retina' : 'Standard',
+                    ].filter(Boolean).join(' · ')
+                },
+                bytes: () => session.proxy?.stats ?? null,
+                ping: remote?.ping ? () => remote.ping!() : undefined,
+            })
+        }
+        const canvas = session.host.querySelector('iron-remote-desktop')?.shadowRoot?.querySelector('canvas')
+        session.indicator?.setActive(on, on ? canvas : null)
     }
 
     /** Follows the pane's size (debounced) while the desktop shows, per the resize setting. */
@@ -852,6 +889,9 @@ export class RemoteDesktopService {
             // EGFX without H.264, which Windows would want). A build without the switch decides by itself.
             if (typeof rdp.graphicsPipeline === 'function') {
                 config.withExtension(rdp.graphicsPipeline(spec.kind === 'gnome'))
+                session.graphics = spec.kind === 'gnome' ? 'graphics pipeline' : 'bitmaps'
+            } else {
+                session.graphics = 'automatic graphics'
             }
             if (settings.sound) {
                 session.audio?.close()
@@ -885,6 +925,7 @@ export class RemoteDesktopService {
             this.watchSize(pane, session)
             session.state = 'connected'
             session.status('')
+            this.syncIndicator(session)
             this.changed$.next()
             this.reconnects.delete(pane)  // connected again: a later drop starts over
             if (endpoint.remember) {
@@ -915,6 +956,6 @@ export function installStyle (): void {
     }
     styleInstalled = true
     const style = document.createElement('style')
-    style.textContent = STYLE + SIGNIN_STYLE + FILES_STYLE
+    style.textContent = STYLE + SIGNIN_STYLE + FILES_STYLE + STATS_STYLE
     document.head.appendChild(style)
 }

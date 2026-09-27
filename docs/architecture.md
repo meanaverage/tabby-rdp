@@ -110,6 +110,23 @@ IronRDP's.
 - **Sound:** the patched web client hands 16-bit PCM to the plugin, which schedules it back to back on a Web Audio
   clock with a small lead, skipping ahead rather than letting delay grow, and follows the server's volume.
 
+## Connection status
+
+The indicator (setting `connectionStatus`, off by default; `src/connectionStatus.ts`) runs only while its desktop
+shows and is connected, and ticks once a second:
+
+- **Throughput:** the proxy counts the RDP bytes it relays each way (after TLS, inside SSH).
+- **Frames per second:** IronRDP's web client draws each changed region with `putImageData` and has no event for it,
+  so the indicator wraps `putImageData` on that canvas's own 2D context and counts each synchronous batch of draws as
+  one frame.
+- **Round trip:** every 5 s, the time to open a session channel on Tabby's SSH connection (the server confirms it,
+  and nothing runs until a command is requested; the channel is closed right away). Not measured for a local
+  terminal running `ssh`, where each channel would be a new connection, nor while the window is hidden.
+- **Path:** the desktop, the SSH host it is reached through, the resolution, the graphics mode (graphics pipeline or
+  bitmaps) and the sharpness.
+
+It doesn't take the pointer (clicks go to the remote), and fades while the pointer is near it.
+
 ## Reconnecting
 
 Tabby doesn't close an SSH session's channels when it tears the session down (sleep, network change, Reconnect), and

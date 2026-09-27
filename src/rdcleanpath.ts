@@ -18,6 +18,8 @@ export type UpstreamFactory = (destination: string) => Promise<Duplex>
 export interface RDCleanPathProxy {
     url: string
     token: string
+    /** RDP bytes relayed since the proxy started (after TLS, before SSH): from the server, and to it. */
+    stats: { bytesIn: number, bytesOut: number }
     close (): void
 }
 
@@ -195,6 +197,7 @@ export async function startRDCleanPathProxy (openUpstream: UpstreamFactory, log:
     const token = randomBytes(24).toString('hex')
     // Set once the server turned out to need KEY_ENCIPHERMENT_ONLY_TLS; later connections start with it.
     let legacyTls = false
+    const stats = { bytesIn: 0, bytesOut: 0 }
     const wss = new WebSocketServer({ host: '127.0.0.1', port: 0 })
     await new Promise<void>((resolve, reject) => {
         wss.once('listening', resolve)
@@ -218,6 +221,7 @@ export async function startRDCleanPathProxy (openUpstream: UpstreamFactory, log:
 
         ws.on('message', async (data: Buffer) => {
             if (stage === 'relay') {
+                stats.bytesOut += data.length
                 upstream!.write(data)
                 return
             }
@@ -256,10 +260,14 @@ export async function startRDCleanPathProxy (openUpstream: UpstreamFactory, log:
                 const x224 = up.x224
                 ws.send(encodeResponse(x224, certChainOf(upstream), req.destination))
                 stage = 'relay'
-                upstream.on('data', (d: Buffer) => ws.send(d))
+                upstream.on('data', (d: Buffer) => {
+                    stats.bytesIn += d.length
+                    ws.send(d)
+                })
                 upstream.on('close', () => ws.close())
                 upstream.on('error', (e: Error) => { log(`upstream error: ${e.message}`); ws.close() })
                 for (const d of early) {
+                    stats.bytesOut += d.length
                     upstream.write(d)
                 }
                 log(`RDCleanPath relay up to ${req.destination}`)
@@ -274,5 +282,5 @@ export async function startRDCleanPathProxy (openUpstream: UpstreamFactory, log:
     })
 
     const { port } = wss.address() as AddressInfo
-    return { url: `ws://127.0.0.1:${port}`, token, close: () => wss.close() }
+    return { url: `ws://127.0.0.1:${port}`, token, stats, close: () => wss.close() }
 }

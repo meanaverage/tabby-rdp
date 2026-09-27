@@ -85,6 +85,7 @@ connecting again.
 | **Resize** | The remote resolution follows the pane as you resize the window or split it. Or reconnect at the new size, or keep a fixed resolution. |
 | **Retina** | Optionally renders at device pixels, with the remote's UI scaled to match (GNOME and Windows alike), for sharp text. For all desktops, or only some. |
 | **Keyboard on macOS** | ⌘C, ⌘V, ⌘Z and the rest work as on a Mac; tapping ⌘ alone is the Windows key. Tabby's own shortcuts stay out of the way while a desktop is showing, except switching tabs and returning to the console. |
+| **Connection status** | Optionally, a small line in the corner of the desktop with the throughput each way, frames per second, the SSH round trip, and how it is connected (desktop, host, resolution, graphics mode, sharpness). |
 | **Reconnecting** | After sleep or a network change, the desktop reconnects by itself once the connection is back. |
 | **Sign-in** | GNOME desktops need none: the plugin manages their credentials. Windows desktops ask for the account once and can remember it in the system keychain. |
 
@@ -141,6 +142,7 @@ They are stored in Tabby's config under `remoteDesktop`:
 | Sharpness (`sharpness`) | Standard (`standard`) | Retina (`retina`): device pixels, with the remote's scale set to match. |
 | For *this desktop* only (`desktopSharpness`) | As above | In the menu of a tab with a desktop open: Standard or Retina for that desktop, whatever the default. Kept by desktop (`user@host`, or `user@host#address` for one behind a host). |
 | Sound (`sound`) | On | Applies on the next connection. |
+| Show connection status (`connectionStatus`) | Off | The indicator in the desktop's corner; fades when the pointer comes near. |
 | Mac shortcuts (`macShortcuts`) | On | macOS. Off: ⌘ is the Windows key. |
 | Bring the console along with `desk` (`desk`) | Off | Installs `desk` and a login line on each machine you open a desktop on; applies on the next connection there. |
 | Session backend (`sessionBackend`) | `native` | For `desk`: `native` (trd-pty) or `tmux`. Config file only. |
