@@ -3,20 +3,59 @@ import * as path from 'path'
 import { RemoteTarget } from './targets'
 
 export interface RemoteDesktopEndpoint {
+    /** 'gnome': grd, with the generated account. 'xrdp': no GNOME there, but xrdp, which signs in with the Linux account. */
+    kind: 'gnome' | 'xrdp'
     port: number
     username: string
+    /** Empty for xrdp: the user signs in. */
     password: string
+    /** xrdp's port, when it also runs besides GNOME (on a port of its own). */
+    xrdpPort?: number
+    /** The account to suggest for xrdp: the SSH user. */
+    xrdpUser?: string
 }
 
-// Runs as the SSH user; needs no root. Prints exactly one `RD_OK port=N user=U pass=P` or `RD_ERR <reason>` line.
+// Runs as the SSH user; needs no root. Prints exactly one `RD_OK port=N user=U pass=P`, `RD_XRDP port=N user=U` (no
+// GNOME, but xrdp) or `RD_ERR <reason>` line; with RD_OK, also an RD_XRDP line when xrdp runs besides GNOME.
 // The RDP password is generated once per remote user and kept in a 0600 file; grd reads credentials only
 // at startup, so grd is restarted only when its configuration actually changes (that drops live sessions).
 // (grdctl takes the credentials as arguments, so they are briefly visible in the remote's process list.)
 const SETUP_SCRIPT = String.raw`
 say () { printf '%s\n' "$*"; }
 fail () { say "RD_ERR $*"; exit 0; }
-command -v grdctl >/dev/null 2>&1 || fail "GNOME Remote Desktop (grdctl) is not installed"
-command -v gnome-shell >/dev/null 2>&1 || fail "gnome-shell is not installed"
+# xrdp serves the Linux desktops other than GNOME (KDE, XFCE, MATE, …). Its port is [Globals] port= in xrdp.ini
+# (default 3389): a number, or a listener such as tcp://:3390 (the first one, when there are several). Only used when
+# it runs and listens, so the host's own desktop isn't one that can't answer.
+XRDP_PORT= XRDP_WHY=
+if [ -f /etc/xrdp/xrdp.ini ]; then
+    P=$(sed -n '/^\[Globals\]/,/^\[/s/^[[:space:]]*port[[:space:]]*=[[:space:]]*//p' /etc/xrdp/xrdp.ini 2>/dev/null | tr -d '\r' | head -1)
+    P=${"$"}{P%%[[:space:]]*}
+    case $P in
+        '') P=3389 ;;
+        vsock://*) P= ;;
+        *:*) P=${"$"}{P##*:} ;;
+    esac
+    case $P in *[!0-9]*) P= ;; esac
+    if ! systemctl is-active -q xrdp 2>/dev/null && ! pgrep -x xrdp >/dev/null 2>&1; then
+        XRDP_WHY="xrdp is installed but not running (start it: sudo systemctl enable --now xrdp)"
+    elif [ -z "$P" ]; then
+        XRDP_WHY="xrdp does not listen on a TCP port (see port= in /etc/xrdp/xrdp.ini)"
+    elif command -v ss >/dev/null 2>&1 && ! ss -ltnH "sport = :$P" 2>/dev/null | grep -q .; then
+        XRDP_WHY="xrdp runs, but nothing listens on its port $P"
+    else
+        XRDP_PORT=$P
+    fi
+fi
+NO_GNOME=
+command -v grdctl >/dev/null 2>&1 || NO_GNOME="GNOME Remote Desktop (grdctl) is not installed"
+[ -n "$NO_GNOME" ] || command -v gnome-shell >/dev/null 2>&1 || NO_GNOME="gnome-shell is not installed"
+if [ -n "$NO_GNOME" ]; then
+    # No GNOME: the host's own desktop is xrdp's, if it runs. Nothing to set up for it: xrdp starts a session
+    # when the user signs in.
+    [ -z "$XRDP_PORT" ] || { say "RD_XRDP port=$XRDP_PORT user=$(id -un)"; exit 0; }
+    [ -z "$XRDP_WHY" ] || fail "$NO_GNOME, and $XRDP_WHY"
+    fail "$NO_GNOME. For other Linux desktops, install xrdp and a desktop (Debian, Ubuntu: sudo apt install xrdp xfce4)"
+fi
 if systemctl --user is-active -q gnome-remote-desktop.service; then
     fail "a desktop-session GNOME Remote Desktop is already running for this user"
 fi
@@ -199,6 +238,8 @@ PORT=$(grdctl --headless status 2>/dev/null | awk '/Port:/ { print $2; exit }')
 PORT=${"$"}{PORT:-3389}
 i=0; while [ $i -lt 40 ] && ! ss -ltnH "sport = :$PORT" 2>/dev/null | grep -q .; do sleep 0.25; i=$((i+1)); done
 ss -ltnH "sport = :$PORT" 2>/dev/null | grep -q . || fail "nothing is listening on port $PORT"
+# xrdp besides GNOME (on a port of its own; on grd's, one of them couldn't listen): offered as another desktop.
+[ -z "$XRDP_PORT" ] || [ "$XRDP_PORT" = "$PORT" ] || say "RD_XRDP port=$XRDP_PORT user=$(id -un)"
 say "RD_OK port=$PORT user=$RD_USER pass=$RD_PASS"
 `
 
@@ -211,7 +252,10 @@ function trdPty (): string {
     return trdPtySource
 }
 
-/** Makes sure the remote user has a headless GNOME session served by grd, with fresh credentials. */
+/**
+ * Makes sure the remote user has a headless GNOME session served by grd, with fresh credentials. Without GNOME,
+ * reports xrdp's port instead, when xrdp runs there.
+ */
 export async function prepareRemoteDesktop (target: RemoteTarget, desk: boolean, backend: SessionBackend = 'native'): Promise<RemoteDesktopEndpoint> {
     const script = `TRD_DESK=${desk ? 1 : 0}\nTRD_BACKEND=${backend === 'tmux' ? 'tmux' : 'native'}\n` +
         SETUP_SCRIPT.replace('@@TRD_PTY_PY@@', trdPty().trimEnd())
@@ -221,8 +265,12 @@ export async function prepareRemoteDesktop (target: RemoteTarget, desk: boolean,
         throw new Error(err[1])
     }
     const ok = /^RD_OK port=(\d+) user=(\S+) pass=(\S+)$/m.exec(out)
-    if (!ok) {
-        throw new Error('Remote setup gave no result')
+    const xrdp = /^RD_XRDP port=(\d+) user=(\S*)$/m.exec(out)
+    if (ok) {
+        return { kind: 'gnome', port: Number(ok[1]), username: ok[2], password: ok[3], xrdpPort: xrdp ? Number(xrdp[1]) : undefined, xrdpUser: xrdp?.[2] }
     }
-    return { port: Number(ok[1]), username: ok[2], password: ok[3] }
+    if (xrdp) {
+        return { kind: 'xrdp', port: Number(xrdp[1]), username: xrdp[2], password: '', xrdpPort: Number(xrdp[1]), xrdpUser: xrdp[2] }
+    }
+    throw new Error('Remote setup gave no result')
 }
