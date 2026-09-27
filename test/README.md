@@ -72,7 +72,7 @@ system keychain doesn't answer (Linux without an unlocked keyring), the keychain
 | [audio](suites/audio.mjs) | A tone played on the desktop arrives as sound; with sound off, none is set up. |
 | [reconnect](suites/reconnect.mjs) | A dropped SSH connection: "Reconnect SSH", automatic reconnect (also while hidden), Stop, Try again. |
 | [desktops](suites/desktops.mjs) | "Add a desktop behind…", its sign-in and keychain entry, "Edit a desktop" (keychain entry and sharpness following a new address), "Remove a desktop" (using the host's own GNOME desktop as the extra one). |
-| [profiles](suites/profiles.mjs) | "Remote desktop (RDP)" profiles: quick connect; a direct one in its own tab (sign-in, picture, no console, one tab per server, Disconnect and Connect, recovery); one through a saved SSH profile, opening its SSH tab with the desktop over it (the test host's GNOME as the RDP server). |
+| [profiles](suites/profiles.mjs) | "Remote desktop (RDP)" profiles: quick connect; a direct one in its own tab (sign-in, picture, no console, one tab per server, Disconnect and Connect, recovery); one through a saved SSH profile, opening its SSH tab with the desktop over it; .rdp files: the parser, "Import an .rdp file…" (the test host's GNOME as the RDP server). |
 | [windows](suites/windows.mjs) | A Windows desktop behind an SSH host: sign-in, keychain, picture, resize, reconnect; with WinRM, typing, clipboard, sound and files, each checked inside Windows. |
 | [winhost](suites/winhost.mjs) | An SSH host that is itself Windows: detected on the first open, its own desktop signed in to with the Windows account, no setup the second time. |
 | [trd-pty](unit/trd-pty.py) | The shared-session helper on its own, on the test host. |

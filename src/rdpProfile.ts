@@ -1,7 +1,7 @@
 import { Component, ElementRef, Injectable, Injector, NgZone, OnInit, ViewEncapsulation } from '@angular/core'
 import {
-    BaseTabComponent, ConfigService, ConnectableProfile, NewTabParameters, PartialProfile, ProfileSettingsComponent,
-    ProfilesService, QuickConnectProfileProvider, RecoveryToken, TabRecoveryProvider,
+    BaseTabComponent, Command, CommandProvider, ConfigService, ConnectableProfile, NewTabParameters, PartialProfile,
+    ProfileSettingsComponent, ProfilesService, QuickConnectProfileProvider, RecoveryToken, TabRecoveryProvider,
 } from 'tabby-core'
 import { BaseTerminalTabComponent, TerminalDecorator } from 'tabby-terminal'
 import { RemoteDesktopService } from './desktop.service'
@@ -310,6 +310,22 @@ export class RDPProfilesService extends QuickConnectProfileProvider<RDPProfile> 
         if (!profile.options.via) {
             forgetCredentials(`${DIRECT_KEY}#${desktopIdOf(profile.options)}`)
         }
+    }
+}
+
+/** In Tabby's command palette, also where no SSH tab (and so no Remote desktop settings menu) is at hand. */
+@Injectable()
+export class RDPCommands extends CommandProvider {
+    constructor (private desktop: RemoteDesktopService) {
+        super()
+    }
+
+    async provide (): Promise<Command[]> {
+        return [{
+            id: 'tabby-rdp:import-rdp-file',
+            label: 'Remote desktop: import an .rdp file…',
+            run: () => this.desktop.importRdpFile(),
+        }]
     }
 }
 

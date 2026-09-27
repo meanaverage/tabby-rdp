@@ -124,6 +124,10 @@ keyboard, files, sound) is the SSH tabs' code, unchanged:
   forward and drops the new one.
 - **The profile's settings** in Tabby's editor are built by hand like the other forms. Editing the address moves the
   saved account and sharpness to the new key, as the edit form does for desktops behind a host.
+- **.rdp files** become such profiles (`src/rdpFile.ts`): `key:type:value` lines, UTF-16LE with a byte order mark as
+  Remote Desktop Connection writes them, or UTF-8. Only `full address` (host, `host:port`, `[v6]:port`),
+  `server port`, `username` and `domain` are read. Importing a file whose address and user a profile already has
+  opens that profile instead of adding another.
 
 **Through an SSH profile** (`via`): Tabby's SSH sessions need their tab for host-key questions, passwords and
 keyboard-interactive prompts, so the plugin doesn't open SSH connections of its own. Opening such a profile opens the

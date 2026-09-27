@@ -2,7 +2,8 @@
 // plugin's generated account as the RDP server (no Windows needed):
 // - a direct one: its own tab, a plain TCP connection from here to TRD_TEST_HOST:3389 (skipped if that port can't be
 //   reached from here, e.g. firewalled to the loopback as docs/architecture.md suggests);
-// - one going through a saved SSH profile: it opens that profile's SSH tab and shows the desktop over it.
+// - one going through a saved SSH profile: it opens that profile's SSH tab and shows the desktop over it;
+// - .rdp files: the parser, and importing one as a profile.
 import { suite } from '../lib/harness.mjs'
 
 const DIRECT = 'Direct (test)'
@@ -139,4 +140,28 @@ await suite('profiles', async t => {
         await ev(`await H.inZone(() => H.profiles().deleteProfile(H.config.store.profiles.find(p => p.id === ${JSON.stringify(via.id)})))`)
         check('deleting a profile behind a host keeps that host\'s saved account', !!(await t.keychain(`getPassword('tabby-rdp', ${JSON.stringify(viaKey)})`)))
     }
+
+    // 4. .rdp files: the parser (UTF-16LE with a byte order mark, as mstsc writes them; UTF-8), then an import.
+    const utf16 = text => `Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(${JSON.stringify(text)}, 'utf16le')])`
+    const parsed = await ev(`return RD.parseRdpFile(${utf16('screen mode id:i:2\r\nfull address:s:pc.example:3390\r\nusername:s:CORP\\alice\r\ndomain:s:CORP\r\n')})`)
+    check('.rdp (UTF-16LE): address, port, user name, domain', parsed?.host === 'pc.example' && parsed.port === 3390 && parsed.username === 'CORP\\alice' && parsed.domain === 'CORP', parsed)
+    const utf8 = await ev(`return RD.parseRdpFile(Buffer.from('full address:s:[fe80::1]\\nserver port:i:3391\\n'))`)
+    check('.rdp (UTF-8): an IPv6 address, the port from "server port"', utf8?.host === 'fe80::1' && utf8.port === 3391, utf8)
+    check('.rdp without an address: refused', await ev(`return RD.parseRdpFile(Buffer.from('audiomode:i:0\\n')) === null`))
+    const menu = await ev(`return (await H.menu(H.pane)).find(i => i.label === 'Remote desktop settings').submenu.map(i => i.label)`)
+    check('the settings menu offers "Import an .rdp file…"', menu.includes('Import an .rdp file…'), menu)
+    check('so does the command palette', await ev(`const { CommandProvider } = require('tabby-core')
+        return (await Promise.all(RD.injector.get(CommandProvider).map(p => p.provide({})))).flat().some(c => c.id === 'tabby-rdp:import-rdp-file')`))
+    const file = utf16(`full address:s:${host}\r\nusername:s:tabby\r\n`)
+    const importOnce = () => ev(`const before = new Set(H.panes())
+        const profile = await H.inZone(() => RD.desktop.importRdp(${file}, '/somewhere/Imported (test).rdp'))
+        await new Promise(r => setTimeout(r, 500))
+        H.opened.push(...H.panes().filter(p => !before.has(p)))
+        return { profile: profile && JSON.parse(JSON.stringify(profile)), count: H.config.store.profiles.filter(p => p.type === 'rdp' && p.name === 'Imported (test)').length }`)
+    const imported = await importOnce()
+    check('import: a profile named after the file, with the address and user name', imported.count === 1 && imported.profile?.type === 'rdp' && imported.profile.options.host === host &&
+        imported.profile.options.port === 3389 && imported.profile.options.username === 'tabby' && !imported.profile.options.via, imported)
+    check('import: the new profile opens in a remote desktop tab', !!(await t.waitFor(`const p = H.panes().find(p => p.profile?.type === 'rdp' && p.profile.name === 'Imported (test)'); return p && RD.desktopPaneOf(p) === p`, 5)))
+    const again = await importOnce()
+    check('importing the same file again opens that profile instead of adding one', again.count === 1, again)
 })

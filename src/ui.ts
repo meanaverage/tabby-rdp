@@ -171,6 +171,7 @@ export function settingsMenu (desktop: RemoteDesktopService, pane?: DesktopPane 
             click: () => desktop.updateSettings({ macShortcuts: !current.macShortcuts }),
         }] : [],
         { type: 'separator' },
+        { label: 'Import an .rdp file…', click: () => desktop.importRdpFile() },
         {
             // The form shows over a console (a remote desktop tab edits its desktop in Tabby's profile settings).
             label: 'Edit a desktop',

@@ -23,7 +23,8 @@ nothing is opened on the network, and nothing has to be installed on the remote 
 
 - **Linux desktops without a monitor or a login.** The plugin starts a headless GNOME session for your SSH user with
   GNOME Remote Desktop, on the fly, without root. A server in a rack works as well as a workstation.
-- **Windows desktops** behind any SSH host, such as a VM on your build server, or of a Windows machine you SSH into.
+- **Windows desktops** behind any SSH host, such as a VM on your build server, and the desktop of a Windows machine
+  you SSH into.
 - **Remote desktop profiles** for machines you reach without SSH (LAN, VPN): in Tabby's profile list, in a tab of their
   own.
 - **A proper desktop experience:** clipboard and files both ways, sound, live resize to the pane, sharp Retina
@@ -97,9 +98,9 @@ connecting again.
 
 An SSH host can lead to other desktops it can reach, such as a Windows VM on the same machine. In that host's menu,
 choose **Add a desktop behind \<host\>…** and enter a name, the address as seen from the host, and optionally the
-user name and domain. It opens right away, and from then on appears next to the host's own desktop in its menus. **Remote
-desktop settings › Edit a desktop** changes one (its saved password and sharpness follow a new address; a new user
-name forgets the saved password), and **Remove a desktop** removes one, along with its saved password.
+user name and domain. It opens right away, and from then on appears next to the host's own desktop in its menus.
+**Remote desktop settings › Edit a desktop** changes one (its saved password and sharpness follow a new address; a
+new user name forgets the saved password), and **Remove a desktop** removes one, along with its saved password.
 
 <p align="center"><img src="docs/images/windows.png" width="760" alt="A Windows 11 desktop, reached through an SSH host, in a Tabby tab"></p>
 
@@ -133,6 +134,11 @@ profiles do, and opens in a tab of its own that the desktop fills; there is no c
 keychain, resize, sharpness, clipboard, files, sound and reconnecting work as in SSH tabs. After **Disconnect**, the
 tab offers **Connect**. In the profile selector you can also type `user@host:port` and pick **Quick connect (REMOTE
 DESKTOP (RDP))**.
+
+**Import an .rdp file…** (in **Remote desktop settings**, or **Remote desktop: import an .rdp file…** in Tabby's
+command palette) makes such a profile from a file saved by Remote Desktop Connection or handed out by an admin: its
+address, port, user name and domain, named after the file. Other settings in the file (screen size, drives, gateway)
+are ignored.
 
 Its **Connect** setting can name an SSH profile instead of connecting directly. The address is then as that host sees
 it, and opening the profile opens that SSH tab and shows the desktop over it once SSH is connected. Such a desktop is

@@ -1,6 +1,6 @@
 import { Injectable, NgZone } from '@angular/core'
 import { Subject } from 'rxjs'
-import { AppService, ConfigService, NotificationsService, SplitTabComponent } from 'tabby-core'
+import { AppService, ConfigService, NotificationsService, ProfilesService, SplitTabComponent } from 'tabby-core'
 import * as path from 'path'
 import { pathToFileURL } from 'url'
 import { DesktopPane, isRDPTab, RDP_PROFILE_TYPE, RemoteTarget, RemoteTargets } from './targets'
@@ -9,6 +9,7 @@ import { AudioPlayer } from './audio'
 import { askDesktop } from './desktopForm'
 import { FileTransfer, STYLE as FILES_STYLE } from './fileTransfer'
 import { desktopIdOf, DesktopSpec, desktopsFor, DIRECT_KEY, ExtraDesktopConfig, OWN_DESKTOP, sessionKey } from './desktops'
+import { parseRdpFile } from './rdpFile'
 import { prepareRemoteDesktop, WindowsHostError } from './remoteSetup'
 import { RDCleanPathProxy, startRDCleanPathProxy } from './rdcleanpath'
 import {
@@ -274,6 +275,7 @@ export class RemoteDesktopService {
         private notifications: NotificationsService,
         private config: ConfigService,
         private zone: NgZone,
+        private profiles: ProfilesService,
     ) { }
 
     has (pane: DesktopPane): boolean {
@@ -463,6 +465,53 @@ export class RemoteDesktopService {
                 this.lastUsed.set(key, toId)
             }
         }
+    }
+
+    /** "Import an .rdp file…": picks one and adds it as a remote desktop profile (see importRdp). */
+    async importRdpFile (): Promise<void> {
+        const file = await new Promise<File | null>(resolve => {
+            const input = document.createElement('input')
+            input.type = 'file'
+            input.accept = '.rdp'
+            input.style.display = 'none'
+            input.addEventListener('change', () => { input.remove(); resolve(input.files?.[0] ?? null) })
+            input.addEventListener('cancel', () => { input.remove(); resolve(null) })
+            document.body.appendChild(input)
+            input.click()
+        })
+        if (file) {
+            await this.importRdp(new Uint8Array(await file.arrayBuffer()), file.name)
+        }
+    }
+
+    /**
+     * Adds a "Remote desktop (RDP)" profile from a .rdp file's contents (address, user name, domain; see rdpFile.ts)
+     * and opens it; or opens the profile that already has that address and user. Returns the profile, or null.
+     */
+    async importRdp (data: Uint8Array, fileName: string): Promise<any> {
+        const parsed = parseRdpFile(data)
+        if (!parsed) {
+            this.notifications.error(`${fileName}: no address ("full address") in it`)
+            return null
+        }
+        const existing = (this.config.store.profiles ?? []).find((p: any) => p?.type === RDP_PROFILE_TYPE && !p.options?.via &&
+            p.options?.host === parsed.host && (p.options.port || 3389) === parsed.port && (p.options.username ?? '') === (parsed.username ?? ''))
+        if (existing) {
+            this.notifications.info(`Opening "${existing.name}", which is already a profile for ${fileName}`)
+            await this.profiles.openNewTabForProfile(existing)
+            return existing
+        }
+        const profile = {
+            type: RDP_PROFILE_TYPE,
+            name: fileName.replace(/^.*[\\/]/, '').replace(/\.rdp$/i, '') || parsed.host,
+            icon: 'fas fa-desktop',
+            options: { host: parsed.host, port: parsed.port, kind: 'windows', username: parsed.username ?? '', domain: parsed.domain ?? '', via: '' },
+        }
+        await this.profiles.newProfile(profile)
+        this.config.save()
+        this.notifications.notice(`Added the remote desktop profile "${profile.name}" (Settings › Profiles & connections)`)
+        await this.profiles.openNewTabForProfile(profile)
+        return profile
     }
 
     /** Removes a configured desktop and its saved accounts. Open sessions to it keep running. */
