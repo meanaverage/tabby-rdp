@@ -97,6 +97,8 @@ choose **Add a desktop behind \<host\>…** and enter a name, the address as see
 user name. It opens right away, and from then on appears next to the host's own desktop in its menus. **Remote
 desktop settings › Remove a desktop** removes one, along with its saved password.
 
+<p align="center"><img src="docs/images/windows.png" width="760" alt="A Windows 11 desktop, reached through an SSH host, in a Tabby tab"></p>
+
 In Tabby's config file, they look like this:
 
 ```yaml

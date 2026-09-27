@@ -76,7 +76,11 @@ done
 $SSH cloud-init status --wait >/dev/null 2>&1 || true
 $SSH 'cat > /tmp/provision.sh' < "$HERE/provision.sh"
 $SSH sudo sh /tmp/provision.sh ubuntu
-# Restart into the provisioned system (text mode, NetworkManager), as it will run from now on.
+# The cloud-init seed isn't needed any more (it would show as a "cidata" drive in Files). Then restart into the
+# provisioned system (text mode, NetworkManager), as it will run from now on.
+SEED_DEV=$($V domblklist "$NAME" --details | awk '$2 == "cdrom" { print $3; exit }')
+[ -z "$SEED_DEV" ] || $V change-media "$NAME" "$SEED_DEV" --eject --live --config >/dev/null
+$V vol-delete --pool "$NAME" seed.iso >/dev/null 2>&1 || true
 $SSH sudo reboot >/dev/null 2>&1 || true
 sleep 10
 i=0; until $SSH true 2>/dev/null; do

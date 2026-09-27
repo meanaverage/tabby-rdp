@@ -12,7 +12,7 @@ npm test -- windows               # the Windows suite (TRD_TEST_WIN_*)
 npm test -- --packed e2e          # with the plugin installed as npm would install it (npm pack)
 npm test -- --keep e2e            # leave the test Tabby open afterwards
 npm test -- --port 9334 e2e       # use a Tabby already running with --remote-debugging-port=9334
-npm test -- screenshots           # regenerate docs/images from the test host
+npm test -- screenshots           # regenerate docs/images from the test machines
 ```
 
 `npm test` ([`run.mjs`](run.mjs)) starts a separate Tabby with a fresh, minimal profile in a temporary folder, this

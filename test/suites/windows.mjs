@@ -2,12 +2,9 @@
 // host's menus; the sign-in form (a wrong password, then the right one); the keychain; the picture; live resize;
 // reconnecting with the saved account. With WinRM (TRD_TEST_WIN_WINRM), also typing, the clipboard both ways,
 // sound, and files both ways with Explorer, each checked inside Windows. See test/README.md for the test machine.
-import fs from 'node:fs'
-import path from 'node:path'
-import { fileURLToPath } from 'node:url'
 import { suite } from '../lib/harness.mjs'
+import { windowsGuest } from '../lib/windows.mjs'
 
-const WINRM_HELPER = fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'lib', 'winrm.py'), 'utf8')
 const NAME = 'Windows (test)'
 
 await suite('windows', async t => {
@@ -23,24 +20,7 @@ await suite('windows', async t => {
     // Waits for the latest connection attempt to end one way or another.
     const outcome = () => t.waitFor(`const log = RD.desktop.logOf(H.pane); const after = log.slice(log.findLastIndex(l => /Connecting to/.test(l)) + 1)
         return after.find(l => /Z $/.test(l)) ?? after.find(l => /failed|ended|cancelled/.test(l)) ?? (H.signin() ? 'signin' : null)`, 40)
-    /** Runs PowerShell inside Windows (WinRM, from the SSH host). */
-    const guest = script => t.remote('H.pane', `${win.winrmPython} -`,
-        `${WINRM_HELPER}\nmain(${JSON.stringify({ address: win.winrm, user: win.account, password: win.password, script })})\n`)
-    /**
-     * Runs PowerShell in the signed-in Windows session, where the desktop is: a task with the account's interactive
-     * token, through the Task Scheduler's COM interface (the ScheduledTasks cmdlets use WMI, which is for
-     * administrators only over WinRM).
-     */
-    const inSession = (name, command) => guest(`
-$s = New-Object -ComObject Schedule.Service; $s.Connect()
-$d = $s.NewTask(0)
-$d.Principal.LogonType = 3
-$a = $d.Actions.Create(0)
-$a.Path = 'powershell.exe'
-$a.Arguments = '-NoProfile -WindowStyle Hidden -Command "${command.replace(/"/g, '\\"').replace(/'/g, "''")}"'
-$s.GetFolder('\\').RegisterTaskDefinition('${name}', $d, 6, $null, $null, 3) | Out-Null
-$s.GetFolder('\\').GetTask('${name}').Run($null) | Out-Null`)
-    const dropTask = name => guest(`$s = New-Object -ComObject Schedule.Service; $s.Connect(); try { $s.GetFolder('\\').DeleteTask('${name}', 0) } catch { }`)
+    const { guest, inSession, dropTask } = windowsGuest(t, 'H.pane')
     await ev(`Object.assign(H, {
         signin () {
             const f = H.overlay(H.pane)?.querySelector('.trd-signin form')

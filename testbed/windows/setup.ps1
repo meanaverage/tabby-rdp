@@ -51,6 +51,14 @@ if ($rootSddl -notmatch '\(A;;GA;;;RM\)') {
     Set-Item WSMan:\localhost\Service\RootSDDL -Value ($rootSddl -replace '^(O:[^:]+G:[^:]+D:P?)', '$1(A;;GA;;;RM)') -Force
 }
 
+# No news, weather or pictures on the taskbar and in its search box: the same desktop every time, in tests and pictures.
+foreach ($policy in @(
+        @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Dsh'; Name = 'AllowNewsAndInterests' },
+        @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Windows Search'; Name = 'EnableDynamicContentInWSB' })) {
+    New-Item -Path $policy.Path -Force | Out-Null
+    Set-ItemProperty -Path $policy.Path -Name $policy.Name -Value 0 -Type DWord
+}
+
 # The test account: Remote Desktop and WinRM, not an administrator.
 $account = Get-LocalUser -Name $UserName -ErrorAction SilentlyContinue
 if (-not $account) {
