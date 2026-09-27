@@ -79,7 +79,7 @@ await suite('e2e', async t => {
     check('SSH tab connected', await ev('H.pane = await H.openSSH(); return !!H.pane'))
     check('menu offers "Open remote desktop"', await labels(false) === 'Open remote desktop')
     const settings = await ev(`return ((await H.menu(H.pane)).find(i => i.label === 'Remote desktop settings')?.submenu ?? []).filter(i => i.type === 'radio').map(i => i.label + (i.checked ? '*' : ''))`)
-    check('"Remote desktop settings" with resize and sharpness choices', settings.length === 5 && settings.filter(l => l.endsWith('*')).length === 2, settings)
+    check('"Remote desktop settings" with resize and sharpness choices', settings.length === 6 && settings.filter(l => l.endsWith('*')).length === 2, settings)
     const deskItem = await ev(`const d = ((await H.menu(H.pane)).find(i => i.label === 'Remote desktop settings')?.submenu ?? []).find(i => i.type === 'checkbox'); return d ? { label: d.label, checked: d.checked } : null`)
     check('settings have the desk checkbox (on here)', /desk/.test(deskItem?.label ?? '') && deskItem.checked === true, deskItem)
     check('SSH toolbar has a Desktop button', !!(await t.waitFor(`return !!H.pane.element.nativeElement.querySelector('terminal-toolbar .trd-toolbar-button')`, 5)))

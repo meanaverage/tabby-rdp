@@ -36,15 +36,16 @@ await suite('status', async t => {
     const path = (await ev('return H.statsText()?.path')) ?? ''
     check('the path names the desktop, resolution, graphics mode and sharpness', path.includes(`${host} desktop`) && /\d+×\d+/.test(path) && path.includes('graphics pipeline') && path.includes('Standard'), path)
 
-    // Frames: the overview animation redraws the screen.
+    // Frames: opening and closing the overview redraws the screen. GNOME Shell turns its animations off while a
+    // remote desktop session is active, so each change is a single frame: several changes.
     const before = await ev('return H.session(H.pane).indicator.frames')
     await t.clickDesktop('H.pane')
-    await t.tap('Meta')  // Super (on macOS a ⌘ tap, with Mac shortcuts on): the overview
-    await sleep(1200)
-    await t.tap('Meta')
-    await sleep(1200)
+    for (let i = 0; i < 6; i++) {
+        await t.tap('Meta')  // Super (on macOS a ⌘ tap, with Mac shortcuts on): the overview, then back
+        await sleep(700)
+    }
     const after = await ev('return H.session(H.pane).indicator.frames')
-    check('screen updates are counted as frames', after - before >= 5, { before, after })
+    check('screen updates are counted as frames', after - before >= 4, { before, after })
     const fps = await t.waitFor(`return Number(/(\\d+) fps/.exec(H.statsText()?.numbers ?? '')?.[1] ?? -1) >= 0`, 3)
     check('fps shown as a number', !!fps)
 

@@ -56,6 +56,7 @@ await suite('actions', async t => {
     await click(SEND, 'Super (Activities)')
     check('Send keys › Super: the desktop shows again', !!(await t.waitFor('return RD.desktop.isVisible(H.pane)', 3)))
     check('Send keys › Super: the Activities overview opens', await waitOverview(true), await ev('return RD.desktop.logOf(H.pane).filter(l => /keys:/.test(l))'))
+    await sleep(1000)  // GNOME Shell ignores Super while the overview is still settling
     await click(SEND, 'Super (Activities)')
     check('Send keys › Super again: the overview closes', await waitOverview(false))
 

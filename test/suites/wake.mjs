@@ -70,8 +70,17 @@ await suite('wake', async t => {
 
     check('SSH tab connected', await ev('H.pane = await H.openSSH(); return !!H.pane'))
     await ev('await H.inZone(() => RD.desktop.showDesktop(H.pane))')
-    check('own desktop connected (account created)', !!(await t.waitFor('return H.connected(H.pane)', 40)))
-    await ev('H.inZone(() => RD.desktop.disconnect(H.pane))')
+    // The stand-in forwards to grd, which needs the headless GNOME session. GNOME Shell 46 sometimes crashes when
+    // the last client's monitor goes away; connecting again (the setup) starts a new one.
+    for (let i = 0; i < 3; i++) {
+        check(i ? 'own desktop connected again (GNOME Shell had crashed)' : 'own desktop connected (account created)', !!(await t.waitFor('return H.connected(H.pane)', 40)))
+        await ev('H.inZone(() => RD.desktop.disconnect(H.pane))')
+        await sleep(3000)
+        if ((await t.remote('H.pane', 'systemctl --user is-active tabby-headless-shell')).trim() === 'active') {
+            break
+        }
+        await ev('await H.inZone(() => RD.desktop.showDesktop(H.pane))')
+    }
     const password = (await t.remote('H.pane', 'cat ~/.local/share/tabby-rdp/rdp-password')).trim()
     const grdPort = Number((await t.remote('H.pane', 'grdctl --headless status 2>/dev/null | sed -n "s/.*Port: *//p" | head -n 1')).trim()) || 3389
 
@@ -92,7 +101,7 @@ await suite('wake', async t => {
     await ev(`H.inZone(() => { H.config.store.remoteDesktop.desktops = [
         { name: 'Sleeper', via: ${JSON.stringify(host)}, host: '127.0.0.1', port: ${FWD_PORT}, kind: 'gnome', username: 'tabby', wake: { mac: '${MAC}', broadcast: '127.0.0.1', port: ${WOL_PORT} } },
         { name: 'No such VM', via: ${JSON.stringify(host)}, host: '127.0.0.1', port: ${LOST_PORT}, kind: 'windows', wake: { vm: 'trd-test-no-such-vm' } },
-        { name: 'Lost', via: ${JSON.stringify(host)}, host: '127.0.0.1', port: ${LOST_PORT}, kind: 'windows', wake: { mac: '${MAC}', broadcast: '127.0.0.1', port: ${WOL_PORT + 1} } },
+        { name: 'Lost', via: ${JSON.stringify(host)}, host: '127.0.0.1', port: ${LOST_PORT + 2}, kind: 'windows', wake: { mac: '${MAC}', broadcast: '127.0.0.1', port: ${WOL_PORT + 1} } },
         { name: 'Bad wake', via: ${JSON.stringify(host)}, host: '127.0.0.1', port: ${LOST_PORT + 1}, kind: 'windows', wake: { mac: 'not a mac' } },
     ]; H.config.save() })`)
     const specs = await ev(`return { sleeper: (await H.spec('Sleeper'))?.wake, vm: (await H.spec('No such VM'))?.wake, bad: (await H.spec('Bad wake'))?.wake ?? null }`)
@@ -122,7 +131,7 @@ await suite('wake', async t => {
     if (/session ended/.test(dropped?.text ?? '')) {
         t.skip('automatic reconnect: says it is down, without starting it', 'the drop ended the session cleanly, so nothing reconnected by itself')
     } else {
-        check('automatic reconnect: says it is down, without starting it', !!dropped, await ev('return H.status(H.pane)'))
+        check('automatic reconnect: says it is down, without starting it', !!dropped, await ev('return { status: H.status(H.pane), log: H.log().slice(-12) }'))
     }
     await sleep(2000)
     check('no magic packet from automatic reconnects', (await machine.log()) === '', await machine.log())
