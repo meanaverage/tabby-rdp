@@ -99,10 +99,11 @@ await suite('desktops', async t => {
     await ev(`H.fill({ name: ${JSON.stringify(EDITED)}, address: ${JSON.stringify(EDITED_ID)} })`)
     const edited = await t.waitFor(`const d = (H.config.store.remoteDesktop.desktops ?? [])[0]; return d?.name === ${JSON.stringify(EDITED)} ? d : null`, 5)
     check('the edited entry is saved (same host, new address)', edited?.host === 'localhost' && edited.port === 3389 && edited.via === entry?.via && edited.username === 'tabby', edited)
-    check('its remembered certificate moved to the new address', await ev(`const list = H.config.store.remoteDesktop.trustedCertificates ?? []
-        return list.some(e => e.desktop === ${JSON.stringify(editedKey)}) && !list.some(e => e.desktop === ${JSON.stringify(key)})`))
-    check('its sharpness moved to the new address', await ev(`const list = H.config.store.remoteDesktop.desktopSharpness ?? []
-        return list.some(e => e.desktop === ${JSON.stringify(editedKey)}) && !list.some(e => e.desktop === ${JSON.stringify(key)})`))
+    // These move after the saved account, which the keychain can take a moment for.
+    check('its remembered certificate moved to the new address', !!(await t.waitFor(`const list = H.config.store.remoteDesktop.trustedCertificates ?? []
+        return list.some(e => e.desktop === ${JSON.stringify(editedKey)}) && !list.some(e => e.desktop === ${JSON.stringify(key)})`, 15)))
+    check('its sharpness moved to the new address', !!(await t.waitFor(`const list = H.config.store.remoteDesktop.desktopSharpness ?? []
+        return list.some(e => e.desktop === ${JSON.stringify(editedKey)}) && !list.some(e => e.desktop === ${JSON.stringify(key)})`, 15)))
     const renamed = await ev('return await H.labels()')
     check('the menus offer it under its new name', renamed.includes(`Open ${EDITED}`) && !renamed.some(l => (l ?? '').includes(NAME)), renamed)
     if (keychainWorks) {

@@ -11,13 +11,16 @@ await suite('graphics', async t => {
     const { ev, check } = t
     const connected = () => t.waitFor('return H.connected(H.pane)', 40, 100)
     const stats = () => ev('const d = H.session(H.pane)?.h264; return d ? { ...d.stats, failed: d.failed } : null')
-    /** Starts the flipping window; returns null, or why it didn't start (it needs python3 with GTK 3). */
+    /**
+     * Starts the flipping window; returns null, or why it didn't start (it needs python3 with GTK 3). pkill and pgrep
+     * match the start of the command line: the shell running this has the script's name in its own.
+     */
     const flip = async () => {
         await t.remote('H.pane', 'cat > /tmp/trd-flip.py', GNOME_FLIP)
-        const out = await t.remote('H.pane', `pkill -u "$(id -u)" -f '[t]rd-flip.py'; W=$(systemctl --user show-environment | sed -n 's/^WAYLAND_DISPLAY=//p'); WAYLAND_DISPLAY=\${W:-wayland-0} GDK_BACKEND=wayland setsid python3 /tmp/trd-flip.py ${FLIP_SECONDS} >/tmp/trd-flip.log 2>&1 < /dev/null & sleep 2.5; pgrep -u "$(id -u)" -f '[t]rd-flip.py' >/dev/null && echo running || tail -3 /tmp/trd-flip.log`)
-        return /running/.test(out) ? null : out.trim()
+        const out = await t.remote('H.pane', `pkill -u "$(id -u)" -f '^python3 /tmp/trd-flip[.]py'; W=$(systemctl --user show-environment | sed -n 's/^WAYLAND_DISPLAY=//p'); WAYLAND_DISPLAY=\${W:-wayland-0} GDK_BACKEND=wayland setsid python3 /tmp/trd-flip.py ${FLIP_SECONDS} >/tmp/trd-flip.log 2>&1 < /dev/null & sleep 2.5; pgrep -u "$(id -u)" -f '^python3 /tmp/trd-flip[.]py' >/dev/null && echo running || tail -3 /tmp/trd-flip.log`)
+        return /running/.test(out) ? null : out.trim() || 'no output'
     }
-    t.onCleanup(() => t.remote('H.pane', `pkill -u "$(id -u)" -f '[t]rd-flip.py'; rm -f /tmp/trd-flip.py /tmp/trd-flip.log; true`))
+    t.onCleanup(() => t.remote('H.pane', `pkill -u "$(id -u)" -f '^python3 /tmp/trd-flip[.]py'; rm -f /tmp/trd-flip.py /tmp/trd-flip.log; true`))
     await t.settings({ h264: true, sharpness: 'standard', resize: 'live' })
 
     check('SSH tab connected', await ev('H.pane = await H.openSSH(); return !!H.pane'))
