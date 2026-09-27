@@ -1,6 +1,6 @@
-vendor/iron-remote-desktop*.js are built from IronRDP (https://github.com/Devolutions/IronRDP) at commit
-9b151c4c2e47c6014e1e8e55909d4180aa8bdb99 with the patches in ironrdp/patches applied. IronRDP is dual-licensed under MIT or Apache-2.0;
-its MIT license follows.
+vendor/iron-remote-desktop*.js and vendor/ironrdp_web_bg.wasm are built from IronRDP
+(https://github.com/Devolutions/IronRDP) at commit 9b151c4c2e47c6014e1e8e55909d4180aa8bdb99 with the patches in
+ironrdp/patches applied. IronRDP is dual-licensed under MIT or Apache-2.0; its MIT license follows.
 
 Permission is hereby granted, free of charge, to any
 person obtaining a copy of this software and associated

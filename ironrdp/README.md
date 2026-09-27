@@ -8,6 +8,12 @@ fixes among them are meant for upstream, and are submitted there one by one.
 `vendor/` is built from IronRDP at [`BASE_COMMIT`](BASE_COMMIT) with the patches in [`patches/`](patches) applied in
 order, by `npm run build:ironrdp` ([`scripts/build-ironrdp.sh`](../scripts/build-ironrdp.sh)).
 
+The WebAssembly ships as its own file, `vendor/ironrdp_web_bg.wasm`. Vite's library build inlines it into
+`iron-remote-desktop-rdp.js` as a ~7 MB base64 data URL, which supply-chain scanners flag as obfuscated code, so the
+build script takes it back out (checking it is byte for byte wasm-pack's output) and points the bundle's default at
+the file next to it. The plugin reads the file itself and passes the bytes to `init` (patch 9), since `fetch()` of
+`file://` URLs is up to the Electron build.
+
 ## The patches
 
 | # | Patch | Why | Upstream |
@@ -20,6 +26,7 @@ order, by `npm run build:ironrdp` ([`scripts/build-ironrdp.sh`](../scripts/build
 | 6 | **feat(web): audio playback through an `audioPlayback` callback** | The web client had no sound. An RDPSND backend hands 16-bit PCM to a JavaScript callback; with sound on, a device-less RDPDR is attached too, since Windows only starts playback once RDPDR is up. | [#2020](https://github.com/Devolutions/IronRDP/pull/2020) |
 | 7 | **feat(web): microphone redirection (AUDIO_INPUT) through an `audioInput` callback** | The web client couldn't redirect a microphone. With an `audioInput(callback)` extension it advertises audio capture and serves the AUDIO_INPUT channel with `ironrdp-rdpeai`'s client, a fresh one each time the server opens it; the callback hears `open` (the format) and `close`, and JavaScript pushes 16-bit PCM back with `audioInputData`. | Not submitted yet |
 | 8 | **feat(web): H.264 (AVC420) in the graphics pipeline, decoded by WebCodecs** | Everything EGFX carried was decoded in WebAssembly. An `h264Decoder` extension advertises AVC420 and hands the frames to the browser's `VideoDecoder` (`WebCodecsH264Decoder`); ironrdp-egfx gains external decoding (frames applied and acknowledged in order) and bitstream fixes for platform decoders (Annex B, an SPS that declares no reordering). | Not submitted yet |
+| 9 | **feat(web): let the host hand `init` the WebAssembly module** | Packaging, for tabby-rdp: `init(logLevel, wasm)` passes `wasm` (URL, bytes or compiled module) to wasm-bindgen's init, so the plugin can load `vendor/ironrdp_web_bg.wasm` itself (below). Without it, nothing changes. | Not for upstream unless they want it |
 
 Each patch carries its own tests where IronRDP has a place for them (`ironrdp-testsuite-core`, the web component's
 vitest suite).

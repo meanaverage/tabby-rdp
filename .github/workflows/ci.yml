@@ -27,8 +27,12 @@ jobs:
           npm pack --dry-run 2>&1 | tee pack.txt
           grep -q 'dist/index.js' pack.txt
           grep -q 'vendor/iron-remote-desktop-rdp.js' pack.txt
+          grep -q 'vendor/ironrdp_web_bg.wasm' pack.txt
           grep -q 'remote/trd-pty.py' pack.txt
           ! grep -qE ' (src|test|testbed|docs|ironrdp)/' pack.txt
+      - name: No inlined assets in vendor/
+        # The WebAssembly ships as its own file (scripts/build-ironrdp.sh), not as a base64 data URL in the bundle.
+        run: "! grep -l ';base64,' vendor/*.js"
 
   trd-pty:
     name: trd-pty
