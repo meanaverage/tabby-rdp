@@ -77,6 +77,8 @@ system keychain doesn't answer (Linux without an unlocked keyring), the keychain
 | [certificates](suites/certificates.mjs) | The own desktop's certificate checked against the setup's; a desktop behind the host remembered on first use, a changed certificate stopped before sign-in (Cancel, "Trust the new certificate", also on an automatic reconnect), forgotten on removal. |
 | [windows](suites/windows.mjs) | A Windows desktop behind an SSH host: sign-in, keychain, picture, resize, reconnect, its certificate remembered and a changed one stopped; with WinRM, typing, clipboard, sound and files, each checked inside Windows. |
 | [xrdp](suites/xrdp.mjs) | xrdp next to GNOME (a second desktop) and without GNOME (the host's own desktop): sign-in and xrdp's autologon, picture, typing, clipboard, keychain, "Sign in again…", live resize (xrdp 0.10+), and the error when neither runs. |
+| [status](suites/status.mjs) | The connection-status indicator: off by default, the menu toggle and its config, throughput, fps, round trip and path, only while the desktop shows. |
+| [wake](suites/wake.mjs) | Starting a desktop behind a host (`wake`): the probe, a Wake-on-LAN packet to a stand-in machine on the test host, the wait, no waking on automatic reconnects, a missing VM, Cancel, the add form's field. |
 | [trd-pty](unit/trd-pty.py) | The shared-session helper on its own, on the test host. |
 
 Checks print `PASS`, `FAIL` or `SKIP`; some suites also print `TIME` lines (connection and reconnection times, for

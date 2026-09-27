@@ -94,6 +94,7 @@ connecting again.
 | **Send keys** | In the desktop's menus: Ctrl+Alt+Del, Win+R, Win+L, Ctrl+Shift+Esc, Print Screen and more for Windows; Super, Super+A, Alt+F2 and more for GNOME. |
 | **View only** | In the desktop's menus: watch a desktop without touching it. No keys or clicks go to it while a "View only" label shows; the picture, clipboard and sound carry on. Kept across reconnects, until the desktop is closed. |
 | **Screenshots** | **Save a screenshot** in the desktop's menus saves the remote screen at its full resolution as a PNG in Downloads, and copies it to the clipboard. |
+| **Connection status** | Optionally, a small line in the corner of the desktop with the throughput each way, frames per second, the SSH round trip, and how it is connected (desktop, host, resolution, graphics mode, sharpness). |
 | **Reconnecting** | After sleep or a network change, the desktop reconnects by itself once the connection is back. |
 | **Sign-in** | GNOME desktops need none: the plugin manages their credentials. Windows and xrdp desktops ask for the account once and can remember it in the system keychain; **Sign in again…** in the menu replaces it. |
 | **Certificates** | GNOME desktops accept only the certificate the plugin made for them. Windows and xrdp desktops remember theirs on first use and ask before accepting a different one. |
@@ -120,6 +121,7 @@ remoteDesktop:
       port: 3389
       kind: windows             # or xrdp (a Linux desktop served by xrdp), or gnome
       username: alice           # optional; DOMAIN\user works too
+      wake: { vm: win11 }       # optional: start it when it's off (see below)
 ```
 
 The connection runs through the same SSH connection; the Windows machine needs Remote Desktop turned on, and nothing
@@ -130,6 +132,20 @@ The first connection to a desktop remembers its TLS certificate, without asking 
 and shows both fingerprints, with **Trust the new certificate** and **Cancel**. Reinstalling Windows or renewing its
 certificate changes it; if neither happened, something else is answering at that address. Automatic reconnects stop at
 the same question.
+### Starting a desktop that is off
+
+A VM on the SSH host, or a machine next to it, may be shut down when you want its desktop. With `wake`, the plugin
+checks from the SSH host whether the desktop answers, and if it doesn't, starts it, shows **Starting \<name\>…** with
+the time so far, and connects as soon as it answers (it gives up after 3 minutes):
+
+- `wake: { vm: win11 }` starts the libvirt VM `win11` on the SSH host with `virsh start`, as your SSH user: first in
+  `qemu:///system` (you need to be in the `libvirt` group, or allowed by polkit), then in your own `qemu:///session`.
+  A paused VM is resumed.
+- `wake: { mac: "aa:bb:cc:dd:ee:ff" }` sends a Wake-on-LAN packet from the SSH host (with `python3`, to the broadcast
+  address, UDP port 9). Add `broadcast: 192.168.1.255` for a particular network, or `port: 7`.
+
+In the add form, the last field takes a VM name or a MAC address. Automatic reconnects never start a desktop,
+since it may have been shut down on purpose; **Reconnect** does.
 
 ## desk: the console on the desktop
 
@@ -158,6 +174,7 @@ They are stored in Tabby's config under `remoteDesktop`:
 | Sharpness (`sharpness`) | Standard (`standard`) | Retina (`retina`): device pixels, with the remote's scale set to match. |
 | For *this desktop* only (`desktopSharpness`) | As above | In the menu of a tab with a desktop open: Standard or Retina for that desktop, whatever the default. Kept by desktop (`user@host`, or `user@host#address` for one behind a host). |
 | Sound (`sound`) | On | Applies on the next connection. |
+| Show connection status (`connectionStatus`) | Off | The indicator in the desktop's corner; fades when the pointer comes near. |
 | Mac shortcuts (`macShortcuts`) | On | macOS. Off: ⌘ is the Windows key. |
 | Bring the console along with `desk` (`desk`) | Off | Installs `desk` and a login line on each machine you open a desktop on; applies on the next connection there. |
 | Session backend (`sessionBackend`) | `native` | For `desk`: `native` (trd-pty) or `tmux`. Config file only. |
@@ -240,6 +257,7 @@ npm run build:ironrdp        # rebuild vendor/ from IronRDP and ironrdp/patches:
   far as that xrdp version supports them), sound through the PipeWire or PulseAudio module. Live resize needs xrdp
   0.10 or newer; with 0.9 (Ubuntu 24.04), the desktop keeps its size, scaled to fit, or choose **Reconnect at the new
   size**. xrdp's standard RDP security without TLS (`security_layer=rdp`) isn't supported. `desk` needs GNOME.
+- **Waking a desktop** starts it but never shuts it down again; that is up to you (or the VM's own settings).
 
 ## License
 

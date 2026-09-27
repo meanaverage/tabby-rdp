@@ -2,7 +2,7 @@ import { Injectable } from '@angular/core'
 import { execFile, spawn } from 'child_process'
 import { Duplex } from 'stream'
 import { BaseTabComponent, SplitTabComponent } from 'tabby-core'
-import { execRemote, isConnected, isSSHTab, openTcpStream, SSHTab } from './ssh'
+import { execRemote, isConnected, isSSHTab, openTcpStream, pingRemote, SSHTab } from './ssh'
 
 /** Somewhere a remote desktop can be reached: a remote account, plus how to talk to it. */
 export interface RemoteTarget {
@@ -18,6 +18,8 @@ export interface RemoteTarget {
     isOpen (): boolean
     /** Asks the SSH connection to come back, where Tabby owns it. */
     reconnectSSH?: () => Promise<void>
+    /** Round-trip time to the SSH server in ms, where it is cheap to measure (Tabby's own connection). */
+    ping?: () => Promise<number>
 }
 
 /** A terminal pane the desktop can be layered over: an SSH tab, or a local terminal running `ssh`. */
@@ -171,6 +173,7 @@ class TabbySSHTarget implements RemoteTarget {
     openTcp (host: string, port: number): Promise<Duplex> { return openTcpStream(this.tab, host, port) }
     exec (command: string, stdin: string): Promise<string> { return execRemote(this.tab, command, stdin) }
     isOpen (): boolean { return isConnected(this.tab) }
+    ping (): Promise<number> { return pingRemote(this.tab) }
     get reconnectSSH (): (() => Promise<void>) | undefined {
         return typeof this.tab.reconnect === 'function' ? () => this.tab.reconnect!() : undefined
     }

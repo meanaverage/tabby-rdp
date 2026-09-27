@@ -123,6 +123,13 @@ wrong password brings the form back and drops the saved one.
   the proxy repeats the X.224 exchange on a fresh tunnel and uses TLS 1.2 with RSA key exchange for that desktop. The
   connection is still encrypted, without forward secrecy. A certificate with the digital-signature usage on the
   Windows side avoids the fallback.
+- **Starting it (`wake`, `src/wake.ts`):** before connecting, a short script on the SSH host checks that the RDP
+  server answers: an X.224 connection request must get a reply (with `python3`; else an open port will do, with `nc`
+  or bash), since a port can be open before the server behind it is, as with QEMU's user-mode port forwarding. If
+  it doesn't answer, the plugin runs `virsh` (`qemu:///system`, then `qemu:///session`) or sends a Wake-on-LAN packet
+  from the SSH host, then probes every 3 s for up to 3 minutes, and connects; a connection that still fails right
+  after gets three more tries, 5 s apart, with the same account. A connection that fails later, to a desktop that no
+  longer answers, starts it again, except during automatic reconnects. The waiting runs outside Angular's zone.
 
 ## Keyboard
 
@@ -154,6 +161,23 @@ IronRDP's.
   overwriting) and put on the clipboard through Electron.
 - **Sound:** the patched web client hands 16-bit PCM to the plugin, which schedules it back to back on a Web Audio
   clock with a small lead, skipping ahead rather than letting delay grow, and follows the server's volume.
+
+## Connection status
+
+The indicator (setting `connectionStatus`, off by default; `src/connectionStatus.ts`) runs only while its desktop
+shows and is connected, and ticks once a second:
+
+- **Throughput:** the proxy counts the RDP bytes it relays each way (after TLS, inside SSH).
+- **Frames per second:** IronRDP's web client draws each changed region with `putImageData` and has no event for it,
+  so the indicator wraps `putImageData` on that canvas's own 2D context and counts each synchronous batch of draws as
+  one frame.
+- **Round trip:** every 5 s, the time to open a session channel on Tabby's SSH connection (the server confirms it,
+  and nothing runs until a command is requested; the channel is closed right away). Not measured for a local
+  terminal running `ssh`, where each channel would be a new connection, nor while the window is hidden.
+- **Path:** the desktop, the SSH host it is reached through, the resolution, the graphics mode (graphics pipeline or
+  bitmaps) and the sharpness.
+
+It doesn't take the pointer (clicks go to the remote), and fades while the pointer is near it.
 
 ## Reconnecting
 

@@ -38,6 +38,8 @@ export class RemoteDesktopConfig extends ConfigProvider {
             sound: true,
             // With resize 'off': 'fit' (scaled to the pane) | 'actual' (1:1, scrolling).
             zoom: 'fit',
+            // A small indicator on the desktop: throughput, frames per second, SSH round trip, connection path.
+            connectionStatus: false,
             // More desktops behind SSH hosts (e.g. a Windows VM whose RDP port the host forwards); see desktops.ts.
             desktops: [],
             // Sharpness for particular desktops, overriding `sharpness`: [{ desktop: <session key>, sharpness }].
@@ -198,6 +200,12 @@ export function settingsMenu (desktop: RemoteDesktopService, pane?: DesktopPane 
             label: 'Play the remote desktop\'s sound (applies on the next connect)',
             checked: current.sound,
             click: () => desktop.updateSettings({ sound: !current.sound }),
+        },
+        {
+            type: 'checkbox',
+            label: 'Show connection status on the desktop (throughput, frames per second, round trip)',
+            checked: current.connectionStatus,
+            click: () => desktop.updateSettings({ connectionStatus: !current.connectionStatus }),
         },
         ...process.platform === 'darwin' ? [{
             type: 'checkbox' as const,
