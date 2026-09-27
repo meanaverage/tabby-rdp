@@ -131,7 +131,7 @@ await suite('wake', async t => {
     if (/session ended/.test(dropped?.text ?? '')) {
         t.skip('automatic reconnect: says it is down, without starting it', 'the drop ended the session cleanly, so nothing reconnected by itself')
     } else {
-        check('automatic reconnect: says it is down, without starting it', !!dropped, await ev('return { status: H.status(H.pane), log: H.log().slice(-12) }'))
+        check('automatic reconnect: says it is down, without starting it', !!dropped, await ev(`return { status: H.status(H.pane), log: H.log().slice(-40) }`))
     }
     await sleep(2000)
     check('no magic packet from automatic reconnects', (await machine.log()) === '', await machine.log())

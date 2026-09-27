@@ -132,8 +132,8 @@ const PAGE_HELPERS = config => `(() => {
         },
         clickStatus (p, label) { [...(this.overlay(p)?.querySelectorAll('.trd-status button') ?? [])].find(b => b.textContent === label)?.click() },
         toast (p) { return this.overlay(p)?.querySelector('.trd-toast .trd-toast-text')?.textContent ?? '' },
-        /** Whether the pane's desktop connected (its status line was cleared). */
-        connected (p) { return RD.desktop.logOf(p).some(l => /Z $/.test(l)) },
+        /** Whether the pane's desktop connected (not just its status cleared: the sign-in form does that too). */
+        connected (p) { return RD.desktop.logOf(p).some(l => /^connected: /.test(l)) },
         session (p) { return RD.desktop.sessions.get(p) },
         async menu (p) {
             const { TabContextMenuItemProvider } = require('tabby-core')

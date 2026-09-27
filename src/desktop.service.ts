@@ -1510,6 +1510,7 @@ export class RemoteDesktopService {
             }
             this.watchSize(pane, session)
             session.state = 'connected'
+            session.log.push(`connected: ${width}x${height}`)
             session.status('')
             this.syncIndicator(session)
             this.changed$.next()
