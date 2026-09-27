@@ -142,8 +142,8 @@ if (Test-Path $state) { Get-ChildItem $state -File | Where-Object { $keep -notco
         // H.264: a full-screen window flipping between two colors (fast-changing, which Windows streams as video).
         const h264 = () => ev('const d = H.session(H.pane)?.h264; return d ? { ...d.stats, failed: d.failed } : null')
         const h264Before = await h264()
-        await inSession('trd-flip', windowsFlip(15))
-        await sleep(4000)
+        await inSession('trd-flip', windowsFlip(20))
+        await sleep(8000)  // Windows takes the noise for video after about five seconds
         const picture = await sampleFlip(t, 'H.pane')
         await t.dump('H.pane', 'windows-flip')
         check('the picture has the window\'s colors (both of them, nothing else)', picture.ok, picture)
@@ -151,14 +151,11 @@ if (Test-Path $state) { Get-ChildItem $state -File | Where-Object { $keep -notco
             const after = await h264()
             const frames = (after?.frames ?? 0) - (h264Before?.frames ?? 0)
             check('no H.264 decoder failure', !after?.failed, after)
-            if (frames > 0) {
-                check(`H.264 frames decoded (${frames} while sampling; last ${after.lastLatencyMs.toFixed(1)} ms from arrival to pixels)`, true)
-                t.time('H.264 frame, arrival to pixels (last, Windows)', Math.round(after.lastLatencyMs))
-            } else {
-                t.skip('H.264 frames decoded', 'Windows sent this window without H.264')
-            }
+            const auxiliary = (after?.auxiliary ?? 0) - (h264Before?.auxiliary ?? 0)
+            check(`H.264 frames decoded (${frames}, ${auxiliary} of them AVC444 auxiliary views; last ${after?.lastLatencyMs?.toFixed(1)} ms from arrival to pixels)`, frames > 0, after)
+            t.time('H.264 frame, arrival to pixels (last, Windows)', Math.round(after?.lastLatencyMs ?? 0))
         }
-        await sleep(12000)  // the window closes by itself
+        await sleep(9000)  // the window closes by itself
         await dropTask('trd-flip')
 
         await t.clickDesktop('H.pane')

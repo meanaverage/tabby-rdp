@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: meanaverage <18336095+meanaverage@users.noreply.github.com>
 Date: Sat, 26 Sep 2026 11:26:22 -0700
-Subject: [PATCH 6/8] feat(web): audio playback (RDPSND) through an
+Subject: [PATCH 06/10] feat(web): audio playback (RDPSND) through an
  `audioPlayback` callback
 
 The web client had no audio output. An RDPSND client backend (16-bit PCM

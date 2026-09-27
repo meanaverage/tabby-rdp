@@ -28,16 +28,34 @@ GLib.timeout_add_seconds(int(sys.argv[1]), Gtk.main_quit)
 Gtk.main()
 `
 
-/** Windows: a maximized, borderless, topmost form flipping every 100 ms for `seconds` (PowerShell in the session). */
+/**
+ * Windows: a maximized, borderless, topmost form flipping every half second for `seconds` (PowerShell in the
+ * session), its top 40% moving noise. Windows sends flat colors with its lossless codecs; the noise is what it takes
+ * for video and streams as H.264, after about five seconds of it (and not while the whole window keeps changing
+ * faster than that). The middle stays flat for sampling.
+ */
 export const windowsFlip = seconds => `
-Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Windows.Forms, System.Drawing
 $f = New-Object Windows.Forms.Form
 $f.FormBorderStyle = 'None'; $f.WindowState = 'Maximized'; $f.TopMost = $true
 $colors = @(${FLIP_COLORS.map(([r, g, b]) => `[Drawing.Color]::FromArgb(${r}, ${g}, ${b})`).join(', ')})
 $script:i = 0
 $f.BackColor = $colors[0]
-$t = New-Object Windows.Forms.Timer; $t.Interval = 100
-$t.Add_Tick({ $script:i = 1 - $script:i; $f.BackColor = $colors[$script:i] }); $t.Start()
+$p = New-Object Windows.Forms.PictureBox
+$p.Dock = 'Top'; $p.SizeMode = 'StretchImage'
+$f.Controls.Add($p)
+$f.Add_Shown({ $p.Height = [int]($f.ClientSize.Height * 0.4) })
+$w = 256; $h = 24; $r = New-Object Random; $b = New-Object byte[] ($w * $h * 4)
+$t = New-Object Windows.Forms.Timer; $t.Interval = 33
+$t.Add_Tick({
+    $script:n = ($script:n + 1) % 15
+    if ($script:n -eq 0) { $script:i = 1 - $script:i; $f.BackColor = $colors[$script:i] }
+    $r.NextBytes($b)
+    $m = New-Object Drawing.Bitmap $w, $h, ([Drawing.Imaging.PixelFormat]::Format32bppRgb)
+    $d = $m.LockBits((New-Object Drawing.Rectangle 0, 0, $w, $h), 'WriteOnly', $m.PixelFormat)
+    [Runtime.InteropServices.Marshal]::Copy($b, 0, $d.Scan0, $b.Length); $m.UnlockBits($d)
+    $o = $p.Image; $p.Image = $m; if ($o) { $o.Dispose() }
+}); $t.Start()
 $s = New-Object Windows.Forms.Timer; $s.Interval = ${seconds * 1000}
 $s.Add_Tick({ $f.Close() }); $s.Start()
 [Windows.Forms.Application]::Run($f)`

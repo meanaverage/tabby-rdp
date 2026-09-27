@@ -1,7 +1,8 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: meanaverage <18336095+meanaverage@users.noreply.github.com>
 Date: Sun, 27 Sep 2026 02:35:45 -0700
-Subject: [PATCH 9/9] feat(web): let the host hand `init` the WebAssembly module
+Subject: [PATCH 09/10] feat(web): let the host hand `init` the WebAssembly
+ module
 
 `init(logLevel)` always loaded the module from its default location:
 `ironrdp_web_bg.wasm` next to the script, which a library build inlines
@@ -17,7 +18,7 @@ as `module_or_path`: a URL, a `Response`, the bytes or a compiled
  1 file changed, 10 insertions(+), 2 deletions(-)
 
 diff --git a/web-client/iron-remote-desktop-rdp/src/main.ts b/web-client/iron-remote-desktop-rdp/src/main.ts
-index f7eb57ef..453987c0 100644
+index 87cf1063..5712762c 100644
 --- a/web-client/iron-remote-desktop-rdp/src/main.ts
 +++ b/web-client/iron-remote-desktop-rdp/src/main.ts
 @@ -1,4 +1,5 @@

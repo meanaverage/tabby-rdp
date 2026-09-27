@@ -1,0 +1,154 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: meanaverage <18336095+meanaverage@users.noreply.github.com>
+Date: Sun, 27 Sep 2026 03:17:50 -0700
+Subject: [PATCH 10/10] fix(graphics): read Progressive SRL code words as
+ values need them
+
+Windows' RemoteFX Progressive upgrade passes (TILE_UPGRADE) failed to
+decode, first with "missing trailing zero byte", then, without that
+check, with a truncated stream. The SRL decoder read a zero run to its end
+in one go: every full-run 0 bit and then the terminating 1 bit and K
+bits. An encoder ends the stream after the last value it has to code, and
+Windows ends a component's trailing zeros with full-run bits only, so the
+decoder read past the stream (or, with IronRDP's own encoder, into the
+zero byte it appends). A failed tile ends the EGFX channel's processing,
+so a Windows session over the graphics pipeline dropped as soon as it
+refined a picture.
+
+Code words are now read one at a time, as the values are needed
+(MS-RDPEGFX 3.1.8.1.5.1; FreeRDP decodes the same way), and a stream
+without a trailing zero byte is accepted. Streams from SrlEncoder, which
+adds one, decode as before.
+---
+ crates/ironrdp-graphics/src/srl.rs | 77 +++++++++++++++++-------------
+ 1 file changed, 45 insertions(+), 32 deletions(-)
+
+diff --git a/crates/ironrdp-graphics/src/srl.rs b/crates/ironrdp-graphics/src/srl.rs
+index 9503dc73..092fa79d 100644
+--- a/crates/ironrdp-graphics/src/srl.rs
++++ b/crates/ironrdp-graphics/src/srl.rs
+@@ -12,7 +12,7 @@ const MAX_ZERO_RUN: usize = 4096;
+ /// Errors encountered while decoding or encoding an SRL stream.
+ #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+ pub enum SrlError {
+-    /// The required trailing zero byte is absent.
++    /// The stream is empty, though there are values to decode.
+     MissingTerminator,
+     /// The stream ended before a complete code word was read.
+     Truncated,
+@@ -27,7 +27,7 @@ pub enum SrlError {
+ impl core::fmt::Display for SrlError {
+     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+         match self {
+-            Self::MissingTerminator => write!(f, "srl stream is missing its trailing zero byte"),
++            Self::MissingTerminator => write!(f, "srl stream is empty"),
+             Self::Truncated => write!(f, "srl stream is truncated"),
+             Self::InvalidBitCount(bits) => write!(f, "invalid srl magnitude bit count {bits}"),
+             Self::MagnitudeOutOfRange { magnitude, max } => {
+@@ -52,18 +52,18 @@ pub struct SrlDecoder<'a> {
+ }
+ 
+ impl<'a> SrlDecoder<'a> {
+-    /// Create a decoder for an SRL stream, excluding its required trailing zero byte.
++    /// Create a decoder for an SRL stream.
++    ///
++    /// Windows ends a stream with its last code word, padded to a byte, where [`SrlEncoder`] adds a zero byte
++    /// after it. Neither the padding nor that byte is ever read, so both decode alike. A stream that has values to
++    /// decode is never empty.
+     pub fn new(data: &'a [u8]) -> Result<Self, SrlError> {
+-        let Some((&terminator, payload)) = data.split_last() else {
+-            return Err(SrlError::MissingTerminator);
+-        };
+-
+-        if terminator != 0 {
++        if data.is_empty() {
+             return Err(SrlError::MissingTerminator);
+         }
+ 
+         Ok(Self {
+-            reader: BitReader::new(payload),
++            reader: BitReader::new(data),
+             kp: INITIAL_KP,
+             zero_run_remaining: 0,
+             nonzero_pending: false,
+@@ -90,35 +90,32 @@ impl<'a> SrlDecoder<'a> {
+                 continue;
+             }
+ 
+-            self.zero_run_remaining = self.decode_zero_run()?;
+-            self.nonzero_pending = true;
++            self.decode_zero_run_code()?;
+         }
+ 
+         Ok(output)
+     }
+ 
+-    fn decode_zero_run(&mut self) -> Result<usize, SrlError> {
+-        let mut zeros = 0usize;
+-
+-        loop {
+-            let k = self.kp / 8;
+-
+-            if self.reader.read_bit()? {
+-                let tail = usize::try_from(self.reader.read_bits(k)?).map_err(|_| SrlError::ZeroRunTooLong)?;
+-                self.kp = self.kp.saturating_sub(6);
+-
+-                let zeros = zeros.checked_add(tail).ok_or(SrlError::ZeroRunTooLong)?;
+-                return (zeros <= MAX_ZERO_RUN).then_some(zeros).ok_or(SrlError::ZeroRunTooLong);
+-            }
+-
+-            let chunk = 1usize << k;
+-            zeros = zeros.checked_add(chunk).ok_or(SrlError::ZeroRunTooLong)?;
+-            if zeros > MAX_ZERO_RUN {
+-                return Err(SrlError::ZeroRunTooLong);
+-            }
++    /// Reads one zero-run code word (MS-RDPEGFX 3.1.8.1.5.1): a 0 bit is a full run of `1 << k` zeros, after which
++    /// the run may go on; a 1 bit and `k` bits end the run with that many more zeros, before a nonzero value.
++    ///
++    /// Code words are read one at a time, as the values are needed: an encoder ends the stream after the last
++    /// value it has to code, which can be in the middle of a run (Windows ends a component's trailing zeros with
++    /// full-run bits only), and reading ahead to the end of the run would run past the stream.
++    fn decode_zero_run_code(&mut self) -> Result<(), SrlError> {
++        let k = self.kp / 8;
+ 
++        if self.reader.read_bit()? {
++            let tail = usize::try_from(self.reader.read_bits(k)?).map_err(|_| SrlError::ZeroRunTooLong)?;
++            self.kp = self.kp.saturating_sub(6);
++            self.zero_run_remaining = (tail <= MAX_ZERO_RUN).then_some(tail).ok_or(SrlError::ZeroRunTooLong)?;
++            self.nonzero_pending = true;
++        } else {
++            self.zero_run_remaining = 1usize << k;
+             self.kp = self.kp.saturating_add(4).min(MAX_KP);
+         }
++
++        Ok(())
+     }
+ 
+     fn decode_nonzero(&mut self, num_bits: u8) -> Result<i16, SrlError> {
+@@ -373,8 +370,24 @@ mod tests {
+     }
+ 
+     #[test]
+-    fn rejects_missing_terminator() {
+-        assert_eq!(decode_srl(&[0x84], 1, 4), Err(SrlError::MissingTerminator));
++    fn decodes_a_stream_without_a_trailing_zero_byte() {
++        // As Windows sends it: zero run 0 (10), positive sign (0), magnitude 3 (001), and padding.
++        assert_eq!(decode_srl(&[0x84], 1, 4), Ok(vec![3]));
++    }
++
++    #[test]
++    fn stops_reading_at_the_last_value_in_a_run() {
++        // Windows ends a component whose last values are zeros with full-run bits only, and no code word after:
++        // with K=1, one 0 bit is a run of two zeros, and nothing more is read.
++        assert_eq!(decode_srl(&[0x00], 2, 4), Ok(vec![0, 0]));
++        let mut decoder = SrlDecoder::new(&[0x00]).unwrap();
++        assert_eq!(decoder.decode(1, 4), Ok(vec![0]));
++        assert_eq!(decoder.decode(1, 4), Ok(vec![0]));
++    }
++
++    #[test]
++    fn rejects_an_empty_stream() {
++        assert_eq!(decode_srl(&[], 1, 4), Err(SrlError::MissingTerminator));
+     }
+ 
+     #[test]
