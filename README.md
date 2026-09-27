@@ -90,6 +90,7 @@ connecting again.
 | **Screenshots** | **Save a screenshot** in the desktop's menus saves the remote screen at its full resolution as a PNG in Downloads, and copies it to the clipboard. |
 | **Reconnecting** | After sleep or a network change, the desktop reconnects by itself once the connection is back. |
 | **Sign-in** | GNOME desktops need none: the plugin manages their credentials. Windows desktops ask for the account once and can remember it in the system keychain. |
+| **Certificates** | GNOME desktops accept only the certificate the plugin made for them. Windows desktops remember theirs on first use and ask before accepting a different one. |
 
 <p align="center"><img src="docs/images/files.png" width="760" alt="A file copied on the remote desktop, offered for saving"></p>
 
@@ -98,7 +99,7 @@ connecting again.
 An SSH host can lead to other desktops it can reach, such as a Windows VM on the same machine. In that host's menu,
 choose **Add a desktop behind \<host\>…** and enter a name, the address as seen from the host, and optionally the
 user name. It opens right away, and from then on appears next to the host's own desktop in its menus. **Remote
-desktop settings › Remove a desktop** removes one, along with its saved password.
+desktop settings › Remove a desktop** removes one, along with its saved password and remembered certificate.
 
 <p align="center"><img src="docs/images/windows.png" width="760" alt="A Windows 11 desktop, reached through an SSH host, in a Tabby tab"></p>
 
@@ -117,6 +118,12 @@ remoteDesktop:
 
 The connection runs through the same SSH connection; the Windows machine needs Remote Desktop turned on, and nothing
 else.
+
+The first connection to a desktop remembers its TLS certificate, without asking (in Tabby's config, under
+`remoteDesktop.trustedCertificates`). If a later connection meets a different one, the plugin stops before signing in
+and shows both fingerprints, with **Trust the new certificate** and **Cancel**. Reinstalling Windows or renewing its
+certificate changes it; if neither happened, something else is answering at that address. Automatic reconnects stop at
+the same question.
 
 ## desk: the console on the desktop
 

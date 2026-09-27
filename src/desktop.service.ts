@@ -12,7 +12,7 @@ import { askNewDesktop } from './desktopForm'
 import { FileTransfer, STYLE as FILES_STYLE, uniquePath } from './fileTransfer'
 import { DesktopSpec, desktopsFor, ExtraDesktopConfig, OWN_DESKTOP, sessionKey } from './desktops'
 import { prepareRemoteDesktop } from './remoteSetup'
-import { RDCleanPathProxy, startRDCleanPathProxy } from './rdcleanpath'
+import { normalizeFingerprint, RDCleanPathProxy, startRDCleanPathProxy } from './rdcleanpath'
 import { askCredentials, Credentials, forgetCredentials, forgetCredentialsFor, loadCredentials, saveCredentials, STYLE as SIGNIN_STYLE } from './signin'
 
 // The vendored IronRDP bundles are ES modules. tsc turns import() into require(), and Node's import() is refused in
@@ -62,6 +62,28 @@ interface StatusAction {
 }
 
 type SessionState = 'connecting' | 'connected' | 'ended'
+
+/** Where a desktop is and how to sign in there (see endpointFor). */
+interface Endpoint {
+    host: string
+    port: number
+    credentials: Credentials
+    remember: boolean
+    /** The host's own desktop: the fingerprint of the certificate its setup made, the only one to accept. */
+    certificate?: string
+}
+
+/** A server certificate the proxy refused (see checkCertificate). */
+interface CertificateProblem {
+    /** The certificate the setup made (the host's own desktop), or the one remembered (others). */
+    expected: string
+    actual: string
+    /** The host's own desktop: its certificate is the plugin's, so a different one is never to be accepted. */
+    pinned: boolean
+}
+
+/** A SHA-256 fingerprint on two lines of 16 bytes, so it fits a narrow pane. */
+const showFingerprint = (fingerprint: string) => fingerprint ? `${fingerprint.slice(0, 47)}\n${fingerprint.slice(48)}` : '(none)'
 
 /** `remoteDesktop` settings (Tabby config), editable from the "Remote desktop settings" menus. */
 export interface DesktopSettings {
@@ -154,6 +176,10 @@ class DesktopSession {
     files: FileTransfer | null = null
     /** No keyboard or mouse input goes to the remote (keys: see keyboard.ts; the mouse: a layer over the picture). */
     viewOnly = false
+    /** The host's own desktop: the certificate its setup reported for this connection. */
+    pinnedCertificate: string | null = null
+    /** Set when the proxy refused the server's certificate on the current connection attempt. */
+    certificateProblem: CertificateProblem | null = null
     /** Resolves when the session is disposed (ends a pending sign-in). */
     readonly disposed: Promise<void>
     private markDisposed!: () => void
@@ -378,17 +404,19 @@ export class RemoteDesktopService {
         await this.showDesktop(pane, `${entry.host}:${entry.port}`)
     }
 
-    /** Removes a configured desktop and its saved accounts. Open sessions to it keep running. */
+    /** Removes a configured desktop, its saved accounts and its remembered certificate. Open sessions to it keep running. */
     removeDesktop (index: number): void {
         const list = this.configuredDesktops()
         const [removed] = list.splice(index, 1)
         if (!removed) {
             return
         }
+        const id = `${removed.host ?? '127.0.0.1'}:${removed.port ?? 3389}`
         this.config.store.remoteDesktop.desktops = list
+        this.forgetCertificatesFor(id)
         this.config.save()
         this.changed$.next()
-        forgetCredentialsFor(`${removed.host ?? '127.0.0.1'}:${removed.port ?? 3389}`)
+        forgetCredentialsFor(id)
     }
 
     /**
@@ -868,11 +896,17 @@ export class RemoteDesktopService {
      * Where to connect and as whom. The host's own desktop: the setup script (grd, generated credentials).
      * Others: the saved account, or the sign-in form (retry=true after a failed sign-in).
      */
-    private async endpointFor (target: RemoteTarget, spec: DesktopSpec, session: DesktopSession, retryError?: string): Promise<{ host: string, port: number, credentials: Credentials, remember: boolean } | null> {
+    private async endpointFor (target: RemoteTarget, spec: DesktopSpec, session: DesktopSession, retryError?: string): Promise<Endpoint | null> {
         if (spec.id === OWN_DESKTOP) {
             session.status(`Preparing the remote desktop on ${target.label}…`)
             const endpoint = await prepareRemoteDesktop(target, this.settings().desk, this.config.store.remoteDesktop?.sessionBackend)
-            return { host: '127.0.0.1', port: endpoint.port, credentials: { username: endpoint.username, password: endpoint.password }, remember: false }
+            return {
+                host: '127.0.0.1',
+                port: endpoint.port,
+                credentials: { username: endpoint.username, password: endpoint.password },
+                remember: false,
+                certificate: endpoint.certificate,
+            }
         }
         const saved = retryError ? null : await loadCredentials(session.key)
         if (saved) {
@@ -895,10 +929,13 @@ export class RemoteDesktopService {
     private async connect (pane: DesktopPane, target: RemoteTarget, spec: DesktopSpec, session: DesktopSession): Promise<void> {
         const alive = () => this.sessions.get(pane) === session
         let retryError: string | undefined
+        // After a changed certificate was trusted: the same account again, without asking for it again.
+        let again: Endpoint | null = null
         try {
             // Signing in to a desktop behind the host can take a few tries; the host's own one can't fail that way.
             for (let attempt = 0; ; attempt++) {
-                const [endpoint, rdp] = await Promise.all([this.endpointFor(target, spec, session, retryError), this.loadIronRDP()])
+                const [endpoint, rdp]: [Endpoint | null, any] = await Promise.all([again ?? this.endpointFor(target, spec, session, retryError), this.loadIronRDP()])
+                again = null
                 if (!alive()) {
                     return
                 }
@@ -910,8 +947,19 @@ export class RemoteDesktopService {
                     return
                 }
                 session.remote = target
-                session.proxy ??= await startRDCleanPathProxy(() => target.openTcp(endpoint.host, endpoint.port), m => session.log.push(m))
+                session.pinnedCertificate = endpoint.certificate ?? null
+                session.proxy ??= await startRDCleanPathProxy(
+                    () => target.openTcp(endpoint.host, endpoint.port),
+                    fingerprint => this.checkCertificate(session, fingerprint),
+                    m => session.log.push(m))
                 const outcome = await this.run(pane, target, spec, session, rdp, endpoint)
+                if (outcome.certificate && alive()) {
+                    if (await this.refusedCertificate(pane, target, spec, session, endpoint, outcome.certificate)) {
+                        again = endpoint
+                        continue
+                    }
+                    return
+                }
                 if (outcome.signInFailed && spec.id !== OWN_DESKTOP && attempt < 5 && alive()) {
                     await forgetCredentials(session.key)
                     retryError = outcome.signInFailed
@@ -929,13 +977,108 @@ export class RemoteDesktopService {
         }
     }
 
+    /**
+     * The proxy's check of the server's certificate, before any credentials go out. The host's own desktop must show
+     * the certificate its setup reported. Others are trusted on first use: remembered silently the first time (the
+     * connection already runs inside SSH, and a prompt on every new desktop would only teach clicking it away), and
+     * refused when it changes, until the new one is trusted (see refusedCertificate).
+     */
+    private checkCertificate (session: DesktopSession, fingerprint: string): void {
+        session.certificateProblem = null
+        if (session.spec.id === OWN_DESKTOP) {
+            const expected = session.pinnedCertificate ?? ''
+            if (fingerprint !== expected) {
+                session.certificateProblem = { expected, actual: fingerprint, pinned: true }
+                throw new Error(`certificate SHA-256 ${fingerprint} is not the one set up (${expected || 'none'})`)
+            }
+            session.log.push(`certificate: SHA-256 ${fingerprint}, as set up`)
+            return
+        }
+        const known = this.trustedCertificate(session.key)
+        if (!known) {
+            this.trustCertificate(session.key, fingerprint)
+            session.log.push(`certificate: SHA-256 ${fingerprint}, remembered (first connection)`)
+            return
+        }
+        if (fingerprint !== known) {
+            session.certificateProblem = { expected: known, actual: fingerprint, pinned: false }
+            throw new Error(`certificate SHA-256 ${fingerprint} is not the one remembered (${known})`)
+        }
+        session.log.push(`certificate: SHA-256 ${fingerprint}, as remembered`)
+    }
+
+    /**
+     * After the proxy refused a certificate; nothing was sent to that server. The host's own desktop: an error, since
+     * the plugin made that certificate itself. Others: both fingerprints, to trust the new certificate or not. Either
+     * way, automatic reconnecting stops here. Resolves true to connect again (the new certificate is then trusted).
+     */
+    private async refusedCertificate (pane: DesktopPane, target: RemoteTarget, spec: DesktopSpec, session: DesktopSession, endpoint: Endpoint, problem: CertificateProblem): Promise<boolean> {
+        this.cancelReconnect(pane)
+        const alive = () => this.sessions.get(pane) === session
+        const stop = (message: string) => {
+            session.state = 'ended'
+            this.changed$.next()
+            session.status(message, [{ label: 'Try again', run: () => this.reopen(pane, spec) }])
+        }
+        const fingerprints = `${problem.pinned ? 'Expected' : 'Remembered'} (SHA-256):\n${showFingerprint(problem.expected)}\n\nNow:\n${showFingerprint(problem.actual)}`
+        if (problem.pinned) {
+            stop(`The remote desktop on ${target.label} answered with a certificate other than the one set up for it. ` +
+                `The connection was stopped before signing in.\n\n${fingerprints}\n\n` +
+                `Something other than GNOME Remote Desktop may be listening on port ${endpoint.port}.`)
+            return false
+        }
+        if (!session.visible) {
+            this.notifications.notice(`The certificate of ${spec.name} (via ${target.label}) has changed. Open that desktop to decide.`)
+        }
+        const trusted = await new Promise<boolean>(resolve => {
+            session.status(`The certificate of ${spec.name} has changed since it was last used. Nothing has been sent to it.\n\n` +
+                `${fingerprints}\n\nReinstalling the machine or renewing its certificate changes it. If neither happened, ` +
+                `something else may be answering at ${spec.host}:${spec.port}.`, [
+                { label: 'Trust the new certificate', run: () => resolve(true) },
+                { label: 'Cancel', run: () => resolve(false) },
+            ])
+            session.disposed.then(() => resolve(false))
+        })
+        if (!alive()) {
+            return false
+        }
+        if (!trusted) {
+            stop('Not connected: the new certificate was not trusted.')
+            return false
+        }
+        this.trustCertificate(session.key, problem.actual)
+        session.log.push(`certificate: SHA-256 ${problem.actual}, trusted instead of ${problem.expected}`)
+        return true
+    }
+
+    /** The certificate remembered for a desktop behind a host (`remoteDesktop.trustedCertificates`), if any. */
+    private trustedCertificate (key: string): string | null {
+        const list = this.config.store.remoteDesktop?.trustedCertificates
+        const value = (Array.isArray(list) ? list : []).find((e: any) => e?.desktop === key)?.sha256
+        return typeof value === 'string' ? normalizeFingerprint(value) || null : null
+    }
+
+    private trustCertificate (key: string, fingerprint: string): void {
+        const store = this.config.store.remoteDesktop
+        const others = (Array.isArray(store.trustedCertificates) ? store.trustedCertificates : []).filter((e: any) => e?.desktop !== key)
+        store.trustedCertificates = [...others, { desktop: key, sha256: fingerprint }]
+        this.config.save()
+    }
+
+    /** Forgets the certificates remembered for a desktop behind any SSH host (keys ending in `#<id>`); doesn't save. */
+    private forgetCertificatesFor (desktopId: string): void {
+        const store = this.config.store.remoteDesktop
+        const list = Array.isArray(store.trustedCertificates) ? store.trustedCertificates : []
+        store.trustedCertificates = list.filter((e: any) => !String(e?.desktop ?? '').endsWith(`#${desktopId}`))
+    }
+
     /** One RDP connection attempt, until it ends. */
     private async run (
-        pane: DesktopPane, target: RemoteTarget, spec: DesktopSpec, session: DesktopSession, rdp: any,
-        endpoint: { host: string, port: number, credentials: Credentials, remember: boolean },
-    ): Promise<{ connected: boolean, signInFailed?: string, error?: string, reason?: string }> {
+        pane: DesktopPane, target: RemoteTarget, spec: DesktopSpec, session: DesktopSession, rdp: any, endpoint: Endpoint,
+    ): Promise<{ connected: boolean, signInFailed?: string, error?: string, reason?: string, certificate?: CertificateProblem }> {
         const credentials = endpoint.credentials
         const alive = () => this.sessions.get(pane) === session
+        session.certificateProblem = null
         const el = document.createElement('iron-remote-desktop') as any
         try {
             el.setAttribute('scale', this.screenScale() === 3 ? 'real' : 'fit')
@@ -991,6 +1134,10 @@ export class RemoteDesktopService {
             try {
                 info = await session.ui.connect(built)
             } catch (e: any) {
+                // The proxy refused the server's certificate, before CredSSP (see checkCertificate).
+                if (session.certificateProblem) {
+                    return { connected: false, certificate: session.certificateProblem }
+                }
                 // IronErrorKind: 1 WrongPassword, 2 LogonFailure.
                 const kind = typeof e?.kind === 'function' ? e.kind() : undefined
                 const detail = typeof e?.backtrace === 'function' ? e.backtrace() : (e?.message ?? String(e))

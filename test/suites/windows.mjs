@@ -1,6 +1,7 @@
 // A Windows desktop behind an SSH host (TRD_TEST_WIN_*): configured under remoteDesktop.desktops and offered in the
-// host's menus; the sign-in form (a wrong password, then the right one); the keychain; the picture; live resize;
-// reconnecting with the saved account. With WinRM (TRD_TEST_WIN_WINRM), also typing, the clipboard both ways,
+// host's menus; the sign-in form (a wrong password, then the right one); the keychain; its certificate, remembered on
+// first use and a changed one stopped before signing in; the picture; live resize; reconnecting with the saved account.
+// With WinRM (TRD_TEST_WIN_WINRM), also typing, the clipboard both ways,
 // sound, and files both ways with Explorer, each checked inside Windows. See test/README.md for the test machine.
 import { suite } from '../lib/harness.mjs'
 import { windowsGuest } from '../lib/windows.mjs'
@@ -33,6 +34,14 @@ await suite('windows', async t => {
             f.requestSubmit()
         },
         async entries () { return (await H.menu(H.pane)).filter(i => /desktop|console|Windows/i.test(i.label ?? '') && i.label !== 'Remote desktop settings' && !/^(Send files|Add a desktop)/.test(i.label ?? '')).map(i => i.label) },
+        trusted (key) { return (H.config.store.remoteDesktop.trustedCertificates ?? []).find(e => e?.desktop === key)?.sha256 ?? null },
+        setTrusted (key, sha256) {
+            H.inZone(() => {
+                const others = (H.config.store.remoteDesktop.trustedCertificates ?? []).filter(e => e?.desktop !== key)
+                H.config.store.remoteDesktop.trustedCertificates = sha256 ? [...others, { desktop: key, sha256 }] : others
+                H.config.save()
+            })
+        },
     })`)
 
     // 0. The desktop behind the host.
@@ -47,6 +56,9 @@ await suite('windows', async t => {
         await t.keychain(`deletePassword('tabby-rdp', ${JSON.stringify(key)})`)
         t.onCleanup(() => t.keychain(`deletePassword('tabby-rdp', ${JSON.stringify(key)})`))
     }
+    const trustedBefore = await ev('return JSON.stringify(H.config.store.remoteDesktop.trustedCertificates ?? [])')
+    t.onCleanup(() => ev(`H.inZone(() => { H.config.store.remoteDesktop.trustedCertificates = ${trustedBefore}; H.config.save() })`))
+    await ev(`H.setTrusted(${JSON.stringify(key)}, null)`)
     const reachable = (await t.remote('H.pane', `timeout 3 bash -c '</dev/tcp/${winHost}/${winPort}' && echo open`)).trim()
     check(`RDP port ${ID} reachable from ${win.host}`, reachable === 'open', reachable)
     const winrm = !!win.winrm && /ready/.test(await guest("'ready'").catch(() => ''))
@@ -88,6 +100,11 @@ await suite('windows', async t => {
         t.skip('the account is saved in the keychain, and reused', 'the system keychain does not answer (Linux: no unlocked keyring)')
     }
     check('the header names the desktop', /Windows|console/.test(await ev(`return document.querySelector('.trd-header-toggle')?.title ?? ''`)))
+    // The certificate: remembered on first use, and checked after the legacy TLS retry when Windows needed one.
+    const certificate = await ev(`return H.trusted(${JSON.stringify(key)})`)
+    check('its certificate remembered on first use', /^([0-9A-F]{2}:){31}[0-9A-F]{2}$/.test(certificate ?? ''), certificate)
+    const order = await ev('const log = RD.desktop.logOf(H.pane); return [log.findIndex(l => /using TLS 1\\.2/.test(l)), log.findIndex(l => /^certificate: /.test(l))]')
+    check(`the certificate checked${order[0] >= 0 ? ' after the TLS 1.2 retry' : ''}`, order[1] >= 0 && order[1] > order[0], order)
 
     if (winrm) {
         // 4. Typing: Start (the Windows key), "notepad", Enter; Windows runs Notepad.
@@ -249,4 +266,16 @@ if (Test-Path $state) { Get-ChildItem $state -File | Where-Object { $keep -notco
     const last = await outcome()
     t.time('reconnect with the saved account', Date.now() - t2)
     check('the toggle reopens Windows with the saved account, no form', /Z $/.test(last ?? '') && !(await ev('return H.signin()')), last)
+
+    // 11. A changed certificate: stopped before signing in, with both fingerprints; trusting it connects.
+    await ev('H.inZone(() => RD.desktop.disconnect(H.pane))')
+    const bogus = Array(32).fill('AB').join(':')
+    await ev(`H.setTrusted(${JSON.stringify(key)}, ${JSON.stringify(bogus)})`)
+    await ev('await H.inZone(() => RD.desktop.toggle(H.pane))')
+    const changed = await t.waitFor(`const s = H.status(H.pane); return s && /has changed/.test(s.text) ? s : null`, 40)
+    check('changed certificate: both fingerprints, "Trust the new certificate" and "Cancel"',
+        changed?.buttons.join() === 'Trust the new certificate,Cancel' && changed.text.includes(bogus.slice(0, 47)) && changed.text.includes((certificate ?? "-").slice(0, 47)), changed ?? (await log()).slice(-4))
+    check('... stopped before signing in', !(await log()).some(l => /RDCleanPath relay up/.test(l)))
+    await ev(`H.inZone(() => H.clickStatus(H.pane, 'Trust the new certificate'))`)
+    check('"Trust the new certificate": connected, the certificate remembered again', /Z $/.test(await outcome() ?? '') && await ev(`return H.trusted(${JSON.stringify(key)})`) === certificate)
 })

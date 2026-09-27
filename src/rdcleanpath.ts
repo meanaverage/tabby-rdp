@@ -1,9 +1,9 @@
 // RDCleanPath proxy for the IronRDP web client, running inside Tabby's renderer.
 // The WASM client talks WebSocket to this proxy; the proxy opens the upstream stream
 // (a plain socket here, an SSH direct-tcpip channel later), forwards the X.224 request,
-// terminates TLS, hands the server cert chain back to the client (for CredSSP), then relays.
+// terminates TLS, checks the server's certificate, hands the cert chain back to the client (for CredSSP), then relays.
 import * as tls from 'tls'
-import { randomBytes } from 'crypto'
+import { createHash, randomBytes } from 'crypto'
 import { Duplex } from 'stream'
 import { AddressInfo } from 'net'
 
@@ -14,6 +14,23 @@ const VERSION_1 = 3390
 const GENERAL_ERROR = 1
 
 export type UpstreamFactory = (destination: string) => Promise<Duplex>
+
+/**
+ * Decides on the server's certificate, given its SHA-256 fingerprint (`AB:CD:…`); throws to refuse it. Upstream TLS
+ * accepts any certificate (RDP servers are self-signed), so this is what stands between the client and an impostor.
+ * It runs before the client hears back from the proxy, and so before CredSSP: no credentials have been sent yet.
+ */
+export type CertificateCheck = (fingerprint: string) => void | Promise<void>
+
+/** A SHA-256 fingerprint as `AB:CD:…` (openssl and Node print it so), from any hex spelling; '' if it isn't one. */
+export function normalizeFingerprint (value: string): string {
+    const hex = String(value ?? '').replace(/[\s:]/g, '').toUpperCase()
+    return /^[0-9A-F]{64}$/.test(hex) ? hex.match(/../g)!.join(':') : ''
+}
+
+function fingerprintOf (der: Buffer): string {
+    return normalizeFingerprint(createHash('sha256').update(der).digest('hex'))
+}
 
 export interface RDCleanPathProxy {
     url: string
@@ -191,7 +208,7 @@ async function handshake (openUpstream: UpstreamFactory, destination: string, x2
     }
 }
 
-export async function startRDCleanPathProxy (openUpstream: UpstreamFactory, log: (msg: string) => void = () => {}): Promise<RDCleanPathProxy> {
+export async function startRDCleanPathProxy (openUpstream: UpstreamFactory, checkCertificate: CertificateCheck, log: (msg: string) => void = () => {}): Promise<RDCleanPathProxy> {
     const token = randomBytes(24).toString('hex')
     // Set once the server turned out to need KEY_ENCIPHERMENT_ONLY_TLS; later connections start with it.
     let legacyTls = false
@@ -254,7 +271,15 @@ export async function startRDCleanPathProxy (openUpstream: UpstreamFactory, log:
                 raw = up.raw
                 upstream = up.upstream
                 const x224 = up.x224
-                ws.send(encodeResponse(x224, certChainOf(upstream), req.destination))
+                // Both handshakes above, the first and the legacy-TLS retry, end here: the certificate is checked
+                // before the client gets the response it waits for to start CredSSP, and before anything it sent
+                // early goes upstream.
+                const chain = certChainOf(upstream)
+                if (!chain.length) {
+                    return fail('the server sent no certificate')
+                }
+                await checkCertificate(fingerprintOf(chain[0]))
+                ws.send(encodeResponse(x224, chain, req.destination))
                 stage = 'relay'
                 upstream.on('data', (d: Buffer) => ws.send(d))
                 upstream.on('close', () => ws.close())

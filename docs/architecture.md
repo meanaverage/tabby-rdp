@@ -10,7 +10,7 @@ Tabby window
  │              │  WebSocket, RDCleanPath
  │              ▼
  │         RDCleanPath proxy  (src/rdcleanpath.ts, 127.0.0.1, random port, per-desktop token)
- │              │  X.224 request/confirm, then TLS; the server's certificate goes back to the client for CredSSP
+ │              │  X.224 request/confirm, then TLS; the server's certificate is checked and goes back to the client for CredSSP
  │              ▼
  └─ direct-tcpip channel on the same SSH connection  (src/ssh.ts, src/sshChannelStream.ts)
                 │
@@ -60,7 +60,10 @@ installed beforehand:
 5. **grd restarts only when its configuration changed:** it reads credentials at startup, and a restart drops open
    sessions.
 
-The script prints one `RD_OK port=… user=… pass=…` or `RD_ERR <reason>` line; errors show in the desktop layer.
+The script prints one `RD_OK port=… user=… pass=… cert=…` or `RD_ERR <reason>` line; errors show in the desktop
+layer. `cert` is the SHA-256 fingerprint of the certificate from step 1, the only one the proxy then accepts on that
+port (see [Security notes](#security-notes)). A newly made certificate also restarts grd, which would otherwise keep
+serving the old one.
 
 grd adds a virtual monitor per client and sizes it from the client's request, so a connection gets a monitor the size
 of its pane. (A second client on the same account would get a second, empty monitor; hence one desktop per account.)
@@ -138,6 +141,16 @@ end (signed out) or a desktop that never connected only offers a button.
 - **Credentials:** the generated RDP password is in a 0600 file in a 0700 folder. `grdctl` takes it as an argument, so
   it is briefly visible in the remote's process list while the setup runs.
 - **The local proxy** listens on 127.0.0.1 only, and requires a random token per desktop.
+- **Server certificates:** RDP servers have self-signed certificates, so upstream TLS accepts any certificate and the
+  proxy checks its SHA-256 fingerprint itself: after the handshake (the legacy TLS 1.2 retry included), and before the
+  RDCleanPath response that the client waits for to start CredSSP. A refused server gets nothing of the account. The
+  host's own desktop must show the certificate its setup made (`cert=` in the `RD_OK` line, from `openssl x509`);
+  anything else is an error in the desktop layer, since something other than grd would be answering on its port.
+  Desktops behind a host are trusted on first use: the fingerprint is remembered in `remoteDesktop.trustedCertificates`
+  by desktop (`user@host#address`), without asking, since the way there already runs inside SSH. When it changes, the
+  desktop layer shows the remembered and the new fingerprint and connects only after "Trust the new certificate".
+  Every connection is checked, automatic reconnects included, and those stop at that question. Removing a desktop
+  forgets its certificate; so does deleting its entry from the config file.
 - **`desk`'s sessions** are Unix sockets in the user's runtime directory, checked for owner and mode, with the peer's
   uid verified.
 

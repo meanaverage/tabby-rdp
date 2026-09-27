@@ -42,6 +42,8 @@ export class RemoteDesktopConfig extends ConfigProvider {
             desktops: [],
             // Sharpness for particular desktops, overriding `sharpness`: [{ desktop: <session key>, sharpness }].
             desktopSharpness: [],
+            // Certificates of desktops behind hosts, trusted on first use: [{ desktop: <session key>, sha256 }].
+            trustedCertificates: [],
         },
     }
 

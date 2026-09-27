@@ -1,14 +1,18 @@
 import * as fs from 'fs'
 import * as path from 'path'
 import { RemoteTarget } from './targets'
+import { normalizeFingerprint } from './rdcleanpath'
 
 export interface RemoteDesktopEndpoint {
     port: number
     username: string
     password: string
+    /** SHA-256 fingerprint of grd's TLS certificate (made by this script): the only one to accept on the port. */
+    certificate: string
 }
 
-// Runs as the SSH user; needs no root. Prints exactly one `RD_OK port=N user=U pass=P` or `RD_ERR <reason>` line.
+// Runs as the SSH user; needs no root. Prints exactly one `RD_OK port=N user=U pass=P cert=SHA256` or
+// `RD_ERR <reason>` line.
 // The RDP password is generated once per remote user and kept in a 0600 file; grd reads credentials only
 // at startup, so grd is restarted only when its configuration actually changes (that drops live sessions).
 // (grdctl takes the credentials as arguments, so they are briefly visible in the remote's process list.)
@@ -33,10 +37,15 @@ for rc in "$HOME/.bashrc" "$HOME/.zshrc"; do
     fi
 done
 mkdir -p "$D" && chmod 700 "$D" || fail "could not create $D"
+NEW_CERT=0
 if [ ! -s "$D/tls.key" ]; then
     openssl req -new -newkey rsa:3072 -days 3650 -nodes -x509 -subj "/CN=$(hostname)" \
         -keyout "$D/tls.key" -out "$D/tls.crt" >/dev/null 2>&1 || fail "could not create a TLS certificate"
+    NEW_CERT=1
 fi
+# The plugin accepts only this certificate on grd's port.
+CERT=$(openssl x509 -in "$D/tls.crt" -noout -fingerprint -sha256 2>/dev/null | sed 's/^[^=]*=//')
+[ -n "$CERT" ] || fail "could not read the TLS certificate $D/tls.crt (openssl x509)"
 # 'desk' support (setting, off by default): interactive SSH logins start inside a shareable session (trd-pty,
 # or tmux), so 'desk' can attach this exact console to a terminal on the desktop. Rewritten on every connect;
 # opt out per login with TABBY_NO_SESSION=1. When the setting is off, the hook and helpers are removed.
@@ -127,7 +136,9 @@ STATUS=$(grdctl --headless status --show-credentials 2>/dev/null)
 has () { printf '%s\n' "$STATUS" | grep -qxF "$(printf '\t%s' "$1")"; }
 g () { grdctl --headless rdp "$@" >/dev/null 2>&1; }
 RESTART=0
-if ! has "TLS key: $D/tls.key" || ! has "TLS certificate: $D/tls.crt"; then
+# grd reads the certificate at startup: a new one at the same path needs a restart too, or grd would keep serving
+# the old one, which the plugin would then refuse.
+if [ $NEW_CERT = 1 ] || ! has "TLS key: $D/tls.key" || ! has "TLS certificate: $D/tls.crt"; then
     g set-tls-key "$D/tls.key" && g set-tls-cert "$D/tls.crt" || fail "grdctl could not set the TLS certificate"
     RESTART=1
 fi
@@ -199,7 +210,7 @@ PORT=$(grdctl --headless status 2>/dev/null | awk '/Port:/ { print $2; exit }')
 PORT=${"$"}{PORT:-3389}
 i=0; while [ $i -lt 40 ] && ! ss -ltnH "sport = :$PORT" 2>/dev/null | grep -q .; do sleep 0.25; i=$((i+1)); done
 ss -ltnH "sport = :$PORT" 2>/dev/null | grep -q . || fail "nothing is listening on port $PORT"
-say "RD_OK port=$PORT user=$RD_USER pass=$RD_PASS"
+say "RD_OK port=$PORT user=$RD_USER pass=$RD_PASS cert=$CERT"
 `
 
 /** Which shareable session SSH logins get (for 'desk'): our own trd-pty, or the earlier tmux setup. */
@@ -220,9 +231,13 @@ export async function prepareRemoteDesktop (target: RemoteTarget, desk: boolean,
     if (err) {
         throw new Error(err[1])
     }
-    const ok = /^RD_OK port=(\d+) user=(\S+) pass=(\S+)$/m.exec(out)
+    const ok = /^RD_OK port=(\d+) user=(\S+) pass=(\S+) cert=(\S+)$/m.exec(out)
     if (!ok) {
         throw new Error('Remote setup gave no result')
     }
-    return { port: Number(ok[1]), username: ok[2], password: ok[3] }
+    const certificate = normalizeFingerprint(ok[4])
+    if (!certificate) {
+        throw new Error(`Remote setup reported no usable certificate fingerprint (${ok[4]})`)
+    }
+    return { port: Number(ok[1]), username: ok[2], password: ok[3], certificate }
 }
