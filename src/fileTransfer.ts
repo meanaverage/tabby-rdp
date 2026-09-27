@@ -112,13 +112,11 @@ export class FileTransfer {
         this.toast(`Saving ${plural(files.filter(f => !f.isDirectory).length, 'file')}…`, [], 0)
         try {
             for (const [index, file] of files.entries()) {
-                // Relative paths use `\` (the wire convention); never let one leave the target folder.
-                const parts = [...(file.path ?? '').split('\\'), file.name].filter(p => p && p !== '.' && p !== '..')
                 if (file.isDirectory) {
                     continue
                 }
+                const target = uniquePath(savePath(dir, file.path, file.name))
                 const blob: Blob = await this.provider.downloadFile(file, index).completion
-                const target = uniquePath(path.join(dir, ...parts))
                 await fs.promises.mkdir(path.dirname(target), { recursive: true })
                 await fs.promises.writeFile(target, Buffer.from(await blob.arrayBuffer()))
                 saved.push(target)
@@ -170,6 +168,25 @@ export class FileTransfer {
         this.toastEl?.remove()
         try { this.provider.dispose() } catch { }
     }
+}
+
+/**
+ * Where a file the remote offered goes under `dir`, keeping its folder structure. The names come from the remote
+ * (a server or anything on it can put them on the clipboard), so every component is cut at both separators (`\\` is
+ * the wire convention, but a name may hold `/`), `.`, `..` and drive letters are dropped, and the result must stay
+ * inside `dir`: a name like `../../Library/LaunchAgents/x.plist` must not land outside Downloads.
+ */
+export function savePath (dir: string, folder: string | undefined, name: string): string {
+    const parts = [folder ?? '', name]
+        .flatMap(p => String(p).split(/[\\/]+/))
+        .map(p => p.replace(/[\u0000-\u001f]/g, '').replace(/^[A-Za-z]:$/, '').trim())
+        .filter(p => p && p !== '.' && p !== '..')
+    const root = path.resolve(dir)
+    const target = path.resolve(root, ...parts.length ? parts : ['file'])
+    if (!target.startsWith(root + path.sep)) {
+        throw new Error(`refused a file name that leaves the folder: ${JSON.stringify(name)}`)
+    }
+    return target
 }
 
 /** `file.txt`, or `file 2.txt`, `file 3.txt`… if taken. */
