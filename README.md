@@ -24,8 +24,8 @@ nothing is opened on the network, and nothing has to be installed on the remote 
 - **Linux desktops without a monitor or a login.** The plugin starts a headless GNOME session for your SSH user with
   GNOME Remote Desktop, on the fly, without root. A server in a rack works as well as a workstation.
 - **Windows desktops** behind any SSH host, such as a VM on your build server.
-- **A proper desktop experience:** clipboard and files both ways, sound, live resize to the pane, sharp Retina
-  rendering, Mac keyboard shortcuts, and automatic reconnects after sleep.
+- **A proper desktop experience:** clipboard and files both ways, sound and microphone, live resize to the pane,
+  sharp Retina rendering, Mac keyboard shortcuts, and automatic reconnects after sleep.
 - **`desk`:** type `desk` in the console and the same shell, with its history and running programs, moves into a
   terminal on the desktop.
 
@@ -82,6 +82,7 @@ connecting again.
 | **Clipboard** | Copy and paste text and images in both directions. |
 | **Files** | Drop files from Finder onto the desktop, or use **Send files to the remote desktop…**, then paste them in Files or Explorer. Files copied on the remote offer **Save to Downloads**. |
 | **Sound** | The remote desktop's sound plays locally. |
+| **Microphone** | Optional (off by default): an app on the remote desktop that records, such as a call, gets your microphone. It is only captured while the app records, with an indicator in the corner of the desktop. |
 | **Resize** | The remote resolution follows the pane as you resize the window or split it. Or reconnect at the new size, or keep a fixed resolution. |
 | **Retina** | Optionally renders at device pixels, with the remote's UI scaled to match (GNOME and Windows alike), for sharp text. For all desktops, or only some. |
 | **Keyboard on macOS** | ⌘C, ⌘V, ⌘Z and the rest work as on a Mac; tapping ⌘ alone is the Windows key. Tabby's own shortcuts stay out of the way while a desktop is showing, except switching tabs and returning to the console. |
@@ -141,6 +142,7 @@ They are stored in Tabby's config under `remoteDesktop`:
 | Sharpness (`sharpness`) | Standard (`standard`) | Retina (`retina`): device pixels, with the remote's scale set to match. |
 | For *this desktop* only (`desktopSharpness`) | As above | In the menu of a tab with a desktop open: Standard or Retina for that desktop, whatever the default. Kept by desktop (`user@host`, or `user@host#address` for one behind a host). |
 | Sound (`sound`) | On | Applies on the next connection. |
+| Microphone (`microphone`) | Off | Send your microphone while an app on the remote desktop records. Applies on the next connection. |
 | Mac shortcuts (`macShortcuts`) | On | macOS. Off: ⌘ is the Windows key. |
 | Bring the console along with `desk` (`desk`) | Off | Installs `desk` and a login line on each machine you open a desktop on; applies on the next connection there. |
 | Session backend (`sessionBackend`) | `native` | For `desk`: `native` (trd-pty) or `tmux`. Config file only. |
@@ -177,6 +179,7 @@ tabby-rdp ships IronRDP with a short series of patches ([ironrdp/](ironrdp)). Th
 | Echo the correct size in the sound channel's Training Confirm | [Devolutions/IronRDP#2019](https://github.com/Devolutions/IronRDP/pull/2019) |
 | The graphics pipeline in the web client, following its resets | Covered by [Devolutions/IronRDP#1977](https://github.com/Devolutions/IronRDP/pull/1977) (not ours; [tested with GNOME](https://github.com/Devolutions/IronRDP/pull/1977#issuecomment-5851624036)) |
 | Sound in the web client | [Devolutions/IronRDP#2020](https://github.com/Devolutions/IronRDP/pull/2020) |
+| Microphone in the web client | Not submitted yet |
 
 The aim is to make IronRDP's browser client work well with both Linux and Windows desktops, for everyone who embeds
 it, not just this plugin.
@@ -209,6 +212,12 @@ npm run build:ironrdp        # rebuild vendor/ from IronRDP and ironrdp/patches:
   Tabby's own passwords. Without one, the plugin asks each time.
 - **GNOME Remote Desktop listens on all interfaces** (password-protected, TLS); it has no setting to listen on
   loopback only. See [docs/architecture.md](docs/architecture.md#security-notes) to restrict it.
+- **The microphone** needs the system's permission: macOS asks the first time a remote app records (if it was denied,
+  allow Tabby in System Settings › Privacy & Security › Microphone, then restart Tabby), and Windows needs "Let desktop
+  apps access your microphone". On GNOME, apps record from GNOME Remote Desktop's "Remoteaudio Source", which is the
+  default input on a machine without a microphone of its own; otherwise pick it in Settings › Sound. On Windows, the
+  remote machine must allow audio recording redirection (the Remote Desktop Session Host policy "Allow audio recording
+  redirection").
 - **Windows-key combinations** such as Win+R don't come through from macOS. Tapping ⌘ for the Windows key does.
 - **Desktops behind a host** can be added and removed from the menus, but not edited there.
 

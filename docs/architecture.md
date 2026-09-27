@@ -101,7 +101,7 @@ While a desktop covers the active pane (`src/keyboard.ts`):
 The router listens on `window`: after Tabby's hotkey listener (on `document`) and, registered at startup, before
 IronRDP's.
 
-## Clipboard, files, sound
+## Clipboard, files, sound, microphone
 
 - **Clipboard:** IronRDP's component, with the browser clipboard API in Tabby's window: text and images both ways.
 - **Files:** IronRDP's file transfer provider. Files dropped on the layer (or picked from the menu) are offered on the
@@ -109,6 +109,18 @@ IronRDP's.
   keeping folder structure, never overwriting).
 - **Sound:** the patched web client hands 16-bit PCM to the plugin, which schedules it back to back on a Web Audio
   clock with a small lead, skipping ahead rather than letting delay grow, and follows the server's volume.
+- **Microphone** (off by default): the patched web client advertises audio capture and tells the plugin when the
+  server opens or closes the AUDIO_INPUT channel ([MS-RDPEAI]), which servers do while an application there records.
+  Only then is the microphone captured (`getUserMedia`, with the browser's echo cancellation, so the remote's own
+  sound playing here stays out of it), resampled to the server's format and sent as 16-bit PCM. It keeps capturing
+  while the desktop is hidden, as long as the remote records: hiding the desktop to use the console shouldn't cut a
+  call short; macOS and Windows show their own microphone indicator meanwhile. GNOME Remote Desktop offers the
+  microphone as a PipeWire source ("Remoteaudio Source", `grd_remote_audio_source`) and opens the channel when
+  something records from it; it only takes 44.1 kHz stereo. Tabby grants web permission requests (it installs no
+  permission handler), so the only prompt is the system's: macOS asks once whether Tabby may use the microphone
+  (Tabby's `Info.plist` has `NSMicrophoneUsageDescription` and its signature the audio-input entitlement).
+
+[MS-RDPEAI]: https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-rdpeai/
 
 ## Reconnecting
 

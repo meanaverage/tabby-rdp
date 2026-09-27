@@ -68,6 +68,7 @@ system keychain doesn't answer (Linux without an unlocked keyring), the keychain
 | [clipboard](suites/clipboard.mjs) | Text both ways, through the terminal `desk` opens. |
 | [files](suites/files.mjs) | Files both ways with Files (Nautilus): copy there and save here; drop here and paste there. |
 | [audio](suites/audio.mjs) | A tone played on the desktop arrives as sound; with sound off, none is set up. |
+| [microphone](suites/microphone.mjs) | Recording on the desktop opens the microphone here, a tone fed in as the microphone arrives there, and it is released when the recording stops; with the setting off, none is set up. |
 | [reconnect](suites/reconnect.mjs) | A dropped SSH connection: "Reconnect SSH", automatic reconnect (also while hidden), Stop, Try again. |
 | [desktops](suites/desktops.mjs) | "Add a desktop behind…", its sign-in and keychain entry, "Remove a desktop" (using the host's own GNOME desktop as the extra one). |
 | [windows](suites/windows.mjs) | A Windows desktop behind an SSH host: sign-in, keychain, picture, resize, reconnect; with WinRM, typing, clipboard, sound and files, each checked inside Windows. |
