@@ -62,9 +62,11 @@ $s.GetFolder('\\').GetTask('${name}').Run($null) | Out-Null`)
     await t.settings({ sound: true, macShortcuts: true })
     check('SSH tab connected', await ev(`H.pane = await H.openSSH({ host: ${JSON.stringify(win.host)}, user: ${JSON.stringify(win.user)} }); return !!H.pane`))
     const key = await ev(`return (await RD.targets.targetOf(H.pane)).key + '#' + ${JSON.stringify(ID)}`)
-    const keychain = expr => ev(`return await require('keytar').${expr}`)
-    await keychain(`deletePassword('tabby-rdp', ${JSON.stringify(key)})`)
-    t.onCleanup(() => keychain(`deletePassword('tabby-rdp', ${JSON.stringify(key)})`))
+    const keychainWorks = await t.keychainWorks()
+    if (keychainWorks) {
+        await t.keychain(`deletePassword('tabby-rdp', ${JSON.stringify(key)})`)
+        t.onCleanup(() => t.keychain(`deletePassword('tabby-rdp', ${JSON.stringify(key)})`))
+    }
     const reachable = (await t.remote('H.pane', `timeout 3 bash -c '</dev/tcp/${winHost}/${winPort}' && echo open`)).trim()
     check(`RDP port ${ID} reachable from ${win.host}`, reachable === 'open', reachable)
     const winrm = !!win.winrm && /ready/.test(await guest("'ready'").catch(() => ''))
@@ -86,7 +88,9 @@ $s.GetFolder('\\').GetTask('${name}').Run($null) | Out-Null`)
     await sleep(500)
     form = await t.waitFor('const f = H.signin(); return f?.error ? f : null', 40)
     check('wrong password: the form again, with an error', /wrong|refused/i.test(form?.error ?? ''), { form, log: (await log()).slice(-3) })
-    check('a wrong password is not saved', !(await keychain(`getPassword('tabby-rdp', ${JSON.stringify(key)})`)))
+    if (keychainWorks) {
+        check('a wrong password is not saved', !(await t.keychain(`getPassword('tabby-rdp', ${JSON.stringify(key)})`)))
+    }
 
     // 3. The right password: connected, saved in the keychain, the picture drawn.
     const t1 = Date.now()
@@ -98,7 +102,11 @@ $s.GetFolder('\\').GetTask('${name}').Run($null) | Out-Null`)
     check('Windows frame decoded', !!frame, await ev('return H.canvas(H.pane)'))
     await t.dump('H.pane', 'windows-connected')
     check('resolution = pane size', frame && Math.abs(frame.w - frame.paneW) <= 2 && Math.abs(frame.h - frame.paneH) <= 2, frame)
-    check('the account is saved in the keychain', !!(await t.waitFor(`return await require('keytar').getPassword('tabby-rdp', ${JSON.stringify(key)})`, 5)))
+    if (keychainWorks) {
+        check('the account is saved in the keychain', !!(await t.waitFor(`return await require('keytar').getPassword('tabby-rdp', ${JSON.stringify(key)})`, 5)))
+    } else {
+        t.skip('the account is saved in the keychain, and reused', 'the system keychain does not answer (Linux: no unlocked keyring)')
+    }
     check('the header names the desktop', /Windows|console/.test(await ev(`return document.querySelector('.trd-header-toggle')?.title ?? ''`)))
 
     if (winrm) {
@@ -237,6 +245,9 @@ if (Test-Path $state) { Get-ChildItem $state -File | Where-Object { $keep -notco
     await ev('H.inZone(() => RD.desktop.showConsole(H.pane))')
     check('the toggle names the Windows desktop', (await ev('return await H.entries()'))[0] === `Show ${NAME}`, await ev('return await H.entries()'))
     await ev('H.inZone(() => RD.desktop.disconnect(H.pane))')
+    if (!keychainWorks) {
+        return
+    }
     const t2 = Date.now()
     await ev('await H.inZone(() => RD.desktop.toggle(H.pane))')  // the last-used desktop: Windows
     const last = await outcome()

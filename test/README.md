@@ -52,7 +52,10 @@ TRD_TEST_HOST=192.168.122.10 TRD_TEST_USER=ubuntu TRD_TEST_SSH_KEY='C:\Users\tab
 ```
 
 The test host, user and key are then as that machine sees them. The suites take the platform (shortcuts, local
-terminals) from that Tabby, and put local files on its machine.
+terminals) from that Tabby, and put local files on its machine. On a Linux machine without a desktop, Xvfb does:
+`xvfb-run -a ./tabby --no-sandbox --user-data-dir=<profile> --remote-debugging-port=9222` (with
+`TABBY_CONFIG_DIRECTORY=<profile>`), and an SSH agent forwarded into that session signs in to the test host. Where the
+system keychain doesn't answer (Linux without an unlocked keyring), the keychain checks are skipped, with a note.
 
 ## Suites
 

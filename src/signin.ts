@@ -7,8 +7,17 @@ export interface Credentials {
 
 const KEYCHAIN_SERVICE = 'tabby-rdp'
 
+// The system keychain can keep a call waiting indefinitely: on Linux, a locked or missing keyring waits for an unlock
+// prompt, which a session without a keyring prompter never shows. Give up after a while. A call that never returns
+// also keeps one of Node's few worker threads, which the rest of Tabby needs: after one, stop using the keychain.
+const KEYCHAIN_TIMEOUT_MS = 10000
+let keychainStuck = false
+
 // Tabby ships keytar (tabby-ssh keeps SSH passwords with it). Without it, nothing is remembered.
 function keytar (): any {
+    if (keychainStuck) {
+        throw new Error('the keychain did not answer earlier')
+    }
     try {
         return require('keytar')
     } catch {
@@ -16,10 +25,22 @@ function keytar (): any {
     }
 }
 
+function answered<T> (call: Promise<T> | undefined): Promise<T | undefined> {
+    return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => {
+            keychainStuck = true
+            reject(new Error('the keychain did not answer'))
+        }, KEYCHAIN_TIMEOUT_MS)
+        Promise.resolve(call).then(
+            value => { clearTimeout(timer); resolve(value) },
+            error => { clearTimeout(timer); reject(error) })
+    })
+}
+
 /** Saved credentials for a desktop (keyed by its session key), or null. */
 export async function loadCredentials (key: string): Promise<Credentials | null> {
     try {
-        const saved = await keytar()?.getPassword(KEYCHAIN_SERVICE, key)
+        const saved = await answered<string | null>(keytar()?.getPassword(KEYCHAIN_SERVICE, key))
         const parsed = saved ? JSON.parse(saved) : null
         return parsed?.username && typeof parsed.password === 'string' ? { username: parsed.username, password: parsed.password } : null
     } catch {
@@ -28,12 +49,12 @@ export async function loadCredentials (key: string): Promise<Credentials | null>
 }
 
 export async function saveCredentials (key: string, credentials: Credentials): Promise<void> {
-    await keytar()?.setPassword(KEYCHAIN_SERVICE, key, JSON.stringify(credentials))
+    await answered(keytar()?.setPassword(KEYCHAIN_SERVICE, key, JSON.stringify(credentials)))
 }
 
 export async function forgetCredentials (key: string): Promise<void> {
     try {
-        await keytar()?.deletePassword(KEYCHAIN_SERVICE, key)
+        await answered(keytar()?.deletePassword(KEYCHAIN_SERVICE, key))
     } catch { }
 }
 
@@ -41,9 +62,9 @@ export async function forgetCredentials (key: string): Promise<void> {
 export async function forgetCredentialsFor (desktopId: string): Promise<void> {
     try {
         const k = keytar()
-        for (const { account } of await k?.findCredentials(KEYCHAIN_SERVICE) ?? []) {
+        for (const { account } of await answered<{ account: string }[]>(k?.findCredentials(KEYCHAIN_SERVICE)) ?? []) {
             if (account.endsWith(`#${desktopId}`)) {
-                await k.deletePassword(KEYCHAIN_SERVICE, account)
+                await answered(k.deletePassword(KEYCHAIN_SERVICE, account))
             }
         }
     } catch { }

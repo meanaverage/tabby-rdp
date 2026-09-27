@@ -33,9 +33,11 @@ await suite('desktops', async t => {
     await ev('H.inZone(() => RD.desktop.disconnect(H.pane))')
     const password = (await t.remote('H.pane', 'cat ~/.local/share/tabby-rdp/rdp-password')).trim()
     const key = await ev(`return (await RD.targets.targetOf(H.pane)).key + '#${ID}'`)
-    const keychain = expr => ev(`return await require('keytar').${expr}`)
-    await keychain(`deletePassword('tabby-rdp', ${JSON.stringify(key)})`)
-    t.onCleanup(() => keychain(`deletePassword('tabby-rdp', ${JSON.stringify(key)})`))
+    const keychainWorks = await t.keychainWorks()
+    if (keychainWorks) {
+        await t.keychain(`deletePassword('tabby-rdp', ${JSON.stringify(key)})`)
+        t.onCleanup(() => t.keychain(`deletePassword('tabby-rdp', ${JSON.stringify(key)})`))
+    }
 
     // 1. The menu offers adding one.
     const add = await ev(`return (await H.labels()).find(l => /^Add a desktop behind/.test(l ?? ''))`)
@@ -62,7 +64,11 @@ await suite('desktops', async t => {
     check('the added desktop connects', !!(await t.waitFor(`return H.connected(H.pane) && RD.desktop.desktopOf(H.pane)?.id === ${JSON.stringify(ID)}`, 40)), await ev('return RD.desktop.logOf(H.pane).slice(-3)'))
     const labels = await ev('return await H.labels()')
     check('the menus name it, and still offer the own desktop', labels.includes(`Open ${host} desktop`) && labels.includes('Back to console'), labels)
-    check('the account is saved in the keychain', !!(await t.waitFor(`return await require('keytar').getPassword('tabby-rdp', ${JSON.stringify(key)})`, 5)))
+    if (keychainWorks) {
+        check('the account is saved in the keychain', !!(await t.waitFor(`return await require('keytar').getPassword('tabby-rdp', ${JSON.stringify(key)})`, 5)))
+    } else {
+        t.skip('the account is saved in the keychain', 'the system keychain does not answer (Linux: no unlocked keyring)')
+    }
     await ev('H.inZone(() => RD.desktop.disconnect(H.pane))')
 
     // 4. Remove it from the settings menu: config and keychain entry gone, no longer offered.
@@ -71,6 +77,8 @@ await suite('desktops', async t => {
     await ev('const m = await H.removeMenu(); H.inZone(() => m.submenu[0].click())')
     await sleep(500)
     check('removed from the config', await ev('return (H.config.store.remoteDesktop.desktops ?? []).length === 0'))
-    check('its keychain entry removed', !(await keychain(`getPassword('tabby-rdp', ${JSON.stringify(key)})`)))
+    if (keychainWorks) {
+        check('its keychain entry removed', !(await t.keychain(`getPassword('tabby-rdp', ${JSON.stringify(key)})`)))
+    }
     check('no longer offered', !(await ev('return await H.labels()')).some(l => (l ?? '').includes(NAME)))
 })

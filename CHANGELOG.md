@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.2.4
+
+Tabby on Linux, tested end to end for the first time (Ubuntu 24.04 on arm64, Tabby 1.0.237):
+- Keychain calls give up after 10 seconds. On Linux, a locked or missing keyring can keep them waiting for an unlock
+  prompt that never appears; loading a saved Windows password then counts as none saved, and the sign-in form asks.
+  After one such call, the plugin leaves the keychain alone for the rest of the session: each call that never returns
+  holds one of the few worker threads Tabby's other file and network work needs.
+
+Also:
+- Works with IronRDP builds that have no switch for the graphics pipeline, such as one with a pending IronRDP change
+  that turns it on by itself ([Devolutions/IronRDP#1977](https://github.com/Devolutions/IronRDP/pull/1977)).
+
 ## 0.2.3
 
 **Fixed**

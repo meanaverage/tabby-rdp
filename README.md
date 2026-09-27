@@ -144,17 +144,17 @@ They are stored in Tabby's config under `remoteDesktop`:
 
 ## Requirements
 
-- **Tabby 1.0.236 or newer**, on macOS or Windows (tested with 1.0.236 and 1.0.237). Tabby on Linux hasn't been
-  tested yet. On a fresh Windows, Tabby itself needs the
-  [Microsoft Visual C++ Redistributable](https://learn.microsoft.com/cpp/windows/latest-supported-vc-redist) for SSH.
+- **Tabby 1.0.236 or newer**, on macOS, Windows or Linux (tested with 1.0.236 and 1.0.237). On a fresh Windows, Tabby
+  itself needs the [Microsoft Visual C++ Redistributable](https://learn.microsoft.com/cpp/windows/latest-supported-vc-redist)
+  for SSH.
 - **Linux desktops:** GNOME Shell and GNOME Remote Desktop 46 or newer (Ubuntu 24.04, for example), a systemd user
   session, and SSH access with a key or agent. `desk` also needs `python3` and GNOME Terminal. No root, no display, no
   login screen.
 - **Windows desktops:** Windows 10 or 11 Pro, or Windows Server, with Remote Desktop turned on, reachable from an SSH
   host.
 
-Tested with Ubuntu 24.04 (GNOME Remote Desktop 46.3) and Windows 11 (Pro and Enterprise), from Tabby on macOS and on
-Windows 11.
+Tested with Ubuntu 24.04 (GNOME Remote Desktop 46.3) and Windows 11 (Pro and Enterprise), from Tabby on macOS,
+Windows 11 and Ubuntu 24.04 (arm64).
 
 ## Built on IronRDP
 
@@ -202,6 +202,8 @@ npm run build:ironrdp        # rebuild vendor/ from IronRDP and ironrdp/patches:
   GNOME's background settings daemons don't run, and X11-only apps don't start.
 - **GNOME's login-screen mode** isn't supported: it hands clients over with a server redirection, which IronRDP can't
   follow yet. The plugin uses per-user headless sessions instead.
+- **Remembering a Windows password on Linux** needs an unlocked keyring (GNOME Keyring or KWallet), as it does for
+  Tabby's own passwords. Without one, the plugin asks each time.
 - **GNOME Remote Desktop listens on all interfaces** (password-protected, TLS); it has no setting to listen on
   loopback only. See [docs/architecture.md](docs/architecture.md#security-notes) to restrict it.
 - **Windows-key combinations** such as Win+R don't come through from macOS. Tapping ⌘ for the Windows key does.

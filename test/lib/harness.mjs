@@ -188,6 +188,30 @@ export async function suite (name, body, { needsHost = true } = {}) {
             }
             return null
         },
+        /** A keytar call in Tabby (e.g. `getPassword('tabby-rdp', key)`); throws if the keychain doesn't answer. */
+        keychain (call, seconds = 10) {
+            return ev(`return await Promise.race([require('keytar').${call}, new Promise((_, reject) => setTimeout(() => reject(new Error('the keychain did not answer')), ${seconds * 1000}))])`)
+        },
+        /**
+         * Whether the system keychain answers (on Linux, a locked or missing keyring waits for a prompt). Found out once
+         * per Tabby, since a call that never returns holds one of its few worker threads.
+         */
+        async keychainWorks () {
+            const known = await ev('return window.__trdKeychainWorks ?? null')
+            if (known !== null) {
+                return known
+            }
+            const probe = JSON.stringify(`trd-test-probe-${Date.now()}`)
+            let works = true
+            try {
+                await t.keychain(`setPassword('tabby-rdp', ${probe}, 'x')`, 5)
+                await t.keychain(`deletePassword('tabby-rdp', ${probe})`, 5)
+            } catch {
+                works = false
+            }
+            await ev(`window.__trdKeychainWorks = ${works}`)
+            return works
+        },
         /** A temporary folder on the machine Tabby runs on, removed when the suite ends. */
         async tempDir (prefix) {
             const dir = await ev(`return require('fs').mkdtempSync(require('path').join(require('os').tmpdir(), ${JSON.stringify(prefix)}))`)

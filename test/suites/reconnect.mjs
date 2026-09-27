@@ -51,13 +51,18 @@ await suite('reconnect', async t => {
     check('"Reconnect" connects again', !!(await t.waitFor('return H.connected(H.pane) && H.status(H.pane) === null', 40)))
     await ev('H.inZone(() => RD.desktop.disconnect(H.pane))')
 
-    // 4. A desktop that never connects: "Try again", no automatic retries. (Port 9 on the host: nothing there.)
+    // 4. A desktop that never connects: "Try again", no automatic retries. (Port 9 on the host: nothing there.) Its
+    // account comes from the keychain, so the sign-in form doesn't come first.
+    if (!(await t.keychainWorks())) {
+        t.skip('never connected: "Remote desktop failed" with "Try again"', 'the system keychain does not answer (Linux: no unlocked keyring)')
+        return
+    }
     const desktops = await ev('return JSON.stringify(H.config.store.remoteDesktop.desktops ?? [])')
     t.onCleanup(() => ev(`H.inZone(() => { H.config.store.remoteDesktop.desktops = ${desktops}; H.config.save() })`))
     await ev(`H.inZone(() => { H.config.store.remoteDesktop.desktops = [{ name: 'Nothing here', via: H.test.host, host: '127.0.0.1', port: 9, kind: 'windows', username: 'x' }]; H.config.save() })`)
     const key = await ev(`return (await RD.targets.targetOf(H.pane)).key + '#127.0.0.1:9'`)
-    await ev(`await require('keytar').setPassword('tabby-rdp', ${JSON.stringify(key)}, JSON.stringify({ username: 'x', password: 'y' }))`)
-    t.onCleanup(() => ev(`await require('keytar').deletePassword('tabby-rdp', ${JSON.stringify(key)})`))
+    await t.keychain(`setPassword('tabby-rdp', ${JSON.stringify(key)}, JSON.stringify({ username: 'x', password: 'y' }))`)
+    t.onCleanup(() => t.keychain(`deletePassword('tabby-rdp', ${JSON.stringify(key)})`))
     await ev(`await H.inZone(() => RD.desktop.showDesktop(H.pane, '127.0.0.1:9'))`)
     const failed = await t.waitFor(`const s = H.status(H.pane); return s && /failed/i.test(s.text) ? s : null`, 20)
     await sleep(3000)
