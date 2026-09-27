@@ -19,8 +19,8 @@ await suite('desktops', async t => {
         },
         signin () { return H.overlay(H.pane)?.querySelector('.trd-signin form') ?? null },
         textareasDisabled () { return [...H.pane.element.nativeElement.querySelectorAll('textarea.xterm-helper-textarea')].map(x => x.disabled) },
-        async labels () { return (await H.menu(H.pane)).map(i => i.label) },
-        async removeMenu () { return (await H.menu(H.pane)).find(i => i.label === 'Remote desktop settings').submenu.find(i => i.label === 'Remove a desktop') },
+        async labels () { return (await H.menuItems(H.pane)).map(i => i.label) },
+        async removeMenu () { return (await H.menu(H.pane)).find(i => i.label === 'Settings').submenu.find(i => i.label === 'Remove a desktop') },
     })`)
     const saved = await ev('return JSON.stringify(H.config.store.remoteDesktop.desktops ?? [])')
     t.onCleanup(() => ev(`H.inZone(() => { H.config.store.remoteDesktop.desktops = ${saved}; H.config.save() })`))

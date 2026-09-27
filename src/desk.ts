@@ -60,7 +60,7 @@ export class DeskTriggerDecorator extends TerminalDecorator {
                 }
                 if (!this.desktop.settings().desk) {
                     // A hook left from when it was on; it goes away the next time a desktop opens there.
-                    this.notifications.info('`desk` is off: turn it on in Remote desktop settings')
+                    this.notifications.info('`desk` is off: turn it on in the menu under Remote Desktop › Settings')
                     return
                 }
                 this.desktop.openConsole(pane, request)

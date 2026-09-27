@@ -32,7 +32,7 @@ await suite('windows', async t => {
             f.querySelector('[name=password]').value = password
             f.requestSubmit()
         },
-        async entries () { return (await H.menu(H.pane)).filter(i => i.enabled !== false && /desktop|console|Windows/i.test(i.label ?? '') && i.label !== 'Remote desktop settings' && !/^(Send files|Add a desktop)/.test(i.label ?? '')).map(i => i.label) },
+        async entries () { return (await H.menuItems(H.pane)).filter(i => i.enabled !== false && !i.submenu && !/^(Send files|Add a desktop|Disconnect)/.test(i.label ?? '')).map(i => i.label) },
     })`)
 
     // 0. The desktop behind the host.

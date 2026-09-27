@@ -57,7 +57,7 @@ interface StatusAction {
 
 type SessionState = 'connecting' | 'connected' | 'ended'
 
-/** `remoteDesktop` settings (Tabby config), editable from the "Remote desktop settings" menus. */
+/** `remoteDesktop` settings (Tabby config), editable from the "Settings" menus. */
 export interface DesktopSettings {
     /** When the pane changes size: 'live' resizes the remote monitor in place, 'reconnect' reconnects at the new size, 'off' keeps the size. */
     resize: 'live' | 'reconnect' | 'off'
@@ -306,7 +306,7 @@ export class RemoteDesktopService {
         return { specs, current: this.desktopOf(pane) ?? (target ? this.defaultDesktop(target) : null) }
     }
 
-    /** "Send files to the remote desktop…": picks files to paste there. */
+    /** "Send files…": picks files to paste there. */
     sendFiles (pane: DesktopPane): void {
         this.sessions.get(pane)?.files?.pickAndSend().catch(() => null)
     }

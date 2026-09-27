@@ -105,14 +105,19 @@ export class RemoteDesktopContextMenu extends TabContextMenuItemProvider {
         }, {
             label: toggleLabel(this.desktop, pane),
             click: () => this.desktop.toggle(pane),
-        }, ...desktopChoices(this.desktop, pane, this.targets.cached(pane)?.label)]
+        }]
+        // The host's other desktops and "Add a desktop behind…", one level down to keep the menu short.
+        const choices = desktopChoices(this.desktop, pane, this.targets.cached(pane)?.label)
+        if (choices.length) {
+            items.push({ label: 'Desktops', submenu: choices })
+        }
         if (this.desktop.isConnected(pane)) {
-            items.push({ label: 'Send files to the remote desktop…', click: () => this.desktop.sendFiles(pane) })
+            items.push({ label: 'Send files…', click: () => this.desktop.sendFiles(pane) })
         }
         if (this.desktop.has(pane)) {
-            items.push({ label: 'Disconnect remote desktop', click: () => this.desktop.disconnect(pane) })
+            items.push({ label: 'Disconnect', click: () => this.desktop.disconnect(pane) })
         }
-        items.push({ label: 'Remote desktop settings', submenu: settingsMenu(this.desktop, pane) })
+        items.push({ label: 'Settings', submenu: settingsMenu(this.desktop, pane) })
         return items
     }
 }

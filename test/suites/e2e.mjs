@@ -12,9 +12,7 @@ await suite('e2e', async t => {
         },
         // The desktop entries of a pane's menu (tab header: the tab's menu).
         async entries (header, p) {
-            const { TabContextMenuItemProvider } = require('tabby-core')
-            const items = (await Promise.all(RD.injector.get(TabContextMenuItemProvider).map(x => x.getItems(header ? H.topOf(p) : p, header)))).flat()
-            return items.filter(i => i.enabled !== false && /remote desktop|console/i.test(i.label ?? '') && i.label !== 'Remote desktop settings' && !/^Send files/.test(i.label ?? ''))
+            return (await H.menu(p, header)).filter(i => i.enabled !== false && !i.submenu && !/^Send files/.test(i.label ?? ''))
         },
         async clickEntry (header, label, p) {
             const item = (await H.entries(header, p)).find(i => i.label === label)
@@ -78,9 +76,9 @@ await suite('e2e', async t => {
     // 1. An SSH tab, before connecting.
     check('SSH tab connected', await ev('H.pane = await H.openSSH(); return !!H.pane'))
     check('menu offers "Open remote desktop"', await labels(false) === 'Open remote desktop')
-    const settings = await ev(`return ((await H.menu(H.pane)).find(i => i.label === 'Remote desktop settings')?.submenu ?? []).filter(i => i.type === 'radio').map(i => i.label + (i.checked ? '*' : ''))`)
-    check('"Remote desktop settings" with resize and sharpness choices', settings.length === 5 && settings.filter(l => l.endsWith('*')).length === 2, settings)
-    const deskItem = await ev(`const d = ((await H.menu(H.pane)).find(i => i.label === 'Remote desktop settings')?.submenu ?? []).find(i => i.type === 'checkbox'); return d ? { label: d.label, checked: d.checked } : null`)
+    const settings = await ev(`return ((await H.menu(H.pane)).find(i => i.label === 'Settings')?.submenu ?? []).filter(i => i.type === 'radio').map(i => i.label + (i.checked ? '*' : ''))`)
+    check('"Settings" with resize and sharpness choices', settings.length === 5 && settings.filter(l => l.endsWith('*')).length === 2, settings)
+    const deskItem = await ev(`const d = ((await H.menu(H.pane)).find(i => i.label === 'Settings')?.submenu ?? []).find(i => i.type === 'checkbox'); return d ? { label: d.label, checked: d.checked } : null`)
     check('settings have the desk checkbox (on here)', /desk/.test(deskItem?.label ?? '') && deskItem.checked === true, deskItem)
     check('SSH toolbar has a Desktop button', !!(await t.waitFor(`return !!H.pane.element.nativeElement.querySelector('terminal-toolbar .trd-toolbar-button')`, 5)))
     let hd = await header()
@@ -134,11 +132,11 @@ await suite('e2e', async t => {
     check('hotkey shows the desktop again (same session)', st.visible && st.overlayShown && await sameSession(), st)
 
     // 5. Menus.
-    check('terminal menu while shown', await labels(false) === 'Back to console,Disconnect remote desktop')
+    check('terminal menu while shown', await labels(false) === 'Back to console,Disconnect')
     await ev(`await H.clickEntry(false, 'Back to console', H.pane)`)
     await sleep(300)
     check('terminal menu "Back to console"', !(await state()).visible)
-    check('tab header menu while hidden', await labels(true) === 'Show remote desktop,Disconnect remote desktop')
+    check('tab header menu while hidden', await labels(true) === 'Show remote desktop,Disconnect')
     await ev(`await H.clickEntry(true, 'Show remote desktop', H.pane)`)
     await sleep(300)
     check('tab header menu "Show remote desktop"', (await state()).visible)

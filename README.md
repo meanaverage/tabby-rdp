@@ -80,7 +80,7 @@ connecting again.
 | | |
 |---|---|
 | **Clipboard** | Copy and paste text and images in both directions. |
-| **Files** | Drop files from Finder onto the desktop, or use **Send files to the remote desktop…**, then paste them in Files or Explorer. Files copied on the remote offer **Save to Downloads**. |
+| **Files** | Drop files from Finder onto the desktop, or use **Remote Desktop › Send files…** in the pane's menu, then paste them in Files or Explorer. Files copied on the remote offer **Save to Downloads**. |
 | **Sound** | The remote desktop's sound plays locally. |
 | **Resize** | The remote resolution follows the pane as you resize the window or split it. Or reconnect at the new size, or keep a fixed resolution. |
 | **Retina** | Optionally renders at device pixels, with the remote's UI scaled to match (GNOME and Windows alike), for sharp text. For all desktops, or only some. |
@@ -93,9 +93,9 @@ connecting again.
 ## Windows and other desktops behind a host
 
 An SSH host can lead to other desktops it can reach, such as a Windows VM on the same machine. In that host's menu,
-choose **Add a desktop behind \<host\>…** and enter a name, the address as seen from the host, and optionally the
-user name. It opens right away, and from then on appears next to the host's own desktop in its menus. **Remote
-desktop settings › Remove a desktop** removes one, along with its saved password.
+choose **Desktops › Add a desktop behind \<host\>…** and enter a name, the address as seen from the host, and optionally the
+user name. It opens right away, and from then on appears under **Desktops** in the host's menu. **Settings ›
+Remove a desktop** removes one, along with its saved password.
 
 <p align="center"><img src="docs/images/windows.png" width="760" alt="A Windows 11 desktop, reached through an SSH host, in a Tabby tab"></p>
 
@@ -126,13 +126,13 @@ shell: its scrollback, working directory, jobs and running programs. Type on eit
 </p>
 
 `desk` is off by default, because it makes interactive SSH logins on that machine start inside a shareable session.
-Turn it on in **Remote desktop settings**. The sessions are handled by a small helper, `trd-pty`, rather than tmux, so
+Turn it on in the pane's menu under **Remote Desktop › Settings**. The sessions are handled by a small helper, `trd-pty`, rather than tmux, so
 your terminal's scrollback, colors and shortcuts stay as they are. Turning it off removes it again. Details:
 [docs/desk.md](docs/desk.md).
 
 ## Settings
 
-Right-click the desktop button in Tabby's header, or open **Remote desktop settings** in a terminal's or tab's menu.
+Right-click the desktop button in Tabby's header, or open **Settings** in the Remote Desktop section of a terminal's or tab's menu.
 They are stored in Tabby's config under `remoteDesktop`:
 
 | Setting | Default | |

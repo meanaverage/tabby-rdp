@@ -5,7 +5,7 @@ to the *same* shell: same scrollback, working directory, jobs and running progra
 both. The hotkey or the header button takes you back to the console.
 
 `desk` is off by default, because it changes how SSH logins start on the remote. Turn it on in
-**Remote desktop settings** (the `remoteDesktop.desk` setting).
+the menu's **Remote Desktop › Settings** (the `remoteDesktop.desk` setting).
 
 <p align="center">
   <img src="images/console.png" width="49%" alt="A console before desk">

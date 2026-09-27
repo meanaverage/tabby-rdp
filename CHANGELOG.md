@@ -3,7 +3,9 @@
 ## Unreleased
 
 - The plugin's items in a terminal's or tab's menu start with a **Remote Desktop** heading (naming the desktop
-  while one is connected), so they read as the plugin's rather than Tabby's.
+  while one is connected), so they read as the plugin's rather than Tabby's. Under it the items are shorter:
+  **Send files…**, **Disconnect** and **Settings**, and the host's other desktops and **Add a desktop behind
+  \<host\>…** are under **Desktops**.
 
 ## 0.2.7
 
