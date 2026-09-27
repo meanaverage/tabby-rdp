@@ -9,6 +9,10 @@ SB="${1:-${TMPDIR:-/tmp}/tabby-rdp-sandbox}"
 REAL="$HOME/Library/Application Support/tabby"
 mkdir -p "$SB/plugins/node_modules"
 [ -f "$SB/config.yaml" ] || cp "$REAL/config.yaml" "$SB/config.yaml" 2>/dev/null || printf 'enableWelcomeTab: false\n' > "$SB/config.yaml"
+# It runs the installed Tabby: its updater would try to replace that app (macOS asks about it, or blocks it).
+grep -q '^enableAutomaticUpdates:' "$SB/config.yaml" \
+    && sed -i '' 's/^enableAutomaticUpdates:.*/enableAutomaticUpdates: false/' "$SB/config.yaml" \
+    || printf 'enableAutomaticUpdates: false\n' >> "$SB/config.yaml"
 [ -f "$SB/plugins/package.json" ] || echo '{}' > "$SB/plugins/package.json"
 ln -sfn "$PLUGIN_DIR" "$SB/plugins/node_modules/$NAME"
 echo "Sandbox: $SB"

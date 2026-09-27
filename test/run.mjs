@@ -67,6 +67,8 @@ function makeSandbox () {
         'enableWelcomeTab: false',
         'enableAnalytics: false',
         'recoverTabs: false',
+        // It runs the installed Tabby: its updater would try to replace that app (macOS asks about it, or blocks it).
+        'enableAutomaticUpdates: false',
         'remoteDesktop:',
         '  desk: true',
         '',
