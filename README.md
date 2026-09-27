@@ -24,6 +24,8 @@ nothing is opened on the network, and nothing has to be installed on the remote 
 - **Linux desktops without a monitor or a login.** The plugin starts a headless GNOME session for your SSH user with
   GNOME Remote Desktop, on the fly, without root. A server in a rack works as well as a workstation.
 - **Windows desktops** behind any SSH host, such as a VM on your build server, or of a Windows machine you SSH into.
+- **Remote desktop profiles** for machines you reach without SSH (LAN, VPN): in Tabby's profile list, in a tab of their
+  own.
 - **A proper desktop experience:** clipboard and files both ways, sound, live resize to the pane, sharp Retina
   rendering, Mac keyboard shortcuts, and automatic reconnects after sleep.
 - **`desk`:** type `desk` in the console and the same shell, with its history and running programs, moves into a
@@ -38,6 +40,7 @@ Making it work with GNOME took fixes in IronRDP, which we contribute upstream ([
 - [Use](#use)
 - [Features](#features)
 - [Windows and other desktops behind a host](#windows-and-other-desktops-behind-a-host)
+- [Remote desktop profiles](#remote-desktop-profiles)
 - [desk: the console on the desktop](#desk-the-console-on-the-desktop)
 - [Settings](#settings)
 - [Requirements](#requirements)
@@ -121,6 +124,39 @@ else.
 127.0.0.1:3389 as seen from the host. The plugin finds this out the first time you open the desktop there, and asks
 for the Windows account instead (your SSH user name is filled in), with the same keychain option.
 
+## Remote desktop profiles
+
+For an RDP server this computer reaches by itself (on the LAN, or over a VPN), there is a Tabby profile type:
+**Settings › Profiles & connections › New profile › Remote desktop (RDP)**. Give it the address, the kind (Windows or
+GNOME Remote Desktop), and optionally the user name and domain. It then shows up in Tabby's profile list like SSH
+profiles do, and opens in a tab of its own that the desktop fills; there is no console under it. Sign-in, the
+keychain, resize, sharpness, clipboard, files, sound and reconnecting work as in SSH tabs. After **Disconnect**, the
+tab offers **Connect**. In the profile selector you can also type `user@host:port` and pick **Quick connect (REMOTE
+DESKTOP (RDP))**.
+
+Its **Connect** setting can name an SSH profile instead of connecting directly. The address is then as that host sees
+it, and opening the profile opens that SSH tab and shows the desktop over it once SSH is connected. Such a desktop is
+also offered in the menus of that SSH profile's tabs, next to the host's own desktop, so it works like a desktop
+added with **Add a desktop behind \<host\>…**, but with a place in the profile list.
+
+In Tabby's config file:
+
+```yaml
+profiles:
+  - type: rdp
+    name: Office PC
+    options:
+      host: 192.168.1.20        # as this computer sees it (or as the SSH host sees it, with via)
+      port: 3389
+      kind: windows             # or gnome
+      username: alice           # optional
+      via: ''                   # or the id of an SSH profile to go through
+```
+
+A direct connection is a plain TCP connection from this computer, encrypted with TLS like any RDP client's. As with
+other RDP clients that accept the server's self-signed certificate, the certificate isn't verified; on networks you
+don't trust, go through SSH.
+
 ## desk: the console on the desktop
 
 Type `desk` in an SSH console, and the tab switches to that machine's desktop with a terminal attached to the very same
@@ -145,7 +181,7 @@ They are stored in Tabby's config under `remoteDesktop`:
 |---|---|---|
 | When the pane is resized (`resize`) | Resize the remote desktop to fit (`live`) | Or reconnect at the new size (`reconnect`), or keep the resolution, scaled to fit (`off`). |
 | Sharpness (`sharpness`) | Standard (`standard`) | Retina (`retina`): device pixels, with the remote's scale set to match. |
-| For *this desktop* only (`desktopSharpness`) | As above | In the menu of a tab with a desktop open: Standard or Retina for that desktop, whatever the default. Kept by desktop (`user@host`, or `user@host#address` for one behind a host). |
+| For *this desktop* only (`desktopSharpness`) | As above | In the menu of a tab with a desktop open: Standard or Retina for that desktop, whatever the default. Kept by desktop (`user@host`, `user@host#address` for one behind a host, or `rdp#address` for a remote desktop profile's own tab). |
 | Sound (`sound`) | On | Applies on the next connection. |
 | Mac shortcuts (`macShortcuts`) | On | macOS. Off: ⌘ is the Windows key. |
 | Bring the console along with `desk` (`desk`) | Off | Installs `desk` and a login line on each machine you open a desktop on; applies on the next connection there. |

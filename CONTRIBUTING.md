@@ -6,7 +6,7 @@ Issues and pull requests are welcome. For anything larger than a fix, please ope
 
 | Path | |
 |---|---|
-| `src/` | The plugin (TypeScript, Angular services, no components). `index.ts` wires it into Tabby. |
+| `src/` | The plugin (TypeScript, Angular services, and one small tab component for RDP profiles). `index.ts` wires it into Tabby. |
 | `remote/trd-pty.py` | The shared-session helper `desk` installs on the remote (Python 3 standard library). |
 | `vendor/` | IronRDP's web client, built from `ironrdp/` (don't edit by hand). |
 | `ironrdp/` | The IronRDP base commit and the patch series applied to it. |

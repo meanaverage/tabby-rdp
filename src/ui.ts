@@ -49,10 +49,13 @@ export class RemoteDesktopConfig extends ConfigProvider {
     }
 }
 
-/** What switching does for this pane right now. Names the desktop when the host has more than one. */
-export function toggleLabel (desktop: RemoteDesktopService, pane: DesktopPane): string {
+/**
+ * What switching does for this pane right now. Names the desktop when the host has more than one. Null in a remote
+ * desktop tab while its desktop shows: there is no console to switch to.
+ */
+export function toggleLabel (desktop: RemoteDesktopService, pane: DesktopPane): string | null {
     if (desktop.isVisible(pane)) {
-        return 'Back to console'
+        return desktop.hasConsole(pane) ? 'Back to console' : null
     }
     const { specs, current } = desktop.choicesOf(pane)
     const what = specs.length > 1 && current ? current.name : 'remote desktop'
@@ -72,7 +75,8 @@ export function desktopChoices (desktop: RemoteDesktopService, pane: DesktopPane
         label: desktop.isOpenElsewhere(pane, spec) ? `Switch to ${spec.name} (open in another tab)` : `Open ${spec.name}`,
         click: () => desktop.showDesktop(pane, spec.id),
     }))
-    if (targetLabel) {
+    // Not in a remote desktop tab: it isn't an SSH host.
+    if (targetLabel && desktop.hasConsole(pane)) {
         items.push({ label: `Add a desktop behind ${targetLabel}…`, click: () => desktop.addDesktop(pane) })
     }
     return items
@@ -97,10 +101,11 @@ export class RemoteDesktopContextMenu extends TabContextMenuItemProvider {
         if (!pane || !this.desktop.has(pane) && !await this.targets.targetOf(pane)) {
             return []
         }
-        const items: MenuItemOptions[] = [{
-            label: toggleLabel(this.desktop, pane),
-            click: () => this.desktop.toggle(pane),
-        }, ...desktopChoices(this.desktop, pane, this.targets.cached(pane)?.label)]
+        const toggle = toggleLabel(this.desktop, pane)
+        const items: MenuItemOptions[] = [
+            ...toggle ? [{ label: toggle, click: () => this.desktop.toggle(pane) }] : [],
+            ...desktopChoices(this.desktop, pane, this.targets.cached(pane)?.label),
+        ]
         if (this.desktop.isConnected(pane)) {
             items.push({ label: 'Send files to the remote desktop…', click: () => this.desktop.sendFiles(pane) })
         }
@@ -167,9 +172,9 @@ export function settingsMenu (desktop: RemoteDesktopService, pane?: DesktopPane 
         }] : [],
         { type: 'separator' },
         {
-            // The form shows over a pane.
+            // The form shows over a console (a remote desktop tab edits its desktop in Tabby's profile settings).
             label: 'Edit a desktop',
-            enabled: !!pane && desktop.configuredDesktops().length > 0,
+            enabled: !!pane && desktop.hasConsole(pane) && desktop.configuredDesktops().length > 0,
             submenu: desktop.configuredDesktops().map((d, i) => ({
                 label: `${d.name ?? `${d.host}:${d.port}`} (behind ${d.via})…`,
                 click: () => pane && desktop.editDesktop(pane, i),

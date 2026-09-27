@@ -3,12 +3,12 @@ import { Subject } from 'rxjs'
 import { AppService, ConfigService, NotificationsService, SplitTabComponent } from 'tabby-core'
 import * as path from 'path'
 import { pathToFileURL } from 'url'
-import { DesktopPane, RemoteTarget, RemoteTargets } from './targets'
+import { DesktopPane, isRDPTab, RDP_PROFILE_TYPE, RemoteTarget, RemoteTargets } from './targets'
 import { consoleScript, DeskRequest } from './deskScript'
 import { AudioPlayer } from './audio'
 import { askDesktop } from './desktopForm'
 import { FileTransfer, STYLE as FILES_STYLE } from './fileTransfer'
-import { desktopIdOf, DesktopSpec, desktopsFor, ExtraDesktopConfig, OWN_DESKTOP, sessionKey } from './desktops'
+import { desktopIdOf, DesktopSpec, desktopsFor, DIRECT_KEY, ExtraDesktopConfig, OWN_DESKTOP, sessionKey } from './desktops'
 import { prepareRemoteDesktop, WindowsHostError } from './remoteSetup'
 import { RDCleanPathProxy, startRDCleanPathProxy } from './rdcleanpath'
 import {
@@ -286,16 +286,31 @@ export class RemoteDesktopService {
     }
 
     async toggle (pane: DesktopPane): Promise<void> {
-        if (this.isVisible(pane)) {
-            this.showConsole(pane)
-        } else {
+        if (!this.isVisible(pane)) {
             await this.showDesktop(pane)
+        } else if (this.hasConsole(pane)) {
+            this.showConsole(pane)
         }
     }
 
-    /** The desktops this pane's SSH host offers: its own, then those configured behind it. */
+    /** Whether there is a console to switch to: not in a remote desktop tab, where the desktop is all there is. */
+    hasConsole (pane: DesktopPane): boolean {
+        return !isRDPTab(pane)
+    }
+
+    /**
+     * The desktops this pane's SSH host offers: its own, then those configured behind it, then the RDP profiles that go
+     * through its SSH profile. A remote desktop tab has just its own one.
+     */
     desktopsOf (target: RemoteTarget): DesktopSpec[] {
-        return desktopsFor(target, this.config.store.remoteDesktop?.desktops, this.windowsHosts.has(target.key) ? 'windows' : 'gnome')
+        if (target.direct) {
+            return [target.direct]
+        }
+        const viaProfile = target.profileId
+            ? (this.config.store.profiles ?? []).filter((p: any) => p?.type === RDP_PROFILE_TYPE && p.options?.host && p.options.via === target.profileId)
+                .map((p: any) => ({ ...p.options, name: p.name }))
+            : []
+        return desktopsFor(target, this.config.store.remoteDesktop?.desktops, this.windowsHosts.has(target.key) ? 'windows' : 'gnome', viaProfile)
     }
 
     /**
@@ -407,28 +422,44 @@ export class RemoteDesktopService {
         this.config.store.remoteDesktop.desktops = list
         this.config.save()
         this.changed$.next()
-        const [from, to] = [desktopIdOf(old), desktopIdOf(entry)]
-        if ((old.username ?? '') !== (entry.username ?? '') || (old.domain ?? '') !== (entry.domain ?? '')) {
-            await forgetCredentialsFor(from)
-        } else if (from !== to) {
-            await moveCredentialsFor(from, to)
-        }
-        if (from !== to) {
-            this.moveDesktopKeys(from, to)
-        }
+        const accountChanged = (old.username ?? '') !== (entry.username ?? '') || (old.domain ?? '') !== (entry.domain ?? '')
+        await this.desktopEdited(desktopIdOf(old), desktopIdOf(entry), accountChanged, false)
     }
 
-    /** Keeps what is kept per desktop (its sharpness, the last-used choice) with a desktop whose address changed. */
-    private moveDesktopKeys (fromId: string, toId: string): void {
+    /**
+     * A desktop was edited (the edit form, or an RDP profile's settings): what is kept per desktop is keyed by its
+     * address, so a new address takes the saved account, its sharpness and the last-used choice along. A new user name
+     * or domain drops the saved account instead: it was for the old one. `direct`: a direct desktop (`rdp#<id>` keys),
+     * otherwise one behind SSH hosts (`<ssh key>#<id>`).
+     */
+    async desktopEdited (fromId: string, toId: string, accountChanged: boolean, direct: boolean): Promise<void> {
+        if (direct) {
+            const [from, to] = [`${DIRECT_KEY}#${fromId}`, `${DIRECT_KEY}#${toId}`]
+            const saved = !accountChanged && from !== to ? await loadCredentials(from) : null
+            if (saved) {
+                await saveCredentials(to, saved).catch(() => null)
+            }
+            if (accountChanged || from !== to) {
+                await forgetCredentials(from)
+            }
+        } else if (accountChanged) {
+            await forgetCredentialsFor(fromId)
+        } else if (fromId !== toId) {
+            await moveCredentialsFor(fromId, toId)
+        }
+        if (fromId === toId) {
+            return
+        }
+        const moved = (key: string) => direct ? key === `${DIRECT_KEY}#${fromId}` : key.endsWith(`#${fromId}`) && !key.startsWith(`${DIRECT_KEY}#`)
         const store = this.config.store.remoteDesktop
         if (Array.isArray(store.desktopSharpness)) {
-            store.desktopSharpness = store.desktopSharpness.map((e: any) => typeof e?.desktop === 'string' && e.desktop.endsWith(`#${fromId}`)
+            store.desktopSharpness = store.desktopSharpness.map((e: any) => typeof e?.desktop === 'string' && moved(e.desktop)
                 ? { ...e, desktop: `${e.desktop.slice(0, -fromId.length)}${toId}` }
                 : e)
             this.config.save()
         }
         for (const [key, id] of this.lastUsed) {
-            if (id === fromId) {
+            if (id === fromId && (key === DIRECT_KEY) === direct) {
                 this.lastUsed.set(key, toId)
             }
         }
@@ -834,7 +865,7 @@ export class RemoteDesktopService {
         }
         session.status('')
         const asked = askCredentials(session.overlay, {
-            title: spec.id === OWN_DESKTOP ? `Sign in to ${spec.name}` : `Sign in to ${spec.name} (via ${target.label})`,
+            title: spec.id === OWN_DESKTOP || target.direct ? `Sign in to ${spec.name}` : `Sign in to ${spec.name} (via ${target.label})`,
             username: spec.username,
             error: retryError,
             canRemember: true,
@@ -927,7 +958,8 @@ export class RemoteDesktopService {
 
             // DOMAIN\user or user@domain go to the server as typed; only the former needs splitting.
             const [domain, username] = /^([^\\]+)\\(.+)$/.exec(credentials.username)?.slice(1) ?? [spec.domain ?? '', credentials.username]
-            session.status(spec.id === OWN_DESKTOP ? `Connecting to ${target.label}…` : `Connecting to ${spec.name} via ${target.label}…`)
+            session.status(spec.id === OWN_DESKTOP ? `Connecting to ${target.label}…`
+                : target.direct ? `Connecting to ${spec.name}…` : `Connecting to ${spec.name} via ${target.label}…`)
             const config = session.ui.configBuilder()
                 .withUsername(username)
                 .withPassword(credentials.password)

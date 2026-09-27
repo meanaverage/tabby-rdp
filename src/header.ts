@@ -143,8 +143,10 @@ export class HeaderControls {
             return
         }
         const visible = this.desktop.isVisible(pane)
+        // None while a remote desktop tab shows its desktop: there is no console to switch to.
         const title = toggleLabel(this.desktop, pane)
-        if (this.toggleButton.title !== title) {
+        this.toggleButton.style.display = title ? '' : 'none'
+        if (title && this.toggleButton.title !== title) {
             this.toggleButton.title = title
             this.toggleButton.innerHTML = visible ? ICON_TERMINAL : ICON_DESKTOP
         }

@@ -27,6 +27,8 @@ Devolutions Gateway; here the proxy runs inside Tabby and relays to an SSH chann
   snapshot of the process tree), keeps its connection options (`-p -i -J -l -F -o …`, not forwards or TTY flags) and
   opens its own non-interactive connections with the system `ssh` (`BatchMode=yes`): `-W host:port` for tunnels,
   `sh -s` for setup. That needs key or agent authentication (or a ControlMaster).
+- **Remote desktop tabs** (RDP profiles, [below](#remote-desktop-tabs-rdp-profiles)): the proxy relays to a plain
+  TCP socket to the server; this is the one case that goes over the network without SSH.
 - **One desktop per account:** targets are compared as `user@hostname:port`, as resolved by `ssh -G`. A second tab to
   the same account switches to the tab that has the desktop open, instead of connecting a second client.
 
@@ -103,6 +105,32 @@ user. The edit form is the add form, filled in.
   connection is still encrypted, without forward secrecy. A certificate with the digital-signature usage on the
   Windows side avoids the fallback.
 
+## Remote desktop tabs (RDP profiles)
+
+For an RDP server reached without SSH, the plugin registers a Tabby profile type, `rdp` (`src/rdpProfile.ts`). A
+profile provider is what puts connections in Tabby's profile list, quick connect, recent profiles and tab recovery,
+so a desktop there behaves like any other connection. Tabby opens a profile as a tab component, so this is the
+plugin's one component: an empty host element that the same desktop layer (`DesktopSession`) fills, plus a line and a
+Connect button for when no desktop is open. Everything else (sign-in, keychain, reconnecting, resize, sharpness,
+keyboard, files, sound) is the SSH tabs' code, unchanged:
+
+- **The target:** `RemoteTarget` already abstracted "how to reach the RDP server"; a direct one (`DirectTarget` in
+  `src/targets.ts`) opens a plain `net` socket to the server instead of an SSH channel, runs no commands, and is always
+  "open", so reconnecting just retries. Its key is `rdp`, so its session key (keychain, `desktopSharpness`) is
+  `rdp#host:port`, apart from desktops behind hosts.
+- **No console:** the toggle, the header's switch button and "Back to console" leave a remote desktop tab alone, and
+  "Add a desktop behind…" isn't offered there.
+- **One desktop per server** still holds: opening the profile while another tab has that desktop brings that tab
+  forward and drops the new one.
+- **The profile's settings** in Tabby's editor are built by hand like the other forms. Editing the address moves the
+  saved account and sharpness to the new key, as the edit form does for desktops behind a host.
+
+**Through an SSH profile** (`via`): Tabby's SSH sessions need their tab for host-key questions, passwords and
+keyboard-interactive prompts, so the plugin doesn't open SSH connections of its own. Opening such a profile opens the
+SSH profile's own tab, and once it is connected shows the desktop over it, which is the existing desktops-behind-a-host
+path; the RDP profile then counts among the desktops of tabs opened from that SSH profile (matched by profile id). A
+local terminal running `ssh` can't be matched to a profile, so those desktops aren't offered there.
+
 ## Keyboard
 
 While a desktop covers the active pane (`src/keyboard.ts`):
@@ -143,6 +171,9 @@ end (signed out) or a desktop that never connected only offers a button.
 - **Credentials:** the generated RDP password is in a 0600 file in a 0700 folder. `grdctl` takes it as an argument, so
   it is briefly visible in the remote's process list while the setup runs.
 - **The local proxy** listens on 127.0.0.1 only, and requires a random token per desktop.
+- **Direct connections** (RDP profiles without `via`) go over the network as RDP does, TLS-encrypted, but the proxy
+  doesn't verify the server's certificate (RDP servers mostly have self-signed ones; the proxy never did, since over
+  SSH the SSH host key vouches for the path). On an untrusted network, go through SSH.
 - **`desk`'s sessions** are Unix sockets in the user's runtime directory, checked for owner and mode, with the peer's
   uid verified.
 
@@ -153,3 +184,8 @@ end (signed out) or a desktop that never connected only offers a button.
 - **IronRDP's component** forwards keys only while its own container is the first child of its shadow root, so styles
   go in through an adopted stylesheet, never an added element.
 - **Tabby skips a plugin** whose `package.json` has no `author`.
+- **Components** (`src/rdpProfile.ts`) are compiled at runtime by Angular's JIT compiler, which Tabby bootstraps with,
+  so plain `tsc` output works: inline templates, declared in the plugin's module. Their DOM is built by hand like the
+  rest of the plugin, so they need neither Angular's forms nor common modules. Tabby creates profile settings
+  components and tab components itself; a provider that ProfilesService depends on can't inject ProfilesService back,
+  so it looks it up from the injector when needed.
