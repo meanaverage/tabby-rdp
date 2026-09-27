@@ -47,7 +47,8 @@ function importESM (url: string): Promise<any> {
         script.remove()
     })
 }
-const vendor = (f: string) => pathToFileURL(path.join(__dirname, '..', 'vendor', f)).href
+const vendorFile = (f: string) => path.join(__dirname, '..', 'vendor', f)
+const vendor = (f: string) => pathToFileURL(vendorFile(f)).href
 
 const STYLE = `
 .trd-overlay { position: absolute; inset: 0; z-index: 30; display: flex; background: #111; }
@@ -1148,12 +1149,17 @@ export class RemoteDesktopService {
 
     private loadIronRDP (): Promise<any> {
         this.ironrdp ??= (async () => {
-            await importESM(vendor('iron-remote-desktop.js'))
-            const rdp = await importESM(vendor('iron-remote-desktop-rdp.js'))
+            // The WebAssembly ships as its own file (not inlined in the bundle). It is read here and handed to init,
+            // rather than fetched by the bundle from next to itself: fetch() of file:// URLs is up to the Electron
+            // build (a fuse turns it off), and a plain file path needs no URL escaping for spaces or drive letters.
+            const [rdp, wasm] = await Promise.all([
+                importESM(vendor('iron-remote-desktop.js')).then(() => importESM(vendor('iron-remote-desktop-rdp.js'))),
+                fs.promises.readFile(vendorFile('ironrdp_web_bg.wasm')),
+            ])
             // Troubleshooting: localStorage.trdLogLevel = 'DEBUG' (or TRACE), then restart Tabby.
             let level = 'INFO'
             try { level = localStorage.getItem('trdLogLevel') || level } catch { }
-            await rdp.init(level)
+            await rdp.init(level, wasm)
             return rdp
         })()
         this.ironrdp.catch(() => { this.ironrdp = null })

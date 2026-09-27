@@ -8,7 +8,7 @@ Issues and pull requests are welcome. For anything larger than a fix, please ope
 |---|---|
 | `src/` | The plugin (TypeScript, Angular services, and one small tab component for RDP profiles). `index.ts` wires it into Tabby. |
 | `remote/trd-pty.py` | The shared-session helper `desk` installs on the remote (Python 3 standard library). |
-| `vendor/` | IronRDP's web client, built from `ironrdp/` (don't edit by hand). |
+| `vendor/` | IronRDP's web client and its WebAssembly, built from `ironrdp/` (don't edit by hand). |
 | `ironrdp/` | The IronRDP base commit and the patch series applied to it. |
 | `test/` | End-to-end suites, their harness and runner, and trd-pty's own tests. |
 | `testbed/` | Scripts to set up test machines. |
