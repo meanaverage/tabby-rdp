@@ -40,6 +40,8 @@ export class RemoteDesktopConfig extends ConfigProvider {
             zoom: 'fit',
             // A small indicator on the desktop: throughput, frames per second, SSH round trip, connection path.
             connectionStatus: false,
+            // Send the microphone to the remote desktop while an application there records (applies on the next connect).
+            microphone: false,
             // More desktops behind SSH hosts (e.g. a Windows VM whose RDP port the host forwards); see desktops.ts.
             desktops: [],
             // Sharpness for particular desktops, overriding `sharpness`: [{ desktop: <session key>, sharpness }].
@@ -200,6 +202,12 @@ export function settingsMenu (desktop: RemoteDesktopService, pane?: DesktopPane 
             label: 'Play the remote desktop\'s sound (applies on the next connect)',
             checked: current.sound,
             click: () => desktop.updateSettings({ sound: !current.sound }),
+        },
+        {
+            type: 'checkbox',
+            label: 'Send the microphone while an app on the remote desktop records (applies on the next connect)',
+            checked: current.microphone,
+            click: () => desktop.updateSettings({ microphone: !current.microphone }),
         },
         {
             type: 'checkbox',

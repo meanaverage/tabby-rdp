@@ -9,6 +9,7 @@ import { DesktopPane, desktopPaneOf, RemoteTarget, RemoteTargets } from './targe
 import { consoleScript, DeskRequest } from './deskScript'
 import { AudioPlayer } from './audio'
 import { ConnectionStatus, STYLE as STATS_STYLE } from './connectionStatus'
+import { Microphone } from './microphone'
 import { askNewDesktop } from './desktopForm'
 import { FileTransfer, STYLE as FILES_STYLE, uniquePath } from './fileTransfer'
 import { DesktopSpec, desktopsFor, ExtraDesktopConfig, OWN_DESKTOP, OwnDesktopFound, sessionKey } from './desktops'
@@ -58,6 +59,10 @@ const STYLE = `
 .trd-overlay.trd-view-only-on .trd-view-only { display: block; }
 .trd-view-only::after { content: 'View only'; position: absolute; top: 8px; left: 8px; padding: 2px 8px; border-radius: 4px;
     background: rgba(30, 30, 30, 0.85); color: #ddd; font-size: 11px; pointer-events: none; }
+.trd-mic { position: absolute; top: 8px; right: 8px; width: 22px; height: 22px; border-radius: 50%; display: none;
+    align-items: center; justify-content: center; background: rgba(220, 38, 38, 0.85); color: #fff; font-size: 11px;
+    pointer-events: none; }
+.trd-overlay.trd-mic-on .trd-mic { display: flex; }
 `
 
 /** A button in the desktop layer's status (Reconnect, Stop, …). */
@@ -106,6 +111,8 @@ export interface DesktopSettings {
     zoom: 'fit' | 'actual'
     /** A small indicator on the desktop: throughput, frames per second, SSH round trip, connection path. */
     connectionStatus: boolean
+    /** Send the microphone to the remote desktop while an application there records (applies on the next connect). */
+    microphone: boolean
 }
 
 interface RemoteSize {
@@ -179,6 +186,8 @@ class DesktopSession {
     remote: RemoteTarget | null = null
     /** Plays the remote's sound, when the sound setting was on at connect. */
     audio: AudioPlayer | null = null
+    /** Captures the microphone for the remote, when the microphone setting was on at connect. */
+    mic: Microphone | null = null
     /** Files through the clipboard (drop on the desktop, or copy on the remote). */
     files: FileTransfer | null = null
     /** No keyboard or mouse input goes to the remote (keys: see keyboard.ts; the mouse: a layer over the picture). */
@@ -203,6 +212,7 @@ class DesktopSession {
         this.overlay.innerHTML = `
             <div class="trd-host"></div>
             <div class="trd-view-only" title="View only: no keyboard or mouse input goes to the remote desktop"></div>
+            <div class="trd-mic"><i class="fas fa-microphone"></i></div>
             <div class="trd-status"><div class="trd-status-text"></div><div class="trd-status-actions"></div></div>`
         this.host = this.overlay.querySelector('.trd-host')!
         this.statusEl = this.overlay.querySelector('.trd-status')!
@@ -306,6 +316,7 @@ class DesktopSession {
         this.indicator?.dispose()
         try { this.ui?.shutdown() } catch { }
         this.audio?.close()
+        this.mic?.close()
         this.files?.dispose()
         this.proxy?.close()
         this.overlay.remove()
@@ -716,6 +727,7 @@ export class RemoteDesktopService {
             sound: store.sound !== false,
             zoom: store.zoom === 'actual' ? 'actual' : 'fit',
             connectionStatus: store.connectionStatus === true,
+            microphone: store.microphone === true,
         }
     }
 
@@ -1287,6 +1299,19 @@ export class RemoteDesktopService {
                 session.audio = new AudioPlayer()
                 config.withExtension(rdp.audioPlayback(session.audio.callback))
             }
+            session.mic?.close()
+            session.mic = null
+            if (settings.microphone && typeof rdp.audioInput === 'function') {
+                const ui = session.ui
+                const mic: Microphone = new Microphone(
+                    pcm => ui.invokeExtension(rdp.audioInputData(pcm)),
+                    () => session.overlay.classList.toggle('trd-mic-on', mic.capturing),
+                    m => session.log.push(m),
+                    m => this.zone.run(() => this.notifications.error(m)),
+                )
+                session.mic = mic
+                config.withExtension(rdp.audioInput(mic.callback))
+            }
             const built = config.build()
             let info: any
             try {
@@ -1334,6 +1359,9 @@ export class RemoteDesktopService {
                 end = await info.run()
             } catch (e: any) {
                 return { connected: true, error: typeof e?.backtrace === 'function' ? e.backtrace().split('\n')[0] : (e?.message ?? String(e)) }
+            } finally {
+                // The server can't close the microphone once the connection is gone.
+                session.mic?.close()
             }
             return { connected: true, reason: end?.reason?.() }
         } catch (e: any) {
