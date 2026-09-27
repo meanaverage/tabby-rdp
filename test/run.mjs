@@ -5,6 +5,7 @@
 //   npm test                          # the Linux-desktop suites (needs TRD_TEST_HOST)
 //   npm test -- keyboard files        # some suites
 //   npm test -- windows               # the Windows suite (needs TRD_TEST_WIN_*)
+//   npm test -- xrdp                  # the xrdp suite (needs TRD_TEST_XRDP_*)
 //   npm test -- --packed              # install the plugin as npm would (npm pack), not linked
 //   npm test -- --port 9334           # use a Tabby that is already running with DevTools on that port
 //   npm test -- --keep                # leave the test Tabby open afterwards
@@ -17,8 +18,8 @@ import { fileURLToPath } from 'node:url'
 import { waitForPort } from './lib/cdp.mjs'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
-const LINUX_SUITES = ['e2e', 'desk', 'resize', 'keyboard', 'clipboard', 'files', 'audio', 'graphics', 'reconnect', 'desktops']
-const ALL_SUITES = [...LINUX_SUITES, 'windows', 'trd-pty', 'screenshots']
+const LINUX_SUITES = ['e2e', 'desk', 'resize', 'keyboard', 'actions', 'clipboard', 'files', 'audio', 'microphone', 'graphics', 'reconnect', 'desktops', 'profiles', 'certificates', 'status', 'wake']
+const ALL_SUITES = [...LINUX_SUITES, 'windows', 'winhost', 'xrdp', 'trd-pty', 'screenshots']
 
 const args = process.argv.slice(2)
 const flag = name => args.includes(name)
@@ -66,6 +67,8 @@ function makeSandbox () {
         'enableWelcomeTab: false',
         'enableAnalytics: false',
         'recoverTabs: false',
+        // It runs the installed Tabby: its updater would try to replace that app (macOS asks about it, or blocks it).
+        'enableAutomaticUpdates: false',
         'remoteDesktop:',
         '  desk: true',
         '',

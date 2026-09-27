@@ -1,0 +1,882 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: meanaverage <18336095+meanaverage@users.noreply.github.com>
+Date: Sun, 27 Sep 2026 01:44:42 -0700
+Subject: [PATCH 7/8] feat(web): microphone redirection (AUDIO_INPUT) through
+ an `audioInput` callback
+
+The web client could not redirect a microphone. With the new
+`audioInput(callback)` extension, it advertises audio capture
+(INFO_AUDIOCAPTURE) and listens for the AUDIO_INPUT dynamic channel
+([MS-RDPEAI]) with `ironrdp-rdpeai`'s client, offering 16-bit PCM at 48,
+44.1, 22.05 and 16 kHz, mono and stereo. The browser captures, so the
+backend only tells the callback what the server asked for:
+`{ type: 'open', sampleRate, channels }` when capture should start (or
+switch format) and `{ type: 'close' }` when it should stop. JavaScript
+pushes interleaved 16-bit PCM back with `audioInputData(samples)`
+through `invokeExtension`, in any length; it is cut into the packet size
+the server asked for, and dropped while no capture is open.
+
+Servers open the channel when a remote application starts recording and
+close it when it stops (Windows, and GNOME Remote Desktop, which opens
+it while something records from its PipeWire source), so a listener
+creates a fresh client for each opening rather than registering one
+channel once.
+
+The Open PDU's capture format only sets the packet length in frames;
+Data PDUs carry the negotiated encoding format. GNOME Remote Desktop
+describes 44.1 kHz stereo as WAVE_FORMAT_EXTENSIBLE there, which the
+backend accepts.
+
+[MS-RDPEAI]: https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-rdpeai/
+---
+ Cargo.lock                                    |   1 +
+ .../tests/rdpeai/client.rs                    | 115 ++++-
+ crates/ironrdp-web/Cargo.toml                 |   1 +
+ crates/ironrdp-web/src/audio_input.rs         | 424 ++++++++++++++++++
+ crates/ironrdp-web/src/lib.rs                 |   1 +
+ crates/ironrdp-web/src/session.rs             |  55 ++-
+ .../src/audioInput.test.ts                    |  48 ++
+ .../iron-remote-desktop-rdp/src/main.ts       |  23 +
+ 8 files changed, 665 insertions(+), 3 deletions(-)
+ create mode 100644 crates/ironrdp-web/src/audio_input.rs
+ create mode 100644 web-client/iron-remote-desktop-rdp/src/audioInput.test.ts
+
+diff --git a/Cargo.lock b/Cargo.lock
+index 08eb89da..130bb127 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -3560,6 +3560,7 @@ dependencies = [
+  "ironrdp-pdu",
+  "ironrdp-propertyset",
+  "ironrdp-rdcleanpath",
++ "ironrdp-rdpeai",
+  "ironrdp-rdpfile",
+  "ironrdp-svc",
+  "ironrdp-vmconnect",
+diff --git a/crates/ironrdp-testsuite-core/tests/rdpeai/client.rs b/crates/ironrdp-testsuite-core/tests/rdpeai/client.rs
+index 94c737ac..a12db774 100644
+--- a/crates/ironrdp-testsuite-core/tests/rdpeai/client.rs
++++ b/crates/ironrdp-testsuite-core/tests/rdpeai/client.rs
+@@ -1,5 +1,5 @@
+ use core::sync::atomic::{AtomicUsize, Ordering};
+-use std::sync::Arc;
++use std::sync::{Arc, Mutex};
+ 
+ use ironrdp_core::{decode, encode_vec};
+ use ironrdp_dvc::DvcProcessor as _;
+@@ -7,7 +7,7 @@ use ironrdp_rdpeai::client::{AudioPacketSink, RdpeaiCaptureHandler, RdpeaiClient
+ use ironrdp_rdpeai::pdu::{
+     FormatChangePdu, FormatsPdu, OpenPdu, OpenReplyPdu, RdpeaiPdu, Version, VersionPdu, pcm_format,
+ };
+-use ironrdp_rdpsnd::pdu::AudioFormat;
++use ironrdp_rdpsnd::pdu::{AudioFormat, WaveFormat};
+ 
+ struct MockCapture {
+     formats: Vec<AudioFormat>,
+@@ -275,3 +275,114 @@ fn out_of_sequence_version_is_ignored() {
+     assert_eq!(set_format_calls.load(Ordering::Relaxed), 1);
+     assert!(matches!(decode_dvc(&change_out[0]), RdpeaiPdu::FormatChange(_)));
+ }
++
++/// Records what `open` got, and keeps the sink to push captured audio later (as a host that captures on its own
++/// schedule, such as a browser, does).
++struct PushCapture {
++    formats: Vec<AudioFormat>,
++    opened: Arc<Mutex<Option<OpenedCapture>>>,
++}
++
++type OpenedCapture = (AudioFormat, AudioFormat, usize, AudioPacketSink);
++
++impl RdpeaiCaptureHandler for PushCapture {
++    fn supported_formats(&self) -> &[AudioFormat] {
++        &self.formats
++    }
++
++    fn open(
++        &mut self,
++        capture_format: &AudioFormat,
++        encode_format: &AudioFormat,
++        packet_size: usize,
++        sink: AudioPacketSink,
++    ) -> i32 {
++        *self.opened.lock().unwrap() = Some((capture_format.clone(), encode_format.clone(), packet_size, sink));
++        OpenReplyPdu::S_OK
++    }
++
++    fn set_format(&mut self, _encode_format: &AudioFormat, _packet_size: usize) -> bool {
++        true
++    }
++
++    fn close(&mut self) {
++        *self.opened.lock().unwrap() = None;
++    }
++}
++
++/// GNOME Remote Desktop offers A-law and PCM, both 44.1 kHz stereo, and describes the capture format of its Open
++/// as WAVE_FORMAT_EXTENSIBLE (PCM subtype), with 441 frames per packet.
++#[test]
++fn gnome_remote_desktop_negotiation_and_pushed_data() {
++    let pcm = pcm_format(2, 44_100, 16);
++    let alaw = AudioFormat {
++        format: WaveFormat::ALAW,
++        n_channels: 2,
++        n_samples_per_sec: 44_100,
++        n_avg_bytes_per_sec: 88_200,
++        n_block_align: 2,
++        bits_per_sample: 8,
++        data: None,
++    };
++    let extensible_extra = vec![
++        16, 0, // wValidBitsPerSample
++        3, 0, 0, 0, // dwChannelMask
++        0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x00, // SubFormat: KSDATAFORMAT_SUBTYPE_PCM
++        0x80, 0x00, 0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71,
++    ];
++    let capture = AudioFormat {
++        format: WaveFormat::EXTENSIBLE,
++        data: Some(extensible_extra),
++        ..pcm_format(2, 44_100, 16)
++    };
++
++    let opened = Arc::new(Mutex::new(None));
++    let uplinked = Arc::new(Mutex::new(Vec::new()));
++    let uplink_log = Arc::clone(&uplinked);
++    let mut client = RdpeaiClient::new(
++        Box::new(PushCapture {
++            formats: vec![pcm_format(1, 48_000, 16), pcm_format(1, 44_100, 16), pcm.clone()],
++            opened: Arc::clone(&opened),
++        }),
++        Box::new(move |channel_id, messages| {
++            uplink_log.lock().unwrap().push((channel_id, messages.len()));
++            Ok(())
++        }),
++    );
++
++    client.start(3).unwrap();
++    let _ = process_encoded(&mut client, 3, RdpeaiPdu::Version(VersionPdu::new(Version::V1)));
++    let formats_out = process_encoded(
++        &mut client,
++        3,
++        RdpeaiPdu::Formats(FormatsPdu::server(vec![alaw, pcm.clone()])),
++    );
++    match decode_dvc(&formats_out[1]) {
++        // Only the format both sides have, so GNOME's Open refers to index 0.
++        RdpeaiPdu::Formats(formats) => assert_eq!(formats.formats, vec![pcm.clone()]),
++        other => panic!("expected client Formats, got {other:?}"),
++    }
++
++    let open_out = process_encoded(
++        &mut client,
++        3,
++        RdpeaiPdu::Open(OpenPdu {
++            frames_per_packet: 441,
++            initial_format: 0,
++            capture_format: capture.clone(),
++        }),
++    );
++    match decode_dvc(&open_out[1]) {
++        RdpeaiPdu::OpenReply(reply) => assert_eq!(reply.result, OpenReplyPdu::S_OK),
++        other => panic!("expected OpenReply ok, got {other:?}"),
++    }
++
++    let (open_capture, open_encode, packet_size, mut sink) = opened.lock().unwrap().take().expect("opened");
++    assert_eq!(open_capture, capture);
++    assert_eq!(open_encode, pcm);
++    assert_eq!(packet_size, 441 * 2 * 2);
++
++    // Audio pushed later goes out on the channel as Incoming Data, then Data (1765 bytes: two DVC chunks).
++    sink(vec![0; packet_size]);
++    assert_eq!(*uplinked.lock().unwrap(), vec![(3, 3)]);
++}
+diff --git a/crates/ironrdp-web/Cargo.toml b/crates/ironrdp-web/Cargo.toml
+index 8c496225..88a95b8c 100644
+--- a/crates/ironrdp-web/Cargo.toml
++++ b/crates/ironrdp-web/Cargo.toml
+@@ -43,6 +43,7 @@ ironrdp-egfx.path = "../ironrdp-egfx"
+ ironrdp-cliprdr-format.path = "../ironrdp-cliprdr-format"
+ ironrdp-futures.path = "../ironrdp-futures"
+ ironrdp-pdu.path = "../ironrdp-pdu"
++ironrdp-rdpeai.path = "../ironrdp-rdpeai"
+ ironrdp-rdcleanpath.path = "../ironrdp-rdcleanpath"
+ ironrdp-vmconnect.path = "../ironrdp-vmconnect"
+ ironrdp-propertyset.path = "../ironrdp-propertyset"
+diff --git a/crates/ironrdp-web/src/audio_input.rs b/crates/ironrdp-web/src/audio_input.rs
+new file mode 100644
+index 00000000..5f21f8ec
+--- /dev/null
++++ b/crates/ironrdp-web/src/audio_input.rs
+@@ -0,0 +1,424 @@
++//! Microphone redirection (MS-RDPEAI over the `AUDIO_INPUT` dynamic channel).
++//!
++//! Servers open the channel when a remote application starts recording and close it when it stops (Windows
++//! does, and so does GNOME Remote Desktop once something records from its PipeWire source), so a listener hands
++//! out a fresh [`RdpeaiClient`] for every opening. The capture backend lives inside that DVC processor, which
++//! must be `Send`: it only tells the session loop which format the server wants, and the loop hands that to the
++//! JS callback registered with the `audio_input` extension. JS captures the microphone itself and pushes 16-bit
++//! PCM back with the `audio_input_data` extension; [`AudioInputSink::push`] cuts it into Data PDUs for the open
++//! channel.
++
++use std::sync::{Arc, Mutex};
++
++use futures_channel::mpsc;
++use ironrdp::dvc::{DvcChannelListener, DvcClientProcessor};
++use ironrdp::rdpsnd::pdu::{AudioFormat, WaveFormat};
++use ironrdp_rdpeai::client::{AudioPacketSink, RdpeaiCaptureHandler, RdpeaiClient};
++use ironrdp_rdpeai::pdu::{MAX_DATA_PACKET_SIZE, OpenReplyPdu, pcm_format};
++use ironrdp_svc::SvcMessage;
++use tracing::{debug, warn};
++use wasm_bindgen::JsValue;
++
++use crate::session::RdpInputEvent;
++
++/// What the capture backend tells the session loop (and so the JS callback).
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++pub(crate) enum AudioInputMessage {
++    /// Start capturing (or switch to this format): interleaved 16-bit PCM at this rate and channel count.
++    Open { sample_rate: u32, channels: u16 },
++    /// Stop capturing: the server closed the device.
++    Close,
++}
++
++/// DRDYNVC Data PDUs for the open `AUDIO_INPUT` channel, encoded, on their way to the session loop.
++///
++/// Encoded because session events must be `Sync` and [`SvcMessage`] is not; the loop wraps them again (they
++/// carry no extra channel flags).
++#[derive(Debug)]
++pub(crate) struct AudioInputUplink(Vec<Vec<u8>>);
++
++impl AudioInputUplink {
++    pub(crate) fn into_messages(self) -> Vec<SvcMessage> {
++        self.0.into_iter().map(SvcMessage::from).collect()
++    }
++}
++
++struct OpenCapture {
++    sink: AudioPacketSink,
++    packet_size: usize,
++    buffer: Vec<u8>,
++}
++
++/// Where PCM from JS goes: the open channel's packet sink, if the server has the device open.
++///
++/// Shared by the session (which receives the PCM) and the capture backends the listener creates.
++#[derive(Clone, Default)]
++pub(crate) struct AudioInputSink(Arc<Mutex<Option<OpenCapture>>>);
++
++impl AudioInputSink {
++    /// Queues interleaved 16-bit little-endian PCM in the negotiated format, and sends every full packet.
++    ///
++    /// Returns false (and drops the data) while the server has no capture open, which is normal right after it
++    /// closed the device.
++    pub(crate) fn push(&self, data: &[u8]) -> bool {
++        let Ok(mut guard) = self.0.lock() else {
++            return false;
++        };
++        let Some(open) = guard.as_mut() else {
++            return false;
++        };
++        open.buffer.extend_from_slice(data);
++        let mut start = 0;
++        while open.buffer.len() - start >= open.packet_size {
++            let end = start + open.packet_size;
++            (open.sink)(open.buffer[start..end].to_vec());
++            start = end;
++        }
++        open.buffer.drain(..start);
++        true
++    }
++
++    fn open(&self, sink: AudioPacketSink, packet_size: usize) {
++        if let Ok(mut guard) = self.0.lock() {
++            *guard = Some(OpenCapture {
++                sink,
++                packet_size,
++                buffer: Vec::with_capacity(packet_size),
++            });
++        }
++    }
++
++    fn set_packet_size(&self, packet_size: usize) {
++        if let Ok(mut guard) = self.0.lock() {
++            if let Some(open) = guard.as_mut() {
++                open.packet_size = packet_size;
++                // Samples buffered in the previous format would be misread in the new one.
++                open.buffer.clear();
++            }
++        }
++    }
++
++    fn close(&self) {
++        if let Ok(mut guard) = self.0.lock() {
++            *guard = None;
++        }
++    }
++}
++
++/// Uncompressed 16-bit PCM only: it's what the browser produces (after resampling), and all servers accept it.
++///
++/// GNOME Remote Desktop only takes 44.1 kHz stereo (or A-law); Windows offers many and picks from this list.
++/// Mono first where the server also has it: it halves the upload, and a microphone is mono anyway.
++fn default_formats() -> Vec<AudioFormat> {
++    vec![
++        pcm_format(1, 48_000, 16),
++        pcm_format(1, 44_100, 16),
++        pcm_format(2, 48_000, 16),
++        pcm_format(2, 44_100, 16),
++        pcm_format(1, 22_050, 16),
++        pcm_format(2, 22_050, 16),
++        pcm_format(1, 16_000, 16),
++    ]
++}
++
++/// The capture backend of one `AUDIO_INPUT` channel opening.
++pub(crate) struct WasmCaptureBackend {
++    tx: mpsc::UnboundedSender<RdpInputEvent>,
++    sink: AudioInputSink,
++    formats: Vec<AudioFormat>,
++    /// Frames per Data PDU, from the server's Open.
++    frames_per_packet: Option<usize>,
++}
++
++impl WasmCaptureBackend {
++    pub(crate) fn new(tx: mpsc::UnboundedSender<RdpInputEvent>, sink: AudioInputSink) -> Self {
++        Self {
++            tx,
++            sink,
++            formats: default_formats(),
++            frames_per_packet: None,
++        }
++    }
++
++    fn send(&self, message: AudioInputMessage) {
++        if self.tx.unbounded_send(RdpInputEvent::AudioInput(message)).is_err() {
++            debug!("Audio input message dropped: the session loop is gone");
++        }
++    }
++
++    /// The Data PDU size for `frames` frames in `format`, if the format is one this backend produces.
++    fn packet_size(format: &AudioFormat, frames: usize) -> Option<usize> {
++        if format.format != WaveFormat::PCM || format.bits_per_sample != 16 || format.n_channels == 0 {
++            return None;
++        }
++        let size = frames.checked_mul(usize::from(format.n_channels))?.checked_mul(2)?;
++        (0 < size && size <= MAX_DATA_PACKET_SIZE).then_some(size)
++    }
++}
++
++impl RdpeaiCaptureHandler for WasmCaptureBackend {
++    fn supported_formats(&self) -> &[AudioFormat] {
++        &self.formats
++    }
++
++    fn open(
++        &mut self,
++        capture_format: &AudioFormat,
++        encode_format: &AudioFormat,
++        packet_size: usize,
++        sink: AudioPacketSink,
++    ) -> i32 {
++        // Data PDUs carry the encoding format (`initialFormat`, one of ours); the capture WAVEFORMATEX only tells
++        // the packet length in frames. It needn't match the encoding: GNOME Remote Desktop describes 44.1 kHz
++        // stereo as WAVE_FORMAT_EXTENSIBLE, and FreeRDP's client ignores it altogether.
++        let frames = packet_size / (usize::from(capture_format.n_channels.max(1)) * 2);
++        let Some(size) = Self::packet_size(encode_format, frames) else {
++            warn!(
++                ?encode_format,
++                frames, "Refusing audio capture open: unsupported format"
++            );
++            return OpenReplyPdu::E_FAIL;
++        };
++        self.frames_per_packet = Some(frames);
++        self.sink.open(sink, size);
++        debug!(
++            sample_rate = encode_format.n_samples_per_sec,
++            channels = encode_format.n_channels,
++            packet_size = size,
++            "Audio capture opened"
++        );
++        self.send(AudioInputMessage::Open {
++            sample_rate: encode_format.n_samples_per_sec,
++            channels: encode_format.n_channels,
++        });
++        OpenReplyPdu::S_OK
++    }
++
++    fn set_format(&mut self, encode_format: &AudioFormat, _packet_size: usize) -> bool {
++        let Some(size) = self
++            .frames_per_packet
++            .and_then(|frames| Self::packet_size(encode_format, frames))
++        else {
++            return false;
++        };
++        self.sink.set_packet_size(size);
++        self.send(AudioInputMessage::Open {
++            sample_rate: encode_format.n_samples_per_sec,
++            channels: encode_format.n_channels,
++        });
++        true
++    }
++
++    fn close(&mut self) {
++        // The client also closes a backend that never opened (channel closed during negotiation).
++        if self.frames_per_packet.take().is_some() {
++            self.sink.close();
++            self.send(AudioInputMessage::Close);
++        }
++    }
++}
++
++/// Hands out a fresh `AUDIO_INPUT` client for every channel the server opens (see the module docs).
++pub(crate) struct AudioInputListener {
++    pub(crate) tx: mpsc::UnboundedSender<RdpInputEvent>,
++    pub(crate) sink: AudioInputSink,
++}
++
++impl DvcChannelListener for AudioInputListener {
++    fn channel_name(&self) -> &str {
++        ironrdp_rdpeai::CHANNEL_NAME
++    }
++
++    fn create(&mut self, _channel_id: u32) -> Option<Box<dyn DvcClientProcessor>> {
++        let uplink_tx = self.tx.clone();
++        Some(Box::new(RdpeaiClient::new(
++            Box::new(WasmCaptureBackend::new(self.tx.clone(), self.sink.clone())),
++            Box::new(move |_channel_id, messages| {
++                let encoded = messages
++                    .iter()
++                    .map(SvcMessage::encode_unframed_pdu)
++                    .collect::<Result<Vec<_>, _>>()
++                    .map_err(|error| ironrdp_pdu::encode_err!(error))?;
++                if uplink_tx
++                    .unbounded_send(RdpInputEvent::AudioInputUplink(AudioInputUplink(encoded)))
++                    .is_err()
++                {
++                    debug!("Audio input data dropped: the session loop is gone");
++                }
++                Ok(())
++            }),
++        )))
++    }
++}
++
++/// The message as the object the JS callback receives: `{ type: 'open', sampleRate, channels }` or
++/// `{ type: 'close' }`.
++pub(crate) fn to_js(message: AudioInputMessage) -> JsValue {
++    let object = js_sys::Object::new();
++    let set = |key: &str, value: JsValue| {
++        let _ = js_sys::Reflect::set(&object, &JsValue::from_str(key), &value);
++    };
++    match message {
++        AudioInputMessage::Open { sample_rate, channels } => {
++            set("type", JsValue::from_str("open"));
++            set("sampleRate", JsValue::from(sample_rate));
++            set("channels", JsValue::from(channels));
++        }
++        AudioInputMessage::Close => set("type", JsValue::from_str("close")),
++    }
++    object.into()
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    fn backend() -> (
++        WasmCaptureBackend,
++        mpsc::UnboundedReceiver<RdpInputEvent>,
++        AudioInputSink,
++    ) {
++        let (tx, rx) = mpsc::unbounded();
++        let sink = AudioInputSink::default();
++        (WasmCaptureBackend::new(tx, sink.clone()), rx, sink)
++    }
++
++    fn collecting_sink() -> (AudioPacketSink, Arc<Mutex<Vec<Vec<u8>>>>) {
++        let packets = Arc::new(Mutex::new(Vec::new()));
++        let collected = Arc::clone(&packets);
++        (
++            Box::new(move |packet| collected.lock().expect("lock").push(packet)),
++            packets,
++        )
++    }
++
++    fn next_message(rx: &mut mpsc::UnboundedReceiver<RdpInputEvent>) -> Option<AudioInputMessage> {
++        match rx.try_recv() {
++            Ok(RdpInputEvent::AudioInput(message)) => Some(message),
++            _ => None,
++        }
++    }
++
++    /// GNOME Remote Desktop's Open: 441 frames of 44.1 kHz stereo, described as WAVE_FORMAT_EXTENSIBLE.
++    fn extensible_capture_format() -> AudioFormat {
++        AudioFormat {
++            format: WaveFormat::EXTENSIBLE,
++            data: Some(vec![0; 22]),
++            ..pcm_format(2, 44_100, 16)
++        }
++    }
++
++    #[test]
++    fn open_reports_the_encoding_format_and_packetizes_pushed_pcm() {
++        let (mut backend, mut rx, sink) = backend();
++        let (packet_sink, packets) = collecting_sink();
++        let result = backend.open(
++            &extensible_capture_format(),
++            &pcm_format(2, 44_100, 16),
++            441 * 4,
++            packet_sink,
++        );
++        assert_eq!(result, OpenReplyPdu::S_OK);
++        assert_eq!(
++            next_message(&mut rx),
++            Some(AudioInputMessage::Open {
++                sample_rate: 44_100,
++                channels: 2
++            })
++        );
++
++        assert!(sink.push(&[1; 1000]));
++        assert!(packets.lock().expect("lock").is_empty());
++        assert!(sink.push(&[2; 3000]));
++        let sent = packets.lock().expect("lock").clone();
++        assert_eq!(sent.len(), 2);
++        assert!(sent.iter().all(|packet| packet.len() == 1764));
++        assert_eq!(&sent[0][..1000], &[1; 1000][..]);
++        assert_eq!(sent[0][1000], 2);
++    }
++
++    #[test]
++    fn packet_length_follows_the_encoding_channels() {
++        // Stereo capture described, mono encoding chosen: same frames per packet, half the bytes.
++        let (mut backend, _rx, sink) = backend();
++        let (packet_sink, packets) = collecting_sink();
++        let capture = pcm_format(2, 48_000, 16);
++        assert_eq!(
++            backend.open(&capture, &pcm_format(1, 48_000, 16), 480 * 4, packet_sink),
++            OpenReplyPdu::S_OK
++        );
++        sink.push(&[0; 960]);
++        assert_eq!(packets.lock().expect("lock").len(), 1);
++    }
++
++    #[test]
++    fn format_change_keeps_frames_per_packet_and_tells_js() {
++        let (mut backend, mut rx, sink) = backend();
++        let (packet_sink, packets) = collecting_sink();
++        backend.open(
++            &pcm_format(1, 48_000, 16),
++            &pcm_format(1, 48_000, 16),
++            480 * 2,
++            packet_sink,
++        );
++        let _ = next_message(&mut rx);
++        sink.push(&[0; 100]);
++
++        assert!(backend.set_format(&pcm_format(2, 44_100, 16), 480 * 2));
++        assert_eq!(
++            next_message(&mut rx),
++            Some(AudioInputMessage::Open {
++                sample_rate: 44_100,
++                channels: 2
++            })
++        );
++        // The 100 bytes in the old format were dropped; a packet is now 480 stereo frames.
++        sink.push(&[0; 1920]);
++        let sent = packets.lock().expect("lock").clone();
++        assert_eq!(sent.len(), 1);
++        assert_eq!(sent[0].len(), 1920);
++    }
++
++    #[test]
++    fn close_stops_forwarding_and_is_reported_once() {
++        let (mut backend, mut rx, sink) = backend();
++        let (packet_sink, packets) = collecting_sink();
++        backend.open(
++            &pcm_format(1, 16_000, 16),
++            &pcm_format(1, 16_000, 16),
++            160 * 2,
++            packet_sink,
++        );
++        let _ = next_message(&mut rx);
++
++        backend.close();
++        backend.close();
++        assert_eq!(next_message(&mut rx), Some(AudioInputMessage::Close));
++        assert_eq!(next_message(&mut rx), None);
++        assert!(!sink.push(&[0; 640]));
++        assert!(packets.lock().expect("lock").is_empty());
++    }
++
++    #[test]
++    fn close_without_open_says_nothing() {
++        let (mut backend, mut rx, _sink) = backend();
++        backend.close();
++        assert_eq!(next_message(&mut rx), None);
++    }
++
++    #[test]
++    fn open_refuses_formats_it_cannot_produce() {
++        let (mut backend, mut rx, _sink) = backend();
++        let (packet_sink, _) = collecting_sink();
++        let alaw = AudioFormat {
++            format: WaveFormat::ALAW,
++            bits_per_sample: 8,
++            ..pcm_format(2, 44_100, 8)
++        };
++        assert_eq!(
++            backend.open(&pcm_format(2, 44_100, 16), &alaw, 441 * 4, packet_sink),
++            OpenReplyPdu::E_FAIL
++        );
++        assert_eq!(next_message(&mut rx), None);
++    }
++}
+diff --git a/crates/ironrdp-web/src/lib.rs b/crates/ironrdp-web/src/lib.rs
+index 9002dbb7..8ac2b44b 100644
+--- a/crates/ironrdp-web/src/lib.rs
++++ b/crates/ironrdp-web/src/lib.rs
+@@ -16,6 +16,7 @@ extern crate getrandom4 as _;
+ extern crate time as _;
+ 
+ mod audio;
++mod audio_input;
+ mod canvas;
+ mod clipboard;
+ mod error;
+diff --git a/crates/ironrdp-web/src/session.rs b/crates/ironrdp-web/src/session.rs
+index 014878fa..a96ae6e3 100644
+--- a/crates/ironrdp-web/src/session.rs
++++ b/crates/ironrdp-web/src/session.rs
+@@ -93,6 +93,7 @@ struct SessionBuilderInner {
+     use_display_control: bool,
+     use_graphics_pipeline: bool,
+     audio_playback_callback: Option<js_sys::Function>,
++    audio_input_callback: Option<js_sys::Function>,
+     enable_credssp: bool,
+     enable_server_pointer: bool,
+     legacy_graphics: bool,
+@@ -140,6 +141,7 @@ impl Default for SessionBuilderInner {
+             use_display_control: false,
+             use_graphics_pipeline: false,
+             audio_playback_callback: None,
++            audio_input_callback: None,
+             enable_credssp: true,
+             enable_server_pointer: true,
+             legacy_graphics: false,
+@@ -267,6 +269,10 @@ impl iron_remote_desktop::SessionBuilder for SessionBuilder {
+                 // A function receiving the audio (see audio::to_js); anything else turns playback off.
+                 self.0.borrow_mut().audio_playback_callback = audio_playback.dyn_into::<js_sys::Function>().ok();
+             };
++            |audio_input: JsValue| {
++                // A function told when to capture (see audio_input::to_js); anything else turns the microphone off.
++                self.0.borrow_mut().audio_input_callback = audio_input.dyn_into::<js_sys::Function>().ok();
++            };
+             |enable_credssp: bool| { self.0.borrow_mut().enable_credssp = enable_credssp };
+             |enable_server_pointer: bool| { self.0.borrow_mut().enable_server_pointer = enable_server_pointer };
+             |legacy_graphics: bool| { self.0.borrow_mut().legacy_graphics = legacy_graphics };
+@@ -446,6 +452,13 @@ impl iron_remote_desktop::SessionBuilder for SessionBuilder {
+         // Audio playback (RDPSND) when a callback takes the audio.
+         let audio_playback_callback = self.0.borrow().audio_playback_callback.clone();
+         config.enable_audio_playback = audio_playback_callback.is_some();
++        // Microphone redirection (AUDIO_INPUT) when a callback captures for it: servers only offer the channel
++        // to clients that set INFO_AUDIOCAPTURE.
++        let audio_input_callback = self.0.borrow().audio_input_callback.clone();
++        config.enable_audio_capture = audio_input_callback.is_some();
++        let audio_input = audio_input_callback
++            .as_ref()
++            .map(|_| crate::audio_input::AudioInputSink::default());
+ 
+         let enable_server_pointer = self.0.borrow().enable_server_pointer;
+         config.enable_server_pointer = enable_server_pointer;
+@@ -540,6 +553,10 @@ impl iron_remote_desktop::SessionBuilder for SessionBuilder {
+             audio_backend: audio_playback_callback
+                 .as_ref()
+                 .map(|_| crate::audio::WasmAudioBackend::new(input_events_tx.clone())),
++            audio_input_listener: audio_input.as_ref().map(|sink| crate::audio_input::AudioInputListener {
++                tx: input_events_tx.clone(),
++                sink: sink.clone(),
++            }),
+         })
+         .await?;
+ 
+@@ -564,6 +581,8 @@ impl iron_remote_desktop::SessionBuilder for SessionBuilder {
+             set_cursor_style_callback_context,
+             canvas_resized_callback,
+             audio_playback_callback,
++            audio_input_callback,
++            audio_input,
+ 
+             input_events_rx: RefCell::new(Some(input_events_rx)),
+             rdp_reader: RefCell::new(Some(rdp_reader)),
+@@ -585,6 +604,10 @@ pub(crate) enum RdpInputEvent {
+     Printer(crate::printer::PrinterBackendMessage),
+     /// RDPSND backend → event loop: audio for the JS callback. See [`crate::audio::AudioMessage`].
+     Audio(crate::audio::AudioMessage),
++    /// Microphone backend → event loop: start or stop capturing, for the JS callback.
++    AudioInput(crate::audio_input::AudioInputMessage),
++    /// Microphone backend → event loop: captured audio for the server.
++    AudioInputUplink(crate::audio_input::AudioInputUplink),
+     FastPath(FastPathInputEvents),
+     Resize {
+         width: u32,
+@@ -616,6 +639,9 @@ pub(crate) struct Session {
+     set_cursor_style_callback_context: JsValue,
+     canvas_resized_callback: Option<js_sys::Function>,
+     audio_playback_callback: Option<js_sys::Function>,
++    audio_input_callback: Option<js_sys::Function>,
++    /// Takes the PCM that JS captures (`audio_input_data`), when the microphone is on.
++    audio_input: Option<crate::audio_input::AudioInputSink>,
+ 
+     // Consumed when `run` is called
+     input_events_rx: RefCell<Option<mpsc::UnboundedReceiver<RdpInputEvent>>>,
+@@ -934,6 +960,17 @@ impl iron_remote_desktop::Session for Session {
+                             }
+                             Vec::new()
+                         }
++                        RdpInputEvent::AudioInput(message) => {
++                            if let Some(callback) = &self.audio_input_callback {
++                                if let Err(error) = callback.call1(&JsValue::NULL, &crate::audio_input::to_js(message)) {
++                                    warn!(?error, "audio input callback failed");
++                                }
++                            }
++                            Vec::new()
++                        }
++                        RdpInputEvent::AudioInputUplink(uplink) => {
++                            vec![ActiveStageOutput::ResponseFrame(active_stage.encode_dvc_messages(uplink.into_messages())?)]
++                        }
+                         RdpInputEvent::TerminateSession => {
+                             active_stage.graceful_shutdown()
+                                 .context("graceful shutdown")?
+@@ -1332,6 +1369,16 @@ impl iron_remote_desktop::Session for Session {
+ 
+                 return Ok(JsValue::NULL);
+             };
++            |audio_input_data: JsValue| {
++                // Interleaved 16-bit little-endian PCM in the format of the last `open` (a Uint8Array).
++                let Some(audio_input) = &self.audio_input else {
++                    return Err(anyhow::Error::msg("audio input is not enabled").into());
++                };
++                let data = audio_input_data
++                    .dyn_into::<js_sys::Uint8Array>()
++                    .map_err(|_| anyhow::Error::msg("audio_input_data expects a Uint8Array"))?;
++                return Ok(JsValue::from_bool(audio_input.push(&data.to_vec())));
++            };
+         }
+ 
+         Err(
+@@ -1647,6 +1694,7 @@ struct ConnectParams {
+     use_display_control: bool,
+     use_graphics_pipeline: bool,
+     audio_backend: Option<crate::audio::WasmAudioBackend>,
++    audio_input_listener: Option<crate::audio_input::AudioInputListener>,
+ }
+ 
+ fn default_printer_driver_name() -> String {
+@@ -1699,6 +1747,7 @@ async fn connect(
+         use_display_control,
+         use_graphics_pipeline,
+         audio_backend,
++        audio_input_listener,
+     }: ConnectParams,
+ ) -> Result<(connector::ConnectionResult, WebSocket), IronError> {
+     let mut framed = ironrdp_futures::LocalFuturesFramed::new(ws);
+@@ -1752,7 +1801,11 @@ async fn connect(
+     if use_display_control {
+         drdynvc = drdynvc.with_dynamic_channel(DisplayControlClient::new(|_| Ok(Vec::new())));
+     }
+-    if use_graphics_pipeline || use_display_control {
++    let audio_input = audio_input_listener.is_some();
++    if let Some(listener) = audio_input_listener {
++        drdynvc = drdynvc.with_listener(listener);
++    }
++    if use_graphics_pipeline || use_display_control || audio_input {
+         connector.attach_static_channel(drdynvc);
+     }
+ 
+diff --git a/web-client/iron-remote-desktop-rdp/src/audioInput.test.ts b/web-client/iron-remote-desktop-rdp/src/audioInput.test.ts
+new file mode 100644
+index 00000000..a482e2fd
+--- /dev/null
++++ b/web-client/iron-remote-desktop-rdp/src/audioInput.test.ts
+@@ -0,0 +1,48 @@
++import { describe, it, expect, vi } from 'vitest';
++
++// The real Extension lives in the WASM package; a plain stand-in shows what reaches it.
++vi.mock('../../../crates/ironrdp-web/pkg/ironrdp_web', () => ({
++    default: () => Promise.resolve(),
++    setup: () => {},
++    DesktopSize: class {},
++    DeviceEvent: class {},
++    InputTransaction: class {},
++    SessionBuilder: class {},
++    ClipboardData: class {},
++    RdpFile: class {},
++    Extension: class {
++        constructor(
++            public ident: string,
++            public value: unknown,
++        ) {}
++    },
++}));
++
++const { audioInput, audioInputData } = await import('./main');
++
++describe('audio input extensions', () => {
++    it('registers the callback under audio_input', () => {
++        const callback = () => {};
++        expect(audioInput(callback)).toEqual({ ident: 'audio_input', value: callback });
++    });
++
++    it('passes the bytes of an Int16Array, little-endian, without converting samples', () => {
++        const samples = new Int16Array([0x0102, -2, 32767]);
++        const ext = audioInputData(samples) as unknown as { ident: string; value: Uint8Array };
++        expect(ext.ident).toBe('audio_input_data');
++        expect(ext.value).toBeInstanceOf(Uint8Array);
++        expect(Array.from(ext.value)).toEqual([0x02, 0x01, 0xfe, 0xff, 0xff, 0x7f]);
++        expect(ext.value.buffer).toBe(samples.buffer);
++    });
++
++    it('respects the offset of a view into a larger buffer', () => {
++        const all = new Int16Array([1, 2, 3, 4]);
++        const ext = audioInputData(all.subarray(2)) as unknown as { value: Uint8Array };
++        expect(Array.from(ext.value)).toEqual([3, 0, 4, 0]);
++    });
++
++    it('passes a Uint8Array as is', () => {
++        const bytes = new Uint8Array([1, 2, 3, 4]);
++        expect((audioInputData(bytes) as unknown as { value: Uint8Array }).value).toBe(bytes);
++    });
++});
+diff --git a/web-client/iron-remote-desktop-rdp/src/main.ts b/web-client/iron-remote-desktop-rdp/src/main.ts
+index 50a7b6a1..bf0e2cdb 100644
+--- a/web-client/iron-remote-desktop-rdp/src/main.ts
++++ b/web-client/iron-remote-desktop-rdp/src/main.ts
+@@ -58,6 +58,29 @@ export function audioPlayback(callback: (message: unknown) => void): Extension {
+     return new Extension('audio_playback', callback);
+ }
+ 
++/**
++ * Redirects a microphone (MS-RDPEAI). The server asks for it only while a remote application records:
++ * `callback` receives `{ type: 'open', sampleRate, channels }` when capture should start (or switch format),
++ * and `{ type: 'close' }` when it should stop. While open, push the captured audio with `audioInputData`.
++ */
++export function audioInput(callback: (message: unknown) => void): Extension {
++    return new Extension('audio_input', callback);
++}
++
++/**
++ * Captured audio for the server, as interleaved 16-bit PCM in the format of the last `open` message, for
++ * `invokeExtension`. Any length will do: it is sent in the packet size the server asked for. Audio arriving after
++ * the server closed the capture is dropped.
++ */
++export function audioInputData(samples: Int16Array | Uint8Array): Extension {
++    // The WASM side takes bytes; view an Int16Array's buffer rather than converting it element by element.
++    const bytes =
++        samples instanceof Uint8Array
++            ? samples
++            : new Uint8Array(samples.buffer, samples.byteOffset, samples.byteLength);
++    return new Extension('audio_input_data', bytes);
++}
++
+ export function kdcProxyUrl(url: string): Extension {
+     return new Extension('kdc_proxy_url', url);
+ }

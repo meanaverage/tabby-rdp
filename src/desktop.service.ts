@@ -1,17 +1,29 @@
 import { Injectable, NgZone } from '@angular/core'
 import { Subject } from 'rxjs'
-import { AppService, ConfigService, NotificationsService, SplitTabComponent } from 'tabby-core'
+import { AppService, ConfigService, NotificationsService, ProfilesService, SplitTabComponent } from 'tabby-core'
+import * as fs from 'fs'
+import * as os from 'os'
 import * as path from 'path'
 import { pathToFileURL } from 'url'
-import { DesktopPane, RemoteTarget, RemoteTargets } from './targets'
+import { DesktopPane, desktopPaneOf, isRDPTab, RDP_PROFILE_TYPE, RemoteTarget, RemoteTargets } from './targets'
 import { consoleScript, DeskRequest } from './deskScript'
 import { AudioPlayer } from './audio'
-import { askNewDesktop } from './desktopForm'
-import { FileTransfer, STYLE as FILES_STYLE } from './fileTransfer'
-import { DesktopSpec, desktopsFor, ExtraDesktopConfig, OWN_DESKTOP, sessionKey } from './desktops'
+import { ConnectionStatus, STYLE as STATS_STYLE } from './connectionStatus'
+import { Microphone } from './microphone'
+import { askDesktop } from './desktopForm'
+import { FileTransfer, STYLE as FILES_STYLE, uniquePath } from './fileTransfer'
+import { desktopIdOf, DesktopSpec, desktopsFor, DIRECT_KEY, ExtraDesktopConfig, OWN_DESKTOP, OwnDesktopFound, sessionKey } from './desktops'
+import { parseRdpFile } from './rdpFile'
 import { prepareRemoteDesktop } from './remoteSetup'
-import { RDCleanPathProxy, startRDCleanPathProxy } from './rdcleanpath'
-import { askCredentials, Credentials, forgetCredentials, forgetCredentialsFor, loadCredentials, saveCredentials, STYLE as SIGNIN_STYLE } from './signin'
+import { normalizeFingerprint, RDCleanPathProxy, startRDCleanPathProxy } from './rdcleanpath'
+import {
+    askCredentials, Credentials, forgetCredentials, forgetCredentialsFor, loadCredentials, moveCredentialsFor, saveCredentials,
+    STYLE as SIGNIN_STYLE,
+} from './signin'
+import { rdpAnswers, waitForRdp, wakeDesktop } from './wake'
+
+/** How long a desktop that was started (`wake`) gets to answer. */
+const WAKE_TIMEOUT_MS = 3 * 60 * 1000
 
 // The vendored IronRDP bundles are ES modules. tsc turns import() into require(), and Node's import() is refused in
 // Tabby on Windows (no dynamic import callback), so they go through a module script: the page's own loader.
@@ -47,6 +59,14 @@ const STYLE = `
 .trd-status-actions { display: flex; gap: 8px; pointer-events: auto; }
 .trd-status-actions:empty { display: none; }
 .trd-overlay.trd-dim .trd-host { opacity: 0.2; }
+.trd-view-only { display: none; position: absolute; inset: 0; }
+.trd-overlay.trd-view-only-on .trd-view-only { display: block; }
+.trd-view-only::after { content: 'View only'; position: absolute; top: 8px; left: 8px; padding: 2px 8px; border-radius: 4px;
+    background: rgba(30, 30, 30, 0.85); color: #ddd; font-size: 11px; pointer-events: none; }
+.trd-mic { position: absolute; top: 8px; right: 8px; width: 22px; height: 22px; border-radius: 50%; display: none;
+    align-items: center; justify-content: center; background: rgba(220, 38, 38, 0.85); color: #fff; font-size: 11px;
+    pointer-events: none; }
+.trd-overlay.trd-mic-on .trd-mic { display: flex; }
 `
 
 /** A button in the desktop layer's status (Reconnect, Stop, …). */
@@ -56,6 +76,28 @@ interface StatusAction {
 }
 
 type SessionState = 'connecting' | 'connected' | 'ended'
+
+/** Where a desktop is and how to sign in there (see endpointFor). */
+interface Endpoint {
+    host: string
+    port: number
+    credentials: Credentials
+    remember: boolean
+    /** The host's own desktop: the fingerprint of the certificate its setup made, the only one to accept. */
+    certificate?: string
+}
+
+/** A server certificate the proxy refused (see checkCertificate). */
+interface CertificateProblem {
+    /** The certificate the setup made (the host's own desktop), or the one remembered (others). */
+    expected: string
+    actual: string
+    /** The host's own desktop: its certificate is the plugin's, so a different one is never to be accepted. */
+    pinned: boolean
+}
+
+/** A SHA-256 fingerprint on two lines of 16 bytes, so it fits a narrow pane. */
+const showFingerprint = (fingerprint: string) => fingerprint ? `${fingerprint.slice(0, 47)}\n${fingerprint.slice(48)}` : '(none)'
 
 /** `remoteDesktop` settings (Tabby config), editable from the "Remote desktop settings" menus. */
 export interface DesktopSettings {
@@ -71,6 +113,12 @@ export interface DesktopSettings {
     sound: boolean
     /** H.264 in the graphics pipeline, decoded by the browser (WebCodecs), where it can (applies on the next connect). */
     h264: boolean
+    /** With resize 'off': 'fit' scales the picture to the pane, 'actual' shows it 1:1, scrolling when it's larger. */
+    zoom: 'fit' | 'actual'
+    /** A small indicator on the desktop: throughput, frames per second, SSH round trip, connection path. */
+    connectionStatus: boolean
+    /** Send the microphone to the remote desktop while an application there records (applies on the next connect). */
+    microphone: boolean
 }
 
 interface RemoteSize {
@@ -144,10 +192,22 @@ class DesktopSession {
     remote: RemoteTarget | null = null
     /** Plays the remote's sound, when the sound setting was on at connect. */
     audio: AudioPlayer | null = null
+    /** Captures the microphone for the remote, when the microphone setting was on at connect. */
+    mic: Microphone | null = null
     /** Files through the clipboard (drop on the desktop, or copy on the remote). */
     files: FileTransfer | null = null
     /** Decodes H.264 for the graphics pipeline (IronRDP's WebCodecsH264Decoder), when this connection uses it. */
     h264: any = null
+    /** No keyboard or mouse input goes to the remote (keys: see keyboard.ts; the mouse: a layer over the picture). */
+    viewOnly = false
+    /** The host's own desktop: the certificate its setup reported for this connection. */
+    pinnedCertificate: string | null = null
+    /** Set when the proxy refused the server's certificate on the current connection attempt. */
+    certificateProblem: CertificateProblem | null = null
+    /** The connection-status indicator, made the first time it shows. */
+    indicator: ConnectionStatus | null = null
+    /** How the pictures come (for the indicator): the graphics pipeline, bitmaps, or IronRDP's choice. */
+    graphics = ''
     /** Resolves when the session is disposed (ends a pending sign-in). */
     readonly disposed: Promise<void>
     private markDisposed!: () => void
@@ -159,6 +219,8 @@ class DesktopSession {
         this.overlay.className = 'trd-overlay'
         this.overlay.innerHTML = `
             <div class="trd-host"></div>
+            <div class="trd-view-only" title="View only: no keyboard or mouse input goes to the remote desktop"></div>
+            <div class="trd-mic"><i class="fas fa-microphone"></i></div>
             <div class="trd-status"><div class="trd-status-text"></div><div class="trd-status-actions"></div></div>`
         this.host = this.overlay.querySelector('.trd-host')!
         this.statusEl = this.overlay.querySelector('.trd-status')!
@@ -173,6 +235,22 @@ class DesktopSession {
         this.container = container
         container.addEventListener('focusin', this.reclaimFocus, true)
         this.overlay.addEventListener('mousedown', () => this.focusDesktop())
+        // View only: the layer takes the mouse, so the wheel scrolls an actual-size picture instead of the remote.
+        this.overlay.querySelector('.trd-view-only')!.addEventListener('wheel', event => {
+            const wheel = event as WheelEvent
+            this.host.querySelector('iron-remote-desktop')?.shadowRoot?.querySelector('.screen-wrapper')?.scrollBy(wheel.deltaX, wheel.deltaY)
+        }, { passive: true })
+    }
+
+    setViewOnly (viewOnly: boolean): void {
+        this.viewOnly = viewOnly
+        this.overlay.classList.toggle('trd-view-only-on', viewOnly)
+        this.log.push(`view only: ${viewOnly ? 'on' : 'off'}`)
+    }
+
+    /** IronRDP's canvas: the remote frame, at the remote resolution. */
+    canvas (): HTMLCanvasElement | null {
+        return this.host.querySelector('iron-remote-desktop')?.shadowRoot?.querySelector('canvas') ?? null
     }
 
     private readonly container: HTMLElement
@@ -232,8 +310,7 @@ class DesktopSession {
             return
         }
         const host = this.host.querySelector('iron-remote-desktop')
-        const canvas = host?.shadowRoot?.querySelector('canvas') as HTMLElement | null
-        canvas?.focus()
+        this.canvas()?.focus()
         if (host && document.activeElement !== host && attempts > 1 && this.visible) {
             setTimeout(() => this.visible && this.focusDesktop(attempts - 1), 16)
         }
@@ -244,9 +321,11 @@ class DesktopSession {
         this.setVisible(false)
         this.container.removeEventListener('focusin', this.reclaimFocus, true)
         this.disposers.forEach(f => f())
+        this.indicator?.dispose()
         try { this.ui?.shutdown() } catch { }
         this.audio?.close()
         this.h264?.close()
+        this.mic?.close()
         this.files?.dispose()
         this.proxy?.close()
         this.overlay.remove()
@@ -275,6 +354,7 @@ export class RemoteDesktopService {
         private notifications: NotificationsService,
         private config: ConfigService,
         private zone: NgZone,
+        private profiles: ProfilesService,
     ) { }
 
     has (pane: DesktopPane): boolean {
@@ -287,16 +367,60 @@ export class RemoteDesktopService {
     }
 
     async toggle (pane: DesktopPane): Promise<void> {
-        if (this.isVisible(pane)) {
-            this.showConsole(pane)
-        } else {
+        if (!this.isVisible(pane)) {
             await this.showDesktop(pane)
+        } else if (this.hasConsole(pane)) {
+            this.showConsole(pane)
         }
     }
 
-    /** The desktops this pane's SSH host offers: its own, then those configured behind it. */
+    /** Whether there is a console to switch to: not in a remote desktop tab, where the desktop is all there is. */
+    hasConsole (pane: DesktopPane): boolean {
+        return !isRDPTab(pane)
+    }
+
+    /**
+     * What the setup last found on each SSH host (by target key): GNOME, xrdp (and its port) or Windows. Kept for as
+     * long as Tabby runs; a Windows host is found out on the first connect there, which costs a failed setup.
+     */
+    private ownDesktops = new Map<string, OwnDesktopFound>()
+
+    /** Whether a desktop signs in with an account of its own: all but the host's own GNOME desktop. */
+    private signsIn (spec: DesktopSpec): boolean {
+        return spec.id !== OWN_DESKTOP || spec.kind !== 'gnome'
+    }
+
+    /** Whether the pane's desktop signed in with an account (which "Sign in again…" can replace). */
+    canSignInAgain (pane: DesktopPane): boolean {
+        const spec = this.sessions.get(pane)?.spec
+        return !!spec && this.signsIn(spec)
+    }
+
+    /**
+     * Forgets the saved account of the pane's desktop and connects again, with the sign-in form. For xrdp above all:
+     * with a wrong password it shows its own login window rather than refusing, so the form never comes back.
+     */
+    async signInAgain (pane: DesktopPane): Promise<void> {
+        const session = this.sessions.get(pane)
+        if (session && this.signsIn(session.spec)) {
+            await forgetCredentials(session.key)
+            await this.reopen(pane, session.spec)
+        }
+    }
+
+    /**
+     * The desktops this pane's SSH host offers: its own, then those configured behind it, then the RDP profiles that go
+     * through its SSH profile. A remote desktop tab has just its own one.
+     */
     desktopsOf (target: RemoteTarget): DesktopSpec[] {
-        return desktopsFor(target, this.config.store.remoteDesktop?.desktops)
+        if (target.direct) {
+            return [target.direct]
+        }
+        const viaProfile = target.profileId
+            ? (this.config.store.profiles ?? []).filter((p: any) => p?.type === RDP_PROFILE_TYPE && p.options?.host && p.options.via === target.profileId)
+                .map((p: any) => ({ ...p.options, name: p.name }))
+            : []
+        return desktopsFor(target, this.config.store.remoteDesktop?.desktops, this.ownDesktops.get(target.key), viaProfile)
     }
 
     /** The desktop a plain toggle (hotkey, header, toolbar) opens for this target: the last one used there. */
@@ -350,7 +474,12 @@ export class RemoteDesktopService {
         }
         // The resolved hostname, so a profile tab and a plain `ssh` to that machine both offer it.
         const hostname = target.key.replace(/:\d+$/, '').replace(/^[^@]*@/, '')
-        const entry = await askNewDesktop(pane.element.nativeElement, hostname, target.label)
+        const entry = await askDesktop(pane.element.nativeElement, {
+            title: `Add a desktop reached through ${target.label}`,
+            action: 'Add and open',
+            entry: { via: hostname, host: '127.0.0.1', port: 3389 },
+            check: e => this.addressTaken(e, -1),
+        })
         if (!entry) {
             pane.frontend?.focus()
             return
@@ -358,27 +487,159 @@ export class RemoteDesktopService {
         this.config.store.remoteDesktop.desktops = [...this.configuredDesktops(), entry]
         this.config.save()
         this.changed$.next()
-        await this.showDesktop(pane, `${entry.host}:${entry.port}`)
+        await this.showDesktop(pane, desktopIdOf(entry))
     }
 
-    /** Removes a configured desktop and its saved accounts. Open sessions to it keep running. */
+    /** Another entry for the same host already has this address (desktops are told apart by it). */
+    private addressTaken (entry: ExtraDesktopConfig, index: number): string | null {
+        const id = desktopIdOf(entry)
+        const via = (entry.via ?? '').trim().toLowerCase()
+        const taken = this.configuredDesktops().some((d, i) => i !== index && desktopIdOf(d) === id && (d.via ?? '').trim().toLowerCase() === via)
+        return taken ? `There is already a desktop at ${id} behind ${entry.via}.` : null
+    }
+
+    /**
+     * "Edit a desktop": the same form, over the pane, filled in. A new address takes the desktop's saved accounts and
+     * sharpness along; a new user name drops the saved account, which was for the old one. Open sessions keep running.
+     */
+    async editDesktop (pane: DesktopPane, index: number): Promise<void> {
+        const old = this.configuredDesktops()[index]
+        if (!old) {
+            return
+        }
+        if (this.isVisible(pane)) {
+            this.showConsole(pane)
+        }
+        const entry = await askDesktop(pane.element.nativeElement, {
+            title: `Edit ${old.name ?? desktopIdOf(old)} (behind ${old.via})`,
+            action: 'Save',
+            entry: old,
+            check: e => this.addressTaken(e, index),
+        })
+        pane.frontend?.focus()
+        // Compared with the entry as it is now: the config can change while the form shows.
+        const list = this.configuredDesktops()
+        if (!entry || list[index] !== old) {
+            return
+        }
+        list[index] = entry
+        this.config.store.remoteDesktop.desktops = list
+        this.config.save()
+        this.changed$.next()
+        const accountChanged = (old.username ?? '') !== (entry.username ?? '') || (old.domain ?? '') !== (entry.domain ?? '')
+        await this.desktopEdited(desktopIdOf(old), desktopIdOf(entry), accountChanged, false)
+    }
+
+    /**
+     * A desktop was edited (the edit form, or an RDP profile's settings): what is kept per desktop is keyed by its
+     * address, so a new address takes the saved account, its sharpness, its remembered certificate and the last-used
+     * choice along. (Should another machine answer at the new address, its certificate differs and the connection
+     * stops to ask, rather than trusting it silently as a first use.) A new user name or domain drops the saved
+     * account instead: it was for the old one. `direct`: a direct desktop (`rdp#<id>` keys), otherwise one behind SSH
+     * hosts (`<ssh key>#<id>`).
+     */
+    async desktopEdited (fromId: string, toId: string, accountChanged: boolean, direct: boolean): Promise<void> {
+        if (direct) {
+            const [from, to] = [`${DIRECT_KEY}#${fromId}`, `${DIRECT_KEY}#${toId}`]
+            const saved = !accountChanged && from !== to ? await loadCredentials(from) : null
+            if (saved) {
+                await saveCredentials(to, saved).catch(() => null)
+            }
+            if (accountChanged || from !== to) {
+                await forgetCredentials(from)
+            }
+        } else if (accountChanged) {
+            await forgetCredentialsFor(fromId)
+        } else if (fromId !== toId) {
+            await moveCredentialsFor(fromId, toId)
+        }
+        if (fromId === toId) {
+            return
+        }
+        const moved = (key: string) => direct ? key === `${DIRECT_KEY}#${fromId}` : key.endsWith(`#${fromId}`) && !key.startsWith(`${DIRECT_KEY}#`)
+        const store = this.config.store.remoteDesktop
+        for (const list of ['desktopSharpness', 'trustedCertificates']) {
+            if (Array.isArray(store[list])) {
+                store[list] = store[list].map((e: any) => typeof e?.desktop === 'string' && moved(e.desktop)
+                    ? { ...e, desktop: `${e.desktop.slice(0, -fromId.length)}${toId}` }
+                    : e)
+            }
+        }
+        this.config.save()
+        for (const [key, id] of this.lastUsed) {
+            if (id === fromId && (key === DIRECT_KEY) === direct) {
+                this.lastUsed.set(key, toId)
+            }
+        }
+    }
+
+    /** "Import an .rdp file…": picks one and adds it as a remote desktop profile (see importRdp). */
+    async importRdpFile (): Promise<void> {
+        const file = await new Promise<File | null>(resolve => {
+            const input = document.createElement('input')
+            input.type = 'file'
+            input.accept = '.rdp'
+            input.style.display = 'none'
+            input.addEventListener('change', () => { input.remove(); resolve(input.files?.[0] ?? null) })
+            input.addEventListener('cancel', () => { input.remove(); resolve(null) })
+            document.body.appendChild(input)
+            input.click()
+        })
+        if (file) {
+            await this.importRdp(new Uint8Array(await file.arrayBuffer()), file.name)
+        }
+    }
+
+    /**
+     * Adds a "Remote desktop (RDP)" profile from a .rdp file's contents (address, user name, domain; see rdpFile.ts)
+     * and opens it; or opens the profile that already has that address and user. Returns the profile, or null.
+     */
+    async importRdp (data: Uint8Array, fileName: string): Promise<any> {
+        const parsed = parseRdpFile(data)
+        if (!parsed) {
+            this.notifications.error(`${fileName}: no address ("full address") in it`)
+            return null
+        }
+        const existing = (this.config.store.profiles ?? []).find((p: any) => p?.type === RDP_PROFILE_TYPE && !p.options?.via &&
+            p.options?.host === parsed.host && (p.options.port || 3389) === parsed.port && (p.options.username ?? '') === (parsed.username ?? ''))
+        if (existing) {
+            this.notifications.info(`Opening "${existing.name}", which is already a profile for ${fileName}`)
+            await this.profiles.openNewTabForProfile(existing)
+            return existing
+        }
+        const profile = {
+            type: RDP_PROFILE_TYPE,
+            name: fileName.replace(/^.*[\\/]/, '').replace(/\.rdp$/i, '') || parsed.host,
+            icon: 'fas fa-desktop',
+            options: { host: parsed.host, port: parsed.port, kind: 'windows', username: parsed.username ?? '', domain: parsed.domain ?? '', via: '' },
+        }
+        await this.profiles.newProfile(profile)
+        this.config.save()
+        this.notifications.notice(`Added the remote desktop profile "${profile.name}" (Settings › Profiles & connections)`)
+        await this.profiles.openNewTabForProfile(profile)
+        return profile
+    }
+
+    /** Removes a configured desktop, its saved accounts and its remembered certificate. Open sessions to it keep running. */
     removeDesktop (index: number): void {
         const list = this.configuredDesktops()
         const [removed] = list.splice(index, 1)
         if (!removed) {
             return
         }
+        const id = `${removed.host ?? '127.0.0.1'}:${removed.port ?? 3389}`
         this.config.store.remoteDesktop.desktops = list
+        this.forgetCertificatesFor(id)
         this.config.save()
         this.changed$.next()
-        forgetCredentialsFor(`${removed.host ?? '127.0.0.1'}:${removed.port ?? 3389}`)
+        forgetCredentialsFor(id)
     }
 
     /**
      * Shows a desktop over the pane: `desktopId` (see desktopsOf), or the one it has open, or the default. A pane
      * holds one desktop at a time; choosing another one replaces it.
      */
-    async showDesktop (pane: DesktopPane, desktopId?: string, options: { background?: boolean } = {}): Promise<void> {
+    async showDesktop (pane: DesktopPane, desktopId?: string, options: { background?: boolean, viewOnly?: boolean } = {}): Promise<void> {
         this.prune()
         let session = this.sessions.get(pane)
         if (session?.state === 'ended' || session && desktopId && session.spec.id !== desktopId) {
@@ -410,6 +671,9 @@ export class RemoteDesktopService {
                 return this.showDesktop(existing)
             }
             const created = new DesktopSession(pane.element.nativeElement, key, spec)
+            if (options.viewOnly) {
+                created.setViewOnly(true)
+            }
             session = created
             this.sessions.set(pane, created)
             pane.destroyed$.subscribe(() => this.disconnect(pane))
@@ -426,6 +690,7 @@ export class RemoteDesktopService {
             return
         }
         session.setVisible(true)
+        this.syncIndicator(session)
         this.changed$.next()
         const shown = session
         setTimeout(() => this.followPane(pane, shown))
@@ -452,6 +717,11 @@ export class RemoteDesktopService {
             await new Promise(r => setTimeout(r, 250))
         }
         if (session?.state !== 'connected') {
+            return
+        }
+        if (session.spec.kind !== 'gnome') {
+            // The terminal it opens is GNOME's, on the headless GNOME session.
+            this.notifications.error(`desk: needs a GNOME desktop; this one is ${session.spec.kind === 'xrdp' ? 'served by xrdp' : 'Windows'}`)
             return
         }
         try {
@@ -513,6 +783,7 @@ export class RemoteDesktopService {
         const session = this.sessions.get(pane)
         if (session) {
             session.setVisible(false)
+            this.syncIndicator(session)
             this.changed$.next()
         }
         pane.frontend?.focus()
@@ -554,12 +825,13 @@ export class RemoteDesktopService {
         const session = this.sessions.get(pane)
         const background = !!session && !session.visible
         this.drop(pane, false)
-        await this.zone.run(() => this.showDesktop(pane, spec.id, { background }))
+        await this.zone.run(() => this.showDesktop(pane, spec.id, { background, viewOnly: session?.viewOnly }))
     }
 
     /** After a desktop ended: reconnect by itself if it dropped, otherwise offer to. */
     private afterEnd (pane: DesktopPane, target: RemoteTarget, spec: DesktopSpec, session: DesktopSession, outcome: { connected: boolean, error?: string, reason?: string }): void {
         session.state = 'ended'
+        this.syncIndicator(session)
         this.changed$.next()
         if (this.sessions.get(pane) !== session) {
             return
@@ -621,6 +893,9 @@ export class RemoteDesktopService {
             macShortcuts: store.macShortcuts !== false,
             sound: store.sound !== false,
             h264: store.h264 !== false,
+            zoom: store.zoom === 'actual' ? 'actual' : 'fit',
+            connectionStatus: store.connectionStatus === true,
+            microphone: store.microphone === true,
         }
     }
 
@@ -668,8 +943,44 @@ export class RemoteDesktopService {
         }
         this.config.save()
         for (const [pane, session] of this.sessions) {
+            this.applyZoom(session)
+            this.syncIndicator(session)
             this.followPane(pane, session)
         }
+    }
+
+    /** IronRDP's ScreenScale for the picture: Real (1:1, scrolling) only with a fixed resolution and zoom 'actual'. */
+    private screenScale (): 1 | 3 {
+        const settings = this.settings()
+        return settings.resize === 'off' && settings.zoom === 'actual' ? 3 /* ScreenScale.Real */ : 1 /* ScreenScale.Fit */
+    }
+
+    private applyZoom (session: DesktopSession): void {
+        try { session.ui?.setScale(this.screenScale()) } catch { }
+    }
+
+    /** Shows the desktop's connection-status indicator while the setting is on and the desktop shows, connected. */
+    private syncIndicator (session: DesktopSession): void {
+        const on = this.settings().connectionStatus && session.visible && session.state === 'connected'
+        if (on && !session.indicator) {
+            const remote = session.remote
+            session.indicator = new ConnectionStatus(session.overlay, this.zone, {
+                path: () => {
+                    const spec = session.spec
+                    const size = session.remoteSize
+                    return [
+                        spec.id === OWN_DESKTOP ? spec.name : remote?.direct ? `${spec.name} (direct)` : `${spec.name} via ${remote?.label ?? '?'}`,
+                        size ? `${size.width}×${size.height}` : '',
+                        session.graphics,
+                        this.settingsFor(session).sharpness === 'retina' ? 'Retina' : 'Standard',
+                    ].filter(Boolean).join(' · ')
+                },
+                bytes: () => session.proxy?.stats ?? null,
+                ping: remote?.ping ? () => remote.ping!() : undefined,
+            })
+        }
+        const canvas = session.host.querySelector('iron-remote-desktop')?.shadowRoot?.querySelector('canvas')
+        session.indicator?.setActive(on, on ? canvas : null)
     }
 
     /** Follows the pane's size (debounced) while the desktop shows, per the resize setting. */
@@ -677,7 +988,7 @@ export class RemoteDesktopService {
         let timer: any
         const observer = new ResizeObserver(() => {
             // Refit the view right away (the component only refits on window resizes by itself) ...
-            try { session.ui?.setScale(1 /* ScreenScale.Fit */) } catch { }
+            this.applyZoom(session)
             // ... and change the remote resolution once the size settles.
             clearTimeout(timer)
             timer = setTimeout(() => this.followPane(pane, session), 300)
@@ -702,9 +1013,10 @@ export class RemoteDesktopService {
         }
         if (settings.resize === 'reconnect') {
             session.log.push(`resize: reconnecting at ${wanted.width}x${wanted.height}`)
+            const viewOnly = session.viewOnly
             this.zone.run(() => {
                 this.disconnect(pane)
-                this.showDesktop(pane)
+                this.showDesktop(pane, undefined, { viewOnly })
             })
             return
         }
@@ -715,15 +1027,16 @@ export class RemoteDesktopService {
         session.log.push(`resize: ${size.width}x${size.height} @${size.scale}%`)
         const before = session.remoteSize
         session.remoteSize = size
-        if (session.spec.kind === 'windows') {
+        if (session.spec.kind !== 'gnome') {
             // Windows takes the scale from the monitor layout only when it also has the monitor's physical size (mm).
+            // xrdp gets it too; it can take its session's DPI from it.
             const mm = (px: number) => Math.round(px / (size.scale / 100) / 96 * 25.4)
             session.ui.resize(size.width, size.height, size.scale, mm(size.width), mm(size.height))
         } else {
             session.ui.resize(size.width, size.height, size.scale)
         }
         // grd ignores the scale in the monitor layout: it's set through Mutter (also back to 100%).
-        if ((size.scale !== 100 || (before?.scale ?? 100) !== 100) && session.remote && session.spec.id === OWN_DESKTOP) {
+        if ((size.scale !== 100 || (before?.scale ?? 100) !== 100) && session.remote && session.spec.id === OWN_DESKTOP && session.spec.kind === 'gnome') {
             session.remote.exec(`python3 - ${size.width} ${size.height} ${size.scale / 100}`, SCALE_SCRIPT).then(out => {
                 session.log.push(`scale: ${/^RD_(OK|ERR) (.*)$/m.exec(out)?.[2] ?? out.trim().slice(-120)}`)
             }, e => session.log.push(`scale: ${e?.message ?? e}`))
@@ -740,6 +1053,92 @@ export class RemoteDesktopService {
         }
         this.h264Support ??= Promise.resolve(rdp.h264Supported()).catch(() => false)
         return this.h264Support
+    }
+
+    isViewOnly (pane: DesktopPane): boolean {
+        return !!this.sessions.get(pane)?.viewOnly
+    }
+
+    /** View only: the pane's desktop gets no keyboard or mouse input (the picture, clipboard and sound go on). */
+    setViewOnly (pane: DesktopPane, viewOnly: boolean): void {
+        const session = this.sessions.get(pane)
+        if (session) {
+            session.setViewOnly(viewOnly)
+            this.changed$.next()
+        }
+    }
+
+    /**
+     * For keys sent from a menu: brings the pane's desktop forward and focuses it, since IronRDP only takes keys
+     * while it has focus. False when it can't take them (not connected, view only, or focus didn't stick).
+     */
+    async takeKeyboard (pane: DesktopPane): Promise<boolean> {
+        const session = this.sessions.get(pane)
+        if (!session || session.state !== 'connected' || session.viewOnly) {
+            return false
+        }
+        if (!session.visible) {
+            await this.showDesktop(pane)
+        }
+        if (desktopPaneOf(this.app.activeTab) !== pane) {
+            this.selectPane(pane)
+        }
+        // After a tab switch, the pane shows on Angular's next change detection.
+        for (let i = 0; i < 30; i++) {
+            session.focusDesktop(1)
+            const focused = document.activeElement
+            if (focused?.tagName === 'IRON-REMOTE-DESKTOP' && session.overlay.contains(focused)) {
+                return true
+            }
+            await new Promise(resolve => setTimeout(resolve, 16))
+        }
+        session.log.push('keys: the desktop did not take the keyboard')
+        return false
+    }
+
+    /**
+     * Saves the remote frame as a PNG in Downloads (never overwriting) and copies it to the clipboard. The canvas is
+     * at the remote resolution, so this is the full picture whatever the pane's size. Returns the file.
+     */
+    async saveScreenshot (pane: DesktopPane): Promise<string | null> {
+        const session = this.sessions.get(pane)
+        const canvas = session?.state === 'connected' ? session.canvas() : null
+        if (!session || !canvas) {
+            return null
+        }
+        try {
+            const blob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, 'image/png'))
+            if (!blob) {
+                throw new Error('the picture could not be encoded')
+            }
+            const png = Buffer.from(await blob.arrayBuffer())
+            const dir = path.join(os.homedir(), 'Downloads')
+            const now = new Date()
+            const two = (n: number) => String(n).padStart(2, '0')
+            const stamp = `${now.getFullYear()}-${two(now.getMonth() + 1)}-${two(now.getDate())} at ${two(now.getHours())}.${two(now.getMinutes())}.${two(now.getSeconds())}`
+            const name = `Screenshot ${session.spec.name} ${stamp}`.replace(/[\\/:*?"<>|]/g, '-')
+            await fs.promises.mkdir(dir, { recursive: true })
+            const file = uniquePath(path.join(dir, `${name}.png`))
+            await fs.promises.writeFile(file, png, { flag: 'wx' })
+            session.log.push(`screenshot: saved ${file}`)
+            let copied = true
+            try {
+                const { clipboard, nativeImage } = require('electron')
+                clipboard.writeImage(nativeImage.createFromBuffer(png))
+            } catch (e: any) {
+                copied = false
+                session.log.push(`screenshot: clipboard: ${e?.message ?? e}`)
+            }
+            session.files?.toast(`Screenshot saved to ${path.basename(dir)}${copied ? ' and copied to the clipboard' : ''}`, [{
+                label: process.platform === 'darwin' ? 'Show in Finder' : 'Show in folder',
+                run: () => require('electron').shell.showItemInFolder(file),
+            }])
+            return file
+        } catch (e: any) {
+            session.log.push(`screenshot: ${e?.message ?? e}`)
+            this.notifications.error(`Couldn't save the screenshot: ${e?.message ?? e}`)
+            return null
+        }
     }
 
     /** Status log of the pane's desktop session (for tests and troubleshooting). */
@@ -762,14 +1161,27 @@ export class RemoteDesktopService {
     }
 
     /**
-     * Where to connect and as whom. The host's own desktop: the setup script (grd, generated credentials).
-     * Others: the saved account, or the sign-in form (retry=true after a failed sign-in).
+     * Where to connect and as whom. The host's own desktop: the setup script (grd, generated credentials), or, where
+     * it finds xrdp or Windows instead of GNOME, as below. Others: the saved account, or the sign-in form (retryError: after a
+     * failed sign-in).
      */
-    private async endpointFor (target: RemoteTarget, spec: DesktopSpec, session: DesktopSession, retryError?: string): Promise<{ host: string, port: number, credentials: Credentials, remember: boolean } | null> {
-        if (spec.id === OWN_DESKTOP) {
+    private async endpointFor (target: RemoteTarget, spec: DesktopSpec, session: DesktopSession, retryError?: string): Promise<Endpoint | null> {
+        // A Windows host is known from an earlier connect: no setup to run there (it would only fail again).
+        if (spec.id === OWN_DESKTOP && !retryError && this.ownDesktops.get(target.key)?.kind !== 'windows') {
             session.status(`Preparing the remote desktop on ${target.label}…`)
             const endpoint = await prepareRemoteDesktop(target, this.settings().desk, this.config.store.remoteDesktop?.sessionBackend)
-            return { host: '127.0.0.1', port: endpoint.port, credentials: { username: endpoint.username, password: endpoint.password }, remember: false }
+            this.ownDesktops.set(target.key, { kind: endpoint.kind, xrdpPort: endpoint.xrdpPort, xrdpUser: endpoint.xrdpUser })
+            // Only the setup knows which desktop the host has; the session follows it (graphics, sign-in, resizing).
+            spec.kind = endpoint.kind
+            if (endpoint.kind === 'windows') {
+                session.log.push('setup: the SSH host runs Windows; its own desktop is its RDP server')
+            }
+            if (endpoint.kind === 'gnome') {
+                return { host: '127.0.0.1', port: endpoint.port, credentials: { username: endpoint.username, password: endpoint.password }, remember: false, certificate: endpoint.certificate }
+            }
+            spec.host = '127.0.0.1'
+            spec.port = endpoint.port
+            spec.username ??= endpoint.username
         }
         const saved = retryError ? null : await loadCredentials(session.key)
         if (saved) {
@@ -777,7 +1189,8 @@ export class RemoteDesktopService {
         }
         session.status('')
         const asked = askCredentials(session.overlay, {
-            title: `Sign in to ${spec.name} (via ${target.label})`,
+            // The host's own desktops (its own, or its xrdp besides GNOME) and direct ones need no "via".
+            title: spec.id === OWN_DESKTOP || target.direct || spec.kind === 'xrdp' && spec.host === '127.0.0.1' ? `Sign in to ${spec.name}` : `Sign in to ${spec.name} (via ${target.label})`,
             username: spec.username,
             error: retryError,
             canRemember: true,
@@ -792,27 +1205,74 @@ export class RemoteDesktopService {
     private async connect (pane: DesktopPane, target: RemoteTarget, spec: DesktopSpec, session: DesktopSession): Promise<void> {
         const alive = () => this.sessions.get(pane) === session
         let retryError: string | undefined
+        // Automatic reconnects never start a desktop (`wake`): it may have been shut down on purpose.
+        const automatic = this.reconnects.has(pane)
+        // A desktop that was just started can answer before it takes connections: a few more tries, same account.
+        let woken = false
+        let startupRetries = 0
+        let endpoint: Endpoint | null = null
         try {
-            // Signing in to a desktop behind the host can take a few tries; the host's own one can't fail that way.
+            if (spec.wake) {
+                const woke = await this.wakeIfDown(pane, target, spec, session, automatic)
+                if (woke === null) {
+                    return
+                }
+                woken = woke
+            }
+            // Signing in to a Windows account can take a few tries; a GNOME desktop the plugin set up can't fail that way.
             for (let attempt = 0; ; attempt++) {
-                const [endpoint, rdp] = await Promise.all([this.endpointFor(target, spec, session, retryError), this.loadIronRDP()])
+                const [asked, rdp]: [Endpoint | null, any] = await Promise.all([endpoint ?? this.endpointFor(target, spec, session, retryError), this.loadIronRDP()])
                 if (!alive()) {
                     return
                 }
-                if (!endpoint) {
+                if (!asked) {
                     session.state = 'ended'
                     this.changed$.next()
                     this.cancelReconnect(pane)
                     session.status('Sign-in cancelled.', [{ label: 'Sign in', run: () => this.reopen(pane, spec) }])
                     return
                 }
+                endpoint = asked
                 session.remote = target
-                session.proxy ??= await startRDCleanPathProxy(() => target.openTcp(endpoint.host, endpoint.port), m => session.log.push(m))
-                const outcome = await this.run(pane, target, spec, session, rdp, endpoint)
-                if (outcome.signInFailed && spec.id !== OWN_DESKTOP && attempt < 5 && alive()) {
+                session.pinnedCertificate = asked.certificate ?? null
+                session.proxy ??= await startRDCleanPathProxy(
+                    () => target.openTcp(asked.host, asked.port),
+                    fingerprint => this.checkCertificate(session, fingerprint),
+                    m => session.log.push(m),
+                    { autologon: spec.kind === 'xrdp' })
+                const outcome = await this.run(pane, target, spec, session, rdp, asked)
+                if (outcome.certificate && alive()) {
+                    // A changed certificate, now trusted: the same account again, without asking for it again.
+                    if (await this.refusedCertificate(pane, target, spec, session, asked, outcome.certificate)) {
+                        continue
+                    }
+                    return
+                }
+                if (outcome.signInFailed && this.signsIn(spec) && attempt < 5 && alive()) {
                     await forgetCredentials(session.key)
                     retryError = outcome.signInFailed
+                    endpoint = null
                     continue
+                }
+                if (spec.wake && !outcome.connected && !outcome.signInFailed && alive()) {
+                    if (woken && startupRetries < 3) {
+                        startupRetries++
+                        session.log.push(`wake: not taking connections yet: ${outcome.error ?? outcome.reason ?? 'unknown error'}`)
+                        session.status(`${spec.name} is still starting…`)
+                        await this.zone.runOutsideAngular(() => new Promise(resolve => setTimeout(resolve, 5000)))
+                        continue
+                    }
+                    // It answered before, but not now: it may have been shut down since.
+                    if (!woken && !automatic) {
+                        const woke = await this.wakeIfDown(pane, target, spec, session, false)
+                        if (woke === null) {
+                            return
+                        }
+                        if (woke) {
+                            woken = true
+                            continue
+                        }
+                    }
                 }
                 if (alive()) {
                     this.afterEnd(pane, target, spec, session, outcome)
@@ -826,16 +1286,161 @@ export class RemoteDesktopService {
         }
     }
 
+    /**
+     * The proxy's check of the server's certificate, before any credentials go out. The host's own desktop must show
+     * the certificate its setup reported. Others (behind a host, a Windows host's own, a remote desktop tab's) are
+     * trusted on first use: remembered silently the first time (most connections already run inside SSH, and a prompt
+     * on every new desktop would only teach clicking it away), and refused when it changes, until the new one is
+     * trusted (see refusedCertificate). Remembered by session key, like saved accounts.
+     */
+    private checkCertificate (session: DesktopSession, fingerprint: string): void {
+        session.certificateProblem = null
+        // The host's own GNOME desktop; its own xrdp makes its certificate itself, so that one is trusted on first use.
+        if (session.spec.id === OWN_DESKTOP && session.spec.kind === 'gnome') {
+            const expected = session.pinnedCertificate ?? ''
+            if (fingerprint !== expected) {
+                session.certificateProblem = { expected, actual: fingerprint, pinned: true }
+                throw new Error(`certificate SHA-256 ${fingerprint} is not the one set up (${expected || 'none'})`)
+            }
+            session.log.push(`certificate: SHA-256 ${fingerprint}, as set up`)
+            return
+        }
+        const known = this.trustedCertificate(session.key)
+        if (!known) {
+            this.trustCertificate(session.key, fingerprint)
+            session.log.push(`certificate: SHA-256 ${fingerprint}, remembered (first connection)`)
+            return
+        }
+        if (fingerprint !== known) {
+            session.certificateProblem = { expected: known, actual: fingerprint, pinned: false }
+            throw new Error(`certificate SHA-256 ${fingerprint} is not the one remembered (${known})`)
+        }
+        session.log.push(`certificate: SHA-256 ${fingerprint}, as remembered`)
+    }
+
+    /**
+     * After the proxy refused a certificate; nothing was sent to that server. The host's own desktop: an error, since
+     * the plugin made that certificate itself. Others: both fingerprints, to trust the new certificate or not. Either
+     * way, automatic reconnecting stops here. Resolves true to connect again (the new certificate is then trusted).
+     */
+    private async refusedCertificate (pane: DesktopPane, target: RemoteTarget, spec: DesktopSpec, session: DesktopSession, endpoint: Endpoint, problem: CertificateProblem): Promise<boolean> {
+        this.cancelReconnect(pane)
+        const alive = () => this.sessions.get(pane) === session
+        const stop = (message: string) => {
+            session.state = 'ended'
+            this.changed$.next()
+            session.status(message, [{ label: 'Try again', run: () => this.reopen(pane, spec) }])
+        }
+        const fingerprints = `${problem.pinned ? 'Expected' : 'Remembered'} (SHA-256):\n${showFingerprint(problem.expected)}\n\nNow:\n${showFingerprint(problem.actual)}`
+        if (problem.pinned) {
+            stop(`The remote desktop on ${target.label} answered with a certificate other than the one set up for it. ` +
+                `The connection was stopped before signing in.\n\n${fingerprints}\n\n` +
+                `Something other than GNOME Remote Desktop may be listening on port ${endpoint.port}.`)
+            return false
+        }
+        if (!session.visible) {
+            this.notifications.notice(`The certificate of ${spec.name}${target.direct ? '' : ` (via ${target.label})`} has changed. Open that desktop to decide.`)
+        }
+        const trusted = await new Promise<boolean>(resolve => {
+            session.status(`The certificate of ${spec.name} has changed since it was last used. Nothing has been sent to it.\n\n` +
+                `${fingerprints}\n\nReinstalling the machine or renewing its certificate changes it. If neither happened, ` +
+                `something else may be answering at ${spec.host}:${spec.port}.`, [
+                { label: 'Trust the new certificate', run: () => resolve(true) },
+                { label: 'Cancel', run: () => resolve(false) },
+            ])
+            session.disposed.then(() => resolve(false))
+        })
+        if (!alive()) {
+            return false
+        }
+        if (!trusted) {
+            stop('Not connected: the new certificate was not trusted.')
+            return false
+        }
+        this.trustCertificate(session.key, problem.actual)
+        session.log.push(`certificate: SHA-256 ${problem.actual}, trusted instead of ${problem.expected}`)
+        return true
+    }
+
+    /** The certificate remembered for a desktop behind a host (`remoteDesktop.trustedCertificates`), if any. */
+    private trustedCertificate (key: string): string | null {
+        const list = this.config.store.remoteDesktop?.trustedCertificates
+        const value = (Array.isArray(list) ? list : []).find((e: any) => e?.desktop === key)?.sha256
+        return typeof value === 'string' ? normalizeFingerprint(value) || null : null
+    }
+
+    private trustCertificate (key: string, fingerprint: string): void {
+        const store = this.config.store.remoteDesktop
+        const others = (Array.isArray(store.trustedCertificates) ? store.trustedCertificates : []).filter((e: any) => e?.desktop !== key)
+        store.trustedCertificates = [...others, { desktop: key, sha256: fingerprint }]
+        this.config.save()
+    }
+
+    /**
+     * Forgets the certificates remembered for a desktop behind any SSH host (keys ending in `#<id>`, not a direct
+     * one's `rdp#<id>`), or with `direct`, for that direct desktop; doesn't save.
+     */
+    forgetCertificatesFor (desktopId: string, direct = false): void {
+        const store = this.config.store.remoteDesktop
+        const list = Array.isArray(store.trustedCertificates) ? store.trustedCertificates : []
+        const forget = (key: string) => direct ? key === `${DIRECT_KEY}#${desktopId}` : key.endsWith(`#${desktopId}`) && !key.startsWith(`${DIRECT_KEY}#`)
+        store.trustedCertificates = list.filter((e: any) => !forget(String(e?.desktop ?? '')))
+    }
+
+    /**
+     * For a desktop with `wake`: when its RDP server doesn't answer (probed from the SSH host), starts it and waits
+     * until it does. True when it had to be started, false when it was up, null when the wait was cancelled (the layer
+     * says so). Throws when it couldn't be started, didn't come up in time, or is down during an automatic reconnect.
+     */
+    private async wakeIfDown (pane: DesktopPane, target: RemoteTarget, spec: DesktopSpec, session: DesktopSession, automatic: boolean): Promise<boolean | null> {
+        const alive = () => this.sessions.get(pane) === session
+        session.status(`Connecting to ${spec.name} via ${target.label}…`)
+        if (await rdpAnswers(target, spec.host, spec.port)) {
+            return false
+        }
+        if (!alive()) {
+            return null
+        }
+        if (automatic) {
+            throw new Error(`${spec.name} doesn't answer; it may have been shut down`)
+        }
+        session.status(`Starting ${spec.name}…`)
+        session.log.push(`wake: ${await wakeDesktop(target, spec.wake!)}`)
+        let cancelled = false
+        const cancel: StatusAction = {
+            label: 'Cancel',
+            run: () => {
+                cancelled = true
+                session.state = 'ended'
+                this.changed$.next()
+                this.cancelReconnect(pane)
+                session.status(`Stopped waiting for ${spec.name}.`, [{ label: 'Try again', run: () => this.reopen(pane, spec) }])
+            },
+        }
+        const started = Date.now()
+        const progress = () => session.status(`Starting ${spec.name}…\nWaiting for it to answer: ${Math.round((Date.now() - started) / 1000)} s`, [cancel])
+        progress()
+        const up = await this.zone.runOutsideAngular(() => waitForRdp(target, spec.host, spec.port, WAKE_TIMEOUT_MS, () => cancelled || !alive(), progress))
+        if (up) {
+            session.log.push(`wake: answered after ${Math.round((Date.now() - started) / 1000)} s`)
+            return true
+        }
+        if (cancelled || !alive()) {
+            return null
+        }
+        throw new Error(`${spec.name} didn't answer within ${WAKE_TIMEOUT_MS / 60000} minutes of starting it`)
+    }
+
     /** One RDP connection attempt, until it ends. */
     private async run (
-        pane: DesktopPane, target: RemoteTarget, spec: DesktopSpec, session: DesktopSession, rdp: any,
-        endpoint: { host: string, port: number, credentials: Credentials, remember: boolean },
-    ): Promise<{ connected: boolean, signInFailed?: string, error?: string, reason?: string }> {
+        pane: DesktopPane, target: RemoteTarget, spec: DesktopSpec, session: DesktopSession, rdp: any, endpoint: Endpoint,
+    ): Promise<{ connected: boolean, signInFailed?: string, error?: string, reason?: string, certificate?: CertificateProblem }> {
         const credentials = endpoint.credentials
         const alive = () => this.sessions.get(pane) === session
+        session.certificateProblem = null
         const el = document.createElement('iron-remote-desktop') as any
         try {
-            el.setAttribute('scale', 'fit')
+            el.setAttribute('scale', this.screenScale() === 3 ? 'real' : 'fit')
             el.setAttribute('flexcenter', 'true')
             el.module = rdp.Backend
             const ready = new Promise<any>(resolve => el.addEventListener('ready', (e: CustomEvent) => resolve(e.detail.irgUserInteraction), { once: true }))
@@ -862,7 +1467,8 @@ export class RemoteDesktopService {
 
             // DOMAIN\user or user@domain go to the server as typed; only the former needs splitting.
             const [domain, username] = /^([^\\]+)\\(.+)$/.exec(credentials.username)?.slice(1) ?? [spec.domain ?? '', credentials.username]
-            session.status(spec.id === OWN_DESKTOP ? `Connecting to ${target.label}…` : `Connecting to ${spec.name} via ${target.label}…`)
+            session.status(spec.id === OWN_DESKTOP ? `Connecting to ${target.label}…`
+                : target.direct ? `Connecting to ${spec.name}…` : `Connecting to ${spec.name} via ${target.label}…`)
             const config = session.ui.configBuilder()
                 .withUsername(username)
                 .withPassword(credentials.password)
@@ -874,31 +1480,52 @@ export class RemoteDesktopService {
                 // Display control lets the remote monitor follow the pane (live resize, remote scaling).
                 .withExtension(rdp.displayControl(true))
             // H.264 in the graphics pipeline, decoded by the browser (hardware-accelerated where it can be). A decoder
-            // failure ends the connection, which then reconnects without H.264 (see below).
+            // failure ends the connection, which then reconnects without H.264 (see below). Not for xrdp: it encodes
+            // H.264 only in some builds, and without it bitmaps do better there than the pipeline.
             session.h264?.close()
             session.h264 = null
-            if (await this.useH264(rdp, session, settings)) {
+            if (spec.kind !== 'xrdp' && typeof rdp.graphicsPipeline === 'function' && await this.useH264(rdp, session, settings)) {
                 session.h264 = new rdp.WebCodecsH264Decoder({ onFailure: (reason: string) => session.log.push(`h264: failed: ${reason}`) })
                 config.withExtension(rdp.h264Decoder(session.h264))
             }
-            const pipeline = spec.kind === 'gnome' || !!session.h264
-            session.log.push(`graphics: ${pipeline ? 'graphics pipeline' : 'bitmaps'}${session.h264 ? ' with H.264' : ''}`)
-            // GNOME Remote Desktop requires the graphics pipeline. Windows does better with bitmaps than with the
-            // pipeline without H.264; with H.264 it streams what changes a lot (video) as video. A build without the
-            // switch decides by itself.
+            // GNOME Remote Desktop requires the graphics pipeline. Windows (and xrdp) do better with bitmaps than with
+            // the pipeline without H.264; with H.264, Windows streams what changes a lot (video) as video. A build
+            // without the switch decides by itself.
             if (typeof rdp.graphicsPipeline === 'function') {
+                const pipeline = spec.kind === 'gnome' || !!session.h264
                 config.withExtension(rdp.graphicsPipeline(pipeline))
+                session.graphics = pipeline ? `graphics pipeline${session.h264 ? ' with H.264' : ''}` : 'bitmaps'
+            } else {
+                session.graphics = 'automatic graphics'
             }
+            session.log.push(`graphics: ${session.graphics}`)
             if (settings.sound) {
                 session.audio?.close()
                 session.audio = new AudioPlayer()
                 config.withExtension(rdp.audioPlayback(session.audio.callback))
+            }
+            session.mic?.close()
+            session.mic = null
+            if (settings.microphone && typeof rdp.audioInput === 'function') {
+                const ui = session.ui
+                const mic: Microphone = new Microphone(
+                    pcm => ui.invokeExtension(rdp.audioInputData(pcm)),
+                    () => session.overlay.classList.toggle('trd-mic-on', mic.capturing),
+                    m => session.log.push(m),
+                    m => this.zone.run(() => this.notifications.error(m)),
+                )
+                session.mic = mic
+                config.withExtension(rdp.audioInput(mic.callback))
             }
             const built = config.build()
             let info: any
             try {
                 info = await session.ui.connect(built)
             } catch (e: any) {
+                // The proxy refused the server's certificate, before CredSSP (see checkCertificate).
+                if (session.certificateProblem) {
+                    return { connected: false, certificate: session.certificateProblem }
+                }
                 // IronErrorKind: 1 WrongPassword, 2 LogonFailure.
                 const kind = typeof e?.kind === 'function' ? e.kind() : undefined
                 const detail = typeof e?.backtrace === 'function' ? e.backtrace() : (e?.message ?? String(e))
@@ -906,7 +1533,7 @@ export class RemoteDesktopService {
                     session.log.push(`sign-in failed: ${detail.split('\n')[0]}`)
                     return { connected: false, signInFailed: kind === 1 ? 'Wrong user name or password.' : 'The sign-in was refused.' }
                 }
-                throw new Error(detail)
+                throw new Error(session.proxy?.failure ?? detail)
             }
             if (!alive()) {
                 return { connected: false }
@@ -921,6 +1548,7 @@ export class RemoteDesktopService {
             this.watchSize(pane, session)
             session.state = 'connected'
             session.status('')
+            this.syncIndicator(session)
             this.changed$.next()
             this.reconnects.delete(pane)  // connected again: a later drop starts over
             if (endpoint.remember) {
@@ -945,6 +1573,9 @@ export class RemoteDesktopService {
                     return { connected: true, error: `H.264 decoding failed (${session.h264.failed}); continuing without it` }
                 }
                 return { connected: true, error: typeof e?.backtrace === 'function' ? e.backtrace().split('\n')[0] : (e?.message ?? String(e)) }
+            } finally {
+                // The server can't close the microphone once the connection is gone.
+                session.mic?.close()
             }
             return { connected: true, reason: end?.reason?.() }
         } catch (e: any) {
@@ -960,6 +1591,6 @@ export function installStyle (): void {
     }
     styleInstalled = true
     const style = document.createElement('style')
-    style.textContent = STYLE + SIGNIN_STYLE + FILES_STYLE
+    style.textContent = STYLE + SIGNIN_STYLE + FILES_STYLE + STATS_STYLE
     document.head.appendChild(style)
 }

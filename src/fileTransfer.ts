@@ -137,7 +137,7 @@ export class FileTransfer {
     }
 
     /** A message over the desktop; hides after `hideAfter` ms (0: stays until replaced). */
-    private toast (text: string, actions: { label: string, run: () => void }[] = [], hideAfter = 6000): void {
+    toast (text: string, actions: { label: string, run: () => void }[] = [], hideAfter = 6000): void {
         clearTimeout(this.toastTimer)
         this.toastEl?.remove()
         const el = document.createElement('div')
@@ -173,7 +173,7 @@ export class FileTransfer {
 }
 
 /** `file.txt`, or `file 2.txt`, `file 3.txt`… if taken. */
-function uniquePath (target: string): string {
+export function uniquePath (target: string): string {
     if (!fs.existsSync(target)) {
         return target
     }

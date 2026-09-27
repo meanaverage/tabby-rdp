@@ -5,6 +5,7 @@ import {
 } from 'tabby-core'
 import { BaseTerminalTabComponent, TerminalDecorator } from 'tabby-terminal'
 import { DesktopSettings, RemoteDesktopService } from './desktop.service'
+import { DesktopKeyboard, SEND_KEYS } from './keyboard'
 import { isSSHTab } from './ssh'
 import { DesktopPane, desktopPaneOf, RemoteTargets } from './targets'
 
@@ -37,10 +38,18 @@ export class RemoteDesktopConfig extends ConfigProvider {
             sound: true,
             // H.264 in the graphics pipeline, decoded by the browser, where it can (applies on the next connect).
             h264: true,
+            // With resize 'off': 'fit' (scaled to the pane) | 'actual' (1:1, scrolling).
+            zoom: 'fit',
+            // A small indicator on the desktop: throughput, frames per second, SSH round trip, connection path.
+            connectionStatus: false,
+            // Send the microphone to the remote desktop while an application there records (applies on the next connect).
+            microphone: false,
             // More desktops behind SSH hosts (e.g. a Windows VM whose RDP port the host forwards); see desktops.ts.
             desktops: [],
             // Sharpness for particular desktops, overriding `sharpness`: [{ desktop: <session key>, sharpness }].
             desktopSharpness: [],
+            // Certificates of desktops behind hosts, trusted on first use: [{ desktop: <session key>, sha256 }].
+            trustedCertificates: [],
         },
     }
 
@@ -51,10 +60,13 @@ export class RemoteDesktopConfig extends ConfigProvider {
     }
 }
 
-/** What switching does for this pane right now. Names the desktop when the host has more than one. */
-export function toggleLabel (desktop: RemoteDesktopService, pane: DesktopPane): string {
+/**
+ * What switching does for this pane right now. Names the desktop when the host has more than one. Null in a remote
+ * desktop tab while its desktop shows: there is no console to switch to.
+ */
+export function toggleLabel (desktop: RemoteDesktopService, pane: DesktopPane): string | null {
     if (desktop.isVisible(pane)) {
-        return 'Back to console'
+        return desktop.hasConsole(pane) ? 'Back to console' : null
     }
     const { specs, current } = desktop.choicesOf(pane)
     const what = specs.length > 1 && current ? current.name : 'remote desktop'
@@ -74,10 +86,34 @@ export function desktopChoices (desktop: RemoteDesktopService, pane: DesktopPane
         label: desktop.isOpenElsewhere(pane, spec) ? `Switch to ${spec.name} (open in another tab)` : `Open ${spec.name}`,
         click: () => desktop.showDesktop(pane, spec.id),
     }))
-    if (targetLabel) {
+    // Not in a remote desktop tab: it isn't an SSH host.
+    if (targetLabel && desktop.hasConsole(pane)) {
         items.push({ label: `Add a desktop behind ${targetLabel}…`, click: () => desktop.addDesktop(pane) })
     }
     return items
+}
+
+/** What can be done with the pane's connected desktop: send keys, view only, a screenshot. Shared by the menus. */
+export function desktopActions (desktop: RemoteDesktopService, keyboard: DesktopKeyboard, pane: DesktopPane): MenuItemOptions[] {
+    const spec = desktop.desktopOf(pane)
+    if (!spec || !desktop.isConnected(pane)) {
+        return []
+    }
+    const viewOnly = desktop.isViewOnly(pane)
+    return [
+        {
+            label: 'Send keys',
+            enabled: !viewOnly,
+            submenu: SEND_KEYS[spec.kind].map(combo => ({ label: combo.label, click: () => keyboard.send(pane, combo) })),
+        },
+        {
+            type: 'checkbox',
+            label: 'View only (no keyboard or mouse input)',
+            checked: viewOnly,
+            click: () => desktop.setViewOnly(pane, !viewOnly),
+        },
+        { label: 'Save a screenshot (to Downloads and the clipboard)', click: () => desktop.saveScreenshot(pane) },
+    ]
 }
 
 /** Tab header menu (whole tab: its focused pane) and in-terminal menu (that pane). */
@@ -85,7 +121,7 @@ export function desktopChoices (desktop: RemoteDesktopService, pane: DesktopPane
 export class RemoteDesktopContextMenu extends TabContextMenuItemProvider {
     override weight = 6
 
-    constructor (private desktop: RemoteDesktopService, private targets: RemoteTargets) {
+    constructor (private desktop: RemoteDesktopService, private targets: RemoteTargets, private keyboard: DesktopKeyboard) {
         super()
     }
 
@@ -99,12 +135,17 @@ export class RemoteDesktopContextMenu extends TabContextMenuItemProvider {
         if (!pane || !this.desktop.has(pane) && !await this.targets.targetOf(pane)) {
             return []
         }
-        const items: MenuItemOptions[] = [{
-            label: toggleLabel(this.desktop, pane),
-            click: () => this.desktop.toggle(pane),
-        }, ...desktopChoices(this.desktop, pane, this.targets.cached(pane)?.label)]
+        const toggle = toggleLabel(this.desktop, pane)
+        const items: MenuItemOptions[] = [
+            ...toggle ? [{ label: toggle, click: () => this.desktop.toggle(pane) }] : [],
+            ...desktopChoices(this.desktop, pane, this.targets.cached(pane)?.label),
+        ]
         if (this.desktop.isConnected(pane)) {
             items.push({ label: 'Send files to the remote desktop…', click: () => this.desktop.sendFiles(pane) })
+            items.push(...desktopActions(this.desktop, this.keyboard, pane))
+        }
+        if (this.desktop.canSignInAgain(pane)) {
+            items.push({ label: 'Sign in again…', click: () => this.desktop.signInAgain(pane) })
         }
         if (this.desktop.has(pane)) {
             items.push({ label: 'Disconnect remote desktop', click: () => this.desktop.disconnect(pane) })
@@ -122,6 +163,13 @@ export function settingsMenu (desktop: RemoteDesktopService, pane?: DesktopPane 
         label,
         checked: current[key] === value,
         click: () => desktop.updateSettings({ [key]: value } as Partial<DesktopSettings>),
+    })
+    // A fixed resolution, scaled to fit the pane or shown at actual size.
+    const fixed = (zoom: DesktopSettings['zoom'], label: string): MenuItemOptions => ({
+        type: 'radio',
+        label,
+        checked: current.resize === 'off' && current.zoom === zoom,
+        click: () => desktop.updateSettings({ resize: 'off', zoom }),
     })
     // The desktop open in this pane can have its own sharpness (for example, Retina for Windows only).
     const spec = pane ? desktop.desktopOf(pane) : null
@@ -142,7 +190,8 @@ export function settingsMenu (desktop: RemoteDesktopService, pane?: DesktopPane 
         { label: 'When the pane is resized', enabled: false },
         radio('resize', 'live', 'Resize the remote desktop to fit'),
         radio('resize', 'reconnect', 'Reconnect at the new size'),
-        radio('resize', 'off', 'Keep the resolution (scale to fit)'),
+        fixed('fit', 'Keep the resolution (scale to fit)'),
+        fixed('actual', 'Keep the resolution (actual size, scroll)'),
         { type: 'separator' },
         { label: 'Sharpness', enabled: false },
         radio('sharpness', 'standard', 'Standard'),
@@ -167,6 +216,18 @@ export function settingsMenu (desktop: RemoteDesktopService, pane?: DesktopPane 
             checked: current.h264,
             click: () => desktop.updateSettings({ h264: !current.h264 }),
         },
+        {
+            type: 'checkbox',
+            label: 'Send the microphone while an app on the remote desktop records (applies on the next connect)',
+            checked: current.microphone,
+            click: () => desktop.updateSettings({ microphone: !current.microphone }),
+        },
+        {
+            type: 'checkbox',
+            label: 'Show connection status on the desktop (throughput, frames per second, round trip)',
+            checked: current.connectionStatus,
+            click: () => desktop.updateSettings({ connectionStatus: !current.connectionStatus }),
+        },
         ...process.platform === 'darwin' ? [{
             type: 'checkbox' as const,
             label: 'Mac shortcuts on the remote desktop (⌘C, ⌘V, ⌘Z… act as Ctrl+C, Ctrl+V…; off: ⌘ is the Windows key)',
@@ -174,6 +235,16 @@ export function settingsMenu (desktop: RemoteDesktopService, pane?: DesktopPane 
             click: () => desktop.updateSettings({ macShortcuts: !current.macShortcuts }),
         }] : [],
         { type: 'separator' },
+        { label: 'Import an .rdp file…', click: () => desktop.importRdpFile() },
+        {
+            // The form shows over a console (a remote desktop tab edits its desktop in Tabby's profile settings).
+            label: 'Edit a desktop',
+            enabled: !!pane && desktop.hasConsole(pane) && desktop.configuredDesktops().length > 0,
+            submenu: desktop.configuredDesktops().map((d, i) => ({
+                label: `${d.name ?? `${d.host}:${d.port}`} (behind ${d.via})…`,
+                click: () => pane && desktop.editDesktop(pane, i),
+            })),
+        },
         {
             label: 'Remove a desktop',
             enabled: desktop.configuredDesktops().length > 0,

@@ -1,12 +1,18 @@
 import { Injectable } from '@angular/core'
 import { execFile, spawn } from 'child_process'
+import * as net from 'net'
 import { Duplex } from 'stream'
 import { BaseTabComponent, SplitTabComponent } from 'tabby-core'
-import { execRemote, isConnected, isSSHTab, openTcpStream, SSHTab } from './ssh'
+import { DesktopSpec, DIRECT_KEY, specOf } from './desktops'
+import { formatAddress } from './desktopForm'
+import { execRemote, isConnected, isSSHTab, openTcpStream, pingRemote, SSHTab } from './ssh'
+
+/** Tabby profile type of remote desktop tabs (see rdpProfile.ts). */
+export const RDP_PROFILE_TYPE = 'rdp'
 
 /** Somewhere a remote desktop can be reached: a remote account, plus how to talk to it. */
 export interface RemoteTarget {
-    /** Canonical `user@hostname:port` (resolved with `ssh -G`); one desktop per key. */
+    /** Canonical `user@hostname:port` (resolved with `ssh -G`); one desktop per key. DIRECT_KEY for a direct connection. */
     key: string
     /** Short name for status messages. */
     label: string
@@ -18,9 +24,15 @@ export interface RemoteTarget {
     isOpen (): boolean
     /** Asks the SSH connection to come back, where Tabby owns it. */
     reconnectSSH?: () => Promise<void>
+    /** The Tabby SSH profile the connection was opened from (RDP profiles going through it are among its desktops). */
+    profileId?: string
+    /** A remote desktop tab's one desktop, connected to directly: no SSH host, no console, no desktop of its own. */
+    direct?: DesktopSpec
+    /** Round-trip time to the SSH server in ms, where it is cheap to measure (Tabby's own connection). */
+    ping?: () => Promise<number>
 }
 
-/** A terminal pane the desktop can be layered over: an SSH tab, or a local terminal running `ssh`. */
+/** A terminal pane the desktop can be layered over (an SSH tab, or a local terminal running `ssh`), or a remote desktop tab. */
 export interface DesktopPane extends BaseTabComponent {
     element: { nativeElement: HTMLElement }
     frontend?: { focus (): void } | null
@@ -34,10 +46,16 @@ function isLocalTerminal (tab: BaseTabComponent | null | undefined): tab is Desk
     return t?.profile?.type === 'local' && !!t.element?.nativeElement && typeof t.session?.getChildProcesses === 'function'
 }
 
+/** A remote desktop tab (RDP profile, connecting directly): the desktop fills it, there is no terminal under it. */
+export function isRDPTab (tab: BaseTabComponent | null | undefined): boolean {
+    const t = tab as DesktopPane | null
+    return t?.profile?.type === RDP_PROFILE_TYPE && !!t.element?.nativeElement
+}
+
 /** The pane a tab or tab-header action refers to: the pane itself, or a split's focused pane. */
 export function desktopPaneOf (tab: BaseTabComponent | null | undefined): DesktopPane | null {
     const pane = tab instanceof SplitTabComponent ? tab.getFocusedTab() : tab
-    return isSSHTab(pane) || isLocalTerminal(pane) ? pane as DesktopPane : null
+    return isSSHTab(pane) || isLocalTerminal(pane) || isRDPTab(pane) ? pane as DesktopPane : null
 }
 
 // ---- system ssh --------------------------------------------------------------------------------
@@ -171,9 +189,41 @@ class TabbySSHTarget implements RemoteTarget {
     openTcp (host: string, port: number): Promise<Duplex> { return openTcpStream(this.tab, host, port) }
     exec (command: string, stdin: string): Promise<string> { return execRemote(this.tab, command, stdin) }
     isOpen (): boolean { return isConnected(this.tab) }
+    ping (): Promise<number> { return pingRemote(this.tab) }
     get reconnectSSH (): (() => Promise<void>) | undefined {
         return typeof this.tab.reconnect === 'function' ? () => this.tab.reconnect!() : undefined
     }
+    get profileId (): string | undefined { return (this.tab.profile as { id?: string } | undefined)?.id }
+}
+
+// ---- direct connections ------------------------------------------------------------------------
+
+/** A remote desktop tab's RDP server, reached with a plain TCP connection from this computer (LAN, VPN). */
+class DirectTarget implements RemoteTarget {
+    readonly key = DIRECT_KEY
+    constructor (readonly label: string, readonly direct: DesktopSpec) { }
+
+    openTcp (host: string, port: number): Promise<Duplex> {
+        return new Promise((resolve, reject) => {
+            const socket = net.connect({ host, port })
+            const timer = setTimeout(() => socket.destroy(new Error(`${formatAddress(host, port)} did not answer`)), 15000)
+            socket.once('connect', () => {
+                clearTimeout(timer)
+                socket.setNoDelay(true)
+                // Notices a dead peer (sleep, a dropped VPN) where the SSH path has the SSH connection's keepalive.
+                socket.setKeepAlive(true, 10000)
+                resolve(socket)
+            })
+            socket.once('error', e => {
+                clearTimeout(timer)
+                reject(e)
+            })
+        })
+    }
+
+    exec (): Promise<string> { return Promise.reject(new Error('A direct connection runs no commands')) }
+    // Each connection is its own socket; there is nothing to wait for between them.
+    isOpen (): boolean { return true }
 }
 
 // ---- detection ---------------------------------------------------------------------------------
@@ -196,7 +246,13 @@ export class RemoteTargets {
         let target: RemoteTarget | null = null
         let pid: number | undefined
         try {
-            if (isSSHTab(pane)) {
+            if (isRDPTab(pane)) {
+                // Made afresh each time (it holds no state), so that an edited profile applies on the next connection.
+                const profile = pane.profile as { name?: string, options?: any }
+                // No `wake` for a direct one: starting a machine takes an SSH host to do it from.
+                const spec = specOf({ ...profile.options, name: profile.name, wake: undefined })
+                target = spec && new DirectTarget(formatAddress(spec.host, spec.port), spec)
+            } else if (isSSHTab(pane)) {
                 const o = pane.profile?.options ?? {}
                 const known = this.cache.get(pane)?.target
                 target = known ?? new TabbySSHTarget(

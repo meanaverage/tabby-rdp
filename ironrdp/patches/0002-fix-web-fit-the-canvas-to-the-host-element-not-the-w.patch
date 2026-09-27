@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: meanaverage <18336095+meanaverage@users.noreply.github.com>
 Date: Fri, 25 Sep 2026 18:41:52 -0700
-Subject: [PATCH 2/6] fix(web): fit the canvas to the host element, not the
+Subject: [PATCH 2/8] fix(web): fit the canvas to the host element, not the
  window
 
 The fit and real scalings measured the space available from the wrapper to
