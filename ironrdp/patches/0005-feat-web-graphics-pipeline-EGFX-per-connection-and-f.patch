@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: meanaverage <18336095+meanaverage@users.noreply.github.com>
 Date: Sat, 26 Sep 2026 11:26:22 -0700
-Subject: [PATCH 5/8] feat(web): graphics pipeline (EGFX) per connection, and
+Subject: [PATCH 05/10] feat(web): graphics pipeline (EGFX) per connection, and
  follow its resets
 
 GNOME Remote Desktop requires the graphics pipeline ([MS-RDPEGFX]) and

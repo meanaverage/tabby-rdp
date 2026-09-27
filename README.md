@@ -269,6 +269,7 @@ tabby-rdp ships IronRDP with a short series of patches ([ironrdp/](ironrdp)). Th
 | The graphics pipeline in the web client, following its resets | Covered by [Devolutions/IronRDP#1977](https://github.com/Devolutions/IronRDP/pull/1977) (not ours; [tested with GNOME](https://github.com/Devolutions/IronRDP/pull/1977#issuecomment-5851624036)) |
 | Sound in the web client | [Devolutions/IronRDP#2020](https://github.com/Devolutions/IronRDP/pull/2020) |
 | H.264 in the web client, decoded by the browser (WebCodecs) | Not submitted yet |
+| Decode Windows' RemoteFX Progressive refinements | Not submitted yet |
 | Microphone in the web client | Not submitted yet |
 
 The aim is to make IronRDP's browser client work well with both Linux and Windows desktops, for everyone who embeds

@@ -1,17 +1,19 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: meanaverage <18336095+meanaverage@users.noreply.github.com>
 Date: Sun, 27 Sep 2026 02:01:49 -0700
-Subject: [PATCH 8/8] feat(web): H.264 (AVC420) in the graphics pipeline,
- decoded by WebCodecs
+Subject: [PATCH 08/10] feat(web): H.264 in the graphics pipeline, decoded by
+ WebCodecs
 
 The web client's graphics pipeline advertised CAPVERSION_8 only, so servers
 sent RemoteFX Progressive, ClearCodec and planar, all decoded in
 WebAssembly on the main thread. With the new `h264Decoder(decoder)`
-extension it also advertises CAPVERSION_81 with AVC420, and a
-`WebCodecsH264Decoder` decodes the H.264 with the browser's VideoDecoder
-(hardware-accelerated where the platform has it).
+extension it also advertises the H.264 versions, V10.7 down to V10 and
+V8.1 with AVC420, and a `WebCodecsH264Decoder` decodes the H.264 with the
+browser's VideoDecoder (hardware-accelerated where the platform has it).
+Windows only streams H.264 to V10 and later: to V8.1 it confirms the set
+without AVC420.
 
-ironrdp-egfx: `GraphicsPipelineClient::with_external_h264` hands AVC420
+ironrdp-egfx: `GraphicsPipelineClient::with_external_h264` hands AVC
 frames out instead of decoding them in `process` (`take_h264_frames`), for
 decoders that are asynchronous or live elsewhere. The caller returns each
 frame's region pixels with `complete_h264_frame`. Commands after a frame,
@@ -19,6 +21,11 @@ its EndFrame and so its FrameAcknowledge wait until then, since surface
 commands read the pixels the frame produces and the acknowledgement paces
 the server; frames can be decoded ahead, and are applied in order. The
 queue depth in acknowledgements counts the frames still waiting.
+
+AVC444 (which V10 and later imply) is handed out as its YUV420 main view:
+both views are one H.264 stream, so every access unit goes to the decoder,
+but only the main view's picture is shown. Combining the auxiliary view
+into 4:4:4 is left out, so AVC444 comes out with 4:2:0 chroma.
 
 A new `h264` module prepares the bitstream for platform decoders:
 MS-RDPEGFX specifies Annex B (a length-prefixed chain is converted), and an
@@ -41,25 +48,22 @@ whatever the stream signals (MS-RDPEGFX 3.3.8.3.1). A decoder error, or a
 frame that doesn't come out within `stallMs`, fails it, which ends the
 session with an error: the application can reconnect without H.264.
 `h264Supported()` asks VideoDecoder.isConfigSupported first.
-
-AVC444 is not advertised (no CAPVERSION_10 and later): it needs the two
-YUV420 views combined into 4:4:4, which this doesn't do.
 ---
- crates/ironrdp-egfx/README.md                 |   9 +
- crates/ironrdp-egfx/src/client.rs             | 283 +++++++++-
+ crates/ironrdp-egfx/README.md                 |  11 +
+ crates/ironrdp-egfx/src/client.rs             | 336 +++++++++++-
  crates/ironrdp-egfx/src/h264.rs               | 500 ++++++++++++++++++
  crates/ironrdp-egfx/src/lib.rs                |   1 +
  crates/ironrdp-session/src/active_stage.rs    | 103 +++-
- .../tests/egfx/external_h264.rs               | 298 +++++++++++
+ .../tests/egfx/external_h264.rs               | 417 +++++++++++++++
  .../ironrdp-testsuite-core/tests/egfx/h264.rs | 158 ++++++
  .../ironrdp-testsuite-core/tests/egfx/mod.rs  |   2 +
  crates/ironrdp-web/src/h264.rs                |  97 ++++
  crates/ironrdp-web/src/lib.rs                 |   1 +
- crates/ironrdp-web/src/session.rs             |  55 +-
- .../src/H264Decoder.test.ts                   | 285 ++++++++++
- .../src/H264Decoder.ts                        | 401 ++++++++++++++
- .../iron-remote-desktop-rdp/src/main.ts       |  17 +-
- 14 files changed, 2171 insertions(+), 39 deletions(-)
+ crates/ironrdp-web/src/session.rs             | 104 +++-
+ .../src/H264Decoder.test.ts                   | 302 +++++++++++
+ .../src/H264Decoder.ts                        | 410 ++++++++++++++
+ .../iron-remote-desktop-rdp/src/main.ts       |  18 +-
+ 14 files changed, 2415 insertions(+), 45 deletions(-)
  create mode 100644 crates/ironrdp-egfx/src/h264.rs
  create mode 100644 crates/ironrdp-testsuite-core/tests/egfx/external_h264.rs
  create mode 100644 crates/ironrdp-testsuite-core/tests/egfx/h264.rs
@@ -68,10 +72,10 @@ YUV420 views combined into 4:4:4, which this doesn't do.
  create mode 100644 web-client/iron-remote-desktop-rdp/src/H264Decoder.ts
 
 diff --git a/crates/ironrdp-egfx/README.md b/crates/ironrdp-egfx/README.md
-index 2145e61b..0997b89b 100644
+index 2145e61b..d99bbd7f 100644
 --- a/crates/ironrdp-egfx/README.md
 +++ b/crates/ironrdp-egfx/README.md
-@@ -5,6 +5,15 @@ Graphics Pipeline Extension ([MS-RDPEGFX]) implementation for IronRDP.
+@@ -5,6 +5,17 @@ Graphics Pipeline Extension ([MS-RDPEGFX]) implementation for IronRDP.
  Provides PDU types and client/server processors for the Display Pipeline Virtual
  Channel Extension, including H.264/AVC420 and AVC444 video streaming support.
  
@@ -80,7 +84,9 @@ index 2145e61b..0997b89b 100644
 +A client can also decode AVC420 outside the channel processor, with a decoder that is asynchronous or lives
 +elsewhere (a browser's WebCodecs `VideoDecoder`, a hardware decoder): `GraphicsPipelineClient::with_external_h264`
 +hands each frame out (`take_h264_frames`) and applies its pixels, in order, when they come back
-+(`complete_h264_frame`); commands after it and its frame acknowledgement wait until then. The `h264` module prepares
++(`complete_h264_frame`); commands after it and its frame acknowledgement wait until then. AVC444 is handed out as
++its YUV420 main view (the auxiliary view is decoded but not shown), so such a client can advertise the V10
++capability sets, the only ones Windows streams H.264 to. The `h264` module prepares
 +the bitstream for such decoders (Annex B, and an SPS that declares output in decoding order, without which conformant
 +decoders hold every picture back).
 +
@@ -88,7 +94,7 @@ index 2145e61b..0997b89b 100644
  
  This crate contains optional integration support for OpenH264 through the
 diff --git a/crates/ironrdp-egfx/src/client.rs b/crates/ironrdp-egfx/src/client.rs
-index a9a471c6..f3a23047 100644
+index a9a471c6..3e7762c8 100644
 --- a/crates/ironrdp-egfx/src/client.rs
 +++ b/crates/ironrdp-egfx/src/client.rs
 @@ -53,7 +53,7 @@
@@ -100,14 +106,25 @@ index a9a471c6..f3a23047 100644
  
  use ironrdp_core::{Decode as _, ReadCursor, impl_as_any};
  use ironrdp_dvc::{DvcClientProcessor, DvcMessage, DvcProcessor};
-@@ -68,6 +68,7 @@ use tracing::{debug, trace, warn};
+@@ -68,12 +68,13 @@ use tracing::{debug, trace, warn};
  use crate::CHANNEL_NAME;
  use crate::compositor::{Compositor, OutputUpdate};
  use crate::decode::H264Decoder;
 +use crate::h264;
  use crate::pdu::{
-     Avc420BitmapStream, CacheImportReplyPdu, CacheToSurfacePdu, CapabilitiesAdvertisePdu, CapabilitiesV8Flags,
-     CapabilitiesV81Flags, CapabilitiesV107Flags, CapabilitySet, Codec1Type, DeleteEncodingContextPdu,
+-    Avc420BitmapStream, CacheImportReplyPdu, CacheToSurfacePdu, CapabilitiesAdvertisePdu, CapabilitiesV8Flags,
+-    CapabilitiesV81Flags, CapabilitiesV107Flags, CapabilitySet, Codec1Type, DeleteEncodingContextPdu,
+-    EvictCacheEntryPdu, FrameAcknowledgePdu, GfxPdu, MapSurfaceToScaledOutputPdu, MapSurfaceToScaledWindowPdu,
+-    MapSurfaceToWindowPdu, PixelFormat, QueueDepth, RawCapabilitySet, SolidFillPdu, SurfaceToCachePdu,
+-    SurfaceToSurfacePdu, WireToSurface2Pdu,
++    Avc420BitmapStream, Avc444BitmapStream, CacheImportReplyPdu, CacheToSurfacePdu, CapabilitiesAdvertisePdu,
++    CapabilitiesV8Flags, CapabilitiesV81Flags, CapabilitiesV107Flags, CapabilitySet, Codec1Type,
++    DeleteEncodingContextPdu, Encoding, EvictCacheEntryPdu, FrameAcknowledgePdu, GfxPdu, MapSurfaceToScaledOutputPdu,
++    MapSurfaceToScaledWindowPdu, MapSurfaceToWindowPdu, PixelFormat, QueueDepth, RawCapabilitySet, SolidFillPdu,
++    SurfaceToCachePdu, SurfaceToSurfacePdu, WireToSurface2Pdu,
+ };
+ 
+ /// Max capacity to keep for decompressed buffer when cleared.
 @@ -209,6 +210,47 @@ pub struct BitmapUpdate {
      pub height: u16,
  }
@@ -116,7 +133,7 @@ index a9a471c6..f3a23047 100644
 +// External H.264 Decoding
 +// ============================================================================
 +
-+/// An AVC420 frame for a decoder outside the processor
++/// An H.264 access unit for a decoder outside the processor
 +///
 +/// See [`GraphicsPipelineClient::with_external_h264`]. The caller decodes [`H264Frame::data`] and passes the
 +/// pixels of [`H264Frame::regions`] to [`GraphicsPipelineClient::complete_h264_frame`].
@@ -131,7 +148,7 @@ index a9a471c6..f3a23047 100644
 +    pub destination_rectangle: ExclusiveRectangle,
 +    /// The rectangles this frame updates, in surface coordinates (exclusive `right`/`bottom`), clipped to the
 +    /// destination rectangle. Only these are taken from the decoded picture: the region mask crops it
-+    /// ([MS-RDPEGFX] 2.2.4.4).
++    /// ([MS-RDPEGFX] 2.2.4.4). Empty for an AVC444 auxiliary view, which is decoded but not shown.
 +    ///
 +    /// [MS-RDPEGFX] 2.2.4.4: https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-rdpegfx/5f12c20e-2ea1-4ad1-a2a0-019ee3893731
 +    pub regions: Vec<ExclusiveRectangle>,
@@ -175,7 +192,7 @@ index a9a471c6..f3a23047 100644
  }
  
  impl GraphicsPipelineClient {
-@@ -449,7 +503,61 @@ impl GraphicsPipelineClient {
+@@ -449,9 +503,64 @@ impl GraphicsPipelineClient {
              frames_queued: 0,
              total_frames_decoded: 0,
              pending_output_reset: None,
@@ -185,15 +202,16 @@ index a9a471c6..f3a23047 100644
 +            h264_results: BTreeMap::new(),
 +            queue: VecDeque::new(),
 +            queued_frame_ends: 0,
-+        }
-+    }
-+
+         }
+     }
+ 
 +    /// Decodes AVC420 outside the processor, for decoders that are asynchronous or live elsewhere (a browser's
 +    /// WebCodecs `VideoDecoder`, a hardware decoder on another thread).
 +    ///
 +    /// AVC capability sets are advertised as with an [`H264Decoder`]. Each AVC420 `WireToSurface1` becomes an
 +    /// [`H264Frame`], taken with [`Self::take_h264_frames`]; the caller decodes it and hands the pixels back with
-+    /// [`Self::complete_h264_frame`]. Commands after it, including its `EndFrame` and so its `FrameAcknowledge`,
++    /// [`Self::complete_h264_frame`]. AVC444 is taken too, as its YUV420 main view (see `hand_out_avc`), so a
++    /// handler may advertise capability sets from V10 on, which imply it. Commands after it, including its `EndFrame` and so its `FrameAcknowledge`,
 +    /// wait until then: surface commands read and write the pixels the frame produces, and the acknowledgement
 +    /// tells the server the frame was shown, which paces what it sends. Frames can be decoded ahead (all taken
 +    /// frames can be in flight at once); their pixels are applied in order.
@@ -222,7 +240,7 @@ index a9a471c6..f3a23047 100644
 +        {
 +            warn!(id, "Completion for an H.264 frame that is not pending");
 +            return Ok(Vec::new());
-         }
++        }
 +        self.h264_results.insert(id, pixels);
 +        self.process_queue()
 +    }
@@ -234,10 +252,12 @@ index a9a471c6..f3a23047 100644
 +            .iter()
 +            .filter(|queued| matches!(queued, Queued::H264 { .. }))
 +            .count()
-     }
- 
++    }
++
      // ========================================================================
-@@ -507,6 +615,160 @@ impl GraphicsPipelineClient {
+     // State Queries
+     // ========================================================================
+@@ -507,6 +616,201 @@ impl GraphicsPipelineClient {
          self.pending_output_reset.take()
      }
  
@@ -249,9 +269,15 @@ index a9a471c6..f3a23047 100644
 +    /// decoding overlaps with receiving what follows.
 +    fn enqueue(&mut self, pdu: GfxPdu) -> PduResult<()> {
 +        let pdu = match pdu {
-+            GfxPdu::WireToSurface1(wire) if self.external_h264 && wire.codec_id == Codec1Type::Avc420 => {
-+                let queued = self.hand_out_avc420(&wire)?;
-+                self.queue.push_back(queued);
++            GfxPdu::WireToSurface1(wire)
++                if self.external_h264
++                    && matches!(
++                        wire.codec_id,
++                        Codec1Type::Avc420 | Codec1Type::Avc444 | Codec1Type::Avc444v2
++                    ) =>
++            {
++                let queued = self.hand_out_avc(&wire)?;
++                self.queue.extend(queued);
 +                return Ok(());
 +            }
 +            other => other,
@@ -296,54 +322,89 @@ index a9a471c6..f3a23047 100644
 +        Ok(responses)
 +    }
 +
-+    fn hand_out_avc420(&mut self, pdu: &crate::pdu::WireToSurface1Pdu) -> PduResult<Queued> {
++    /// Hands out the H.264 access units of an AVC `WireToSurface1`: one for AVC420, one or two for AVC444.
++    ///
++    /// AVC444 ([MS-RDPEGFX] 2.2.4.5, 2.2.4.6) carries a YUV420 main view and a chroma auxiliary view, coded as
++    /// one H.264 stream. Every access unit goes to the decoder, so that the stream stays whole, but only the main
++    /// view's picture is taken: it is a complete 4:2:0 picture by itself. Combining the auxiliary view into 4:4:4 is
++    /// left out, so AVC444 comes out with 4:2:0 chroma.
++    ///
++    /// [MS-RDPEGFX] 2.2.4.5: https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-rdpegfx/844018a5-d717-4bc9-bddb-8b4d6be5dd3f
++    /// [MS-RDPEGFX] 2.2.4.6: https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-rdpegfx/3b337b87-f478-4786-a63b-97794aa72075
++    fn hand_out_avc(&mut self, pdu: &crate::pdu::WireToSurface1Pdu) -> PduResult<Vec<Queued>> {
 +        let rect = &pdu.destination_rectangle;
 +        if rect.left > rect.right || rect.top > rect.bottom {
 +            return Err(pdu_other_err!("invalid destination rectangle ordering"));
 +        }
 +        let mut cursor = ReadCursor::new(&pdu.bitmap_data);
-+        let stream = Avc420BitmapStream::decode(&mut cursor).map_err(|e| decode_err!(e))?;
++        // Each stream with whether its picture is the one to show (the main view) or only keeps the stream whole.
++        let streams = if pdu.codec_id == Codec1Type::Avc420 {
++            vec![(
++                Avc420BitmapStream::decode(&mut cursor).map_err(|e| decode_err!(e))?,
++                true,
++            )]
++        } else {
++            let stream = Avc444BitmapStream::decode(&mut cursor).map_err(|e| decode_err!(e))?;
++            match (stream.encoding, stream.stream2) {
++                // LC 0: the main view, then the auxiliary view.
++                (Encoding::LUMA_AND_CHROMA, Some(auxiliary)) => vec![(stream.stream1, true), (auxiliary, false)],
++                // LC 1: the main view alone.
++                (Encoding::LUMA, _) => vec![(stream.stream1, true)],
++                // LC 2: the auxiliary view alone.
++                _ => vec![(stream.stream1, false)],
++            }
++        };
 +
-+        let regions: Vec<ExclusiveRectangle> = stream
-+            .rectangles
-+            .iter()
-+            .filter_map(|region| {
-+                let clipped = ExclusiveRectangle {
-+                    left: region.left.max(rect.left),
-+                    top: region.top.max(rect.top),
-+                    right: region.right.min(rect.right),
-+                    bottom: region.bottom.min(rect.bottom),
-+                };
-+                (clipped.left < clipped.right && clipped.top < clipped.bottom).then_some(clipped)
-+            })
-+            .collect();
++        let mut queued = Vec::with_capacity(streams.len());
++        for (stream, main_view) in streams {
++            let regions: Vec<ExclusiveRectangle> = if main_view {
++                stream
++                    .rectangles
++                    .iter()
++                    .filter_map(|region| {
++                        let clipped = ExclusiveRectangle {
++                            left: region.left.max(rect.left),
++                            top: region.top.max(rect.top),
++                            right: region.right.min(rect.right),
++                            bottom: region.bottom.min(rect.bottom),
++                        };
++                        (clipped.left < clipped.right && clipped.top < clipped.bottom).then_some(clipped)
++                    })
++                    .collect()
++            } else {
++                Vec::new()
++            };
 +
-+        let annex_b = h264::to_annex_b(stream.data);
-+        let data = h264::with_low_latency_output(&annex_b).into_owned();
-+        let key_frame = h264::is_key_frame(&data);
++            let annex_b = h264::to_annex_b(stream.data);
++            let data = h264::with_low_latency_output(&annex_b).into_owned();
++            let key_frame = h264::is_key_frame(&data);
 +
-+        let id = self.next_h264_id;
-+        self.next_h264_id = self.next_h264_id.wrapping_add(1);
-+        trace!(
-+            id,
-+            surface_id = pdu.surface_id,
-+            key_frame,
-+            regions = regions.len(),
-+            "AVC420 frame handed out"
-+        );
-+        self.h264_frames.push(H264Frame {
-+            id,
-+            surface_id: pdu.surface_id,
-+            destination_rectangle: rect.clone(),
-+            regions: regions.clone(),
-+            data,
-+            key_frame,
-+        });
-+        Ok(Queued::H264 {
-+            id,
-+            surface_id: pdu.surface_id,
-+            regions,
-+        })
++            let id = self.next_h264_id;
++            self.next_h264_id = self.next_h264_id.wrapping_add(1);
++            trace!(
++                id,
++                surface_id = pdu.surface_id,
++                codec = ?pdu.codec_id,
++                main_view,
++                key_frame,
++                regions = regions.len(),
++                "H.264 access unit handed out"
++            );
++            self.h264_frames.push(H264Frame {
++                id,
++                surface_id: pdu.surface_id,
++                destination_rectangle: rect.clone(),
++                regions: regions.clone(),
++                data,
++                key_frame,
++            });
++            queued.push(Queued::H264 {
++                id,
++                surface_id: pdu.surface_id,
++                regions,
++            });
++        }
++        Ok(queued)
 +    }
 +
 +    /// Applies an externally decoded frame's regions to its surface, as an in-process decode would.
@@ -398,7 +459,15 @@ index a9a471c6..f3a23047 100644
      // ========================================================================
      // PDU Handlers
      // ========================================================================
-@@ -1126,8 +1388,9 @@ impl GraphicsPipelineClient {
+@@ -682,6 +986,7 @@ impl GraphicsPipelineClient {
+         let cap = self.negotiated_caps.insert(cap);
+ 
+         debug!(
++            ?cap,
+             avc420 = self.codec_caps.avc420,
+             avc444 = self.codec_caps.avc444,
+             "EGFX capabilities confirmed"
+@@ -1126,8 +1431,9 @@ impl GraphicsPipelineClient {
          // Per [3.3.5.12]: client MUST send FrameAcknowledge after EndFrame.
          // We send the actual queue depth (not Unavailable / 0xFFFFFFFF as FreeRDP does);
          // the real value gives the server backpressure information for frame pacing.
@@ -409,7 +478,7 @@ index a9a471c6..f3a23047 100644
              frame_id,
              total_frames_decoded: self.total_frames_decoded,
          });
-@@ -1145,7 +1408,7 @@ impl DvcProcessor for GraphicsPipelineClient {
+@@ -1145,7 +1451,7 @@ impl DvcProcessor for GraphicsPipelineClient {
      }
  
      fn start(&mut self, _channel_id: u32) -> PduResult<Vec<DvcMessage>> {
@@ -418,7 +487,7 @@ index a9a471c6..f3a23047 100644
              self.handler.capabilities()
          } else {
              // No H.264 decoder: filter out capability sets that imply AVC support.
-@@ -1197,14 +1460,11 @@ impl DvcProcessor for GraphicsPipelineClient {
+@@ -1197,14 +1503,11 @@ impl DvcProcessor for GraphicsPipelineClient {
              }
          }
  
@@ -436,7 +505,7 @@ index a9a471c6..f3a23047 100644
      }
  }
  
-@@ -1214,6 +1474,11 @@ impl DvcClientProcessor for GraphicsPipelineClient {}
+@@ -1214,6 +1517,11 @@ impl DvcClientProcessor for GraphicsPipelineClient {}
  // Frame Cropping
  // ============================================================================
  
@@ -1110,26 +1179,83 @@ index f53e0aed..b80186a6 100644
  
 diff --git a/crates/ironrdp-testsuite-core/tests/egfx/external_h264.rs b/crates/ironrdp-testsuite-core/tests/egfx/external_h264.rs
 new file mode 100644
-index 00000000..e7d1e0c6
+index 00000000..023fac8b
 --- /dev/null
 +++ b/crates/ironrdp-testsuite-core/tests/egfx/external_h264.rs
-@@ -0,0 +1,298 @@
-+//! `GraphicsPipelineClient::with_external_h264`: AVC420 frames decoded outside the processor, whose pixels are
-+//! applied (and frames acknowledged) in the order the server sent them.
+@@ -0,0 +1,417 @@
++//! `GraphicsPipelineClient::with_external_h264`: AVC420 frames (and AVC444 main views) decoded outside the
++//! processor, whose pixels are applied (and frames acknowledged) in the order the server sent them.
 +
 +use ironrdp_core::{Decode as _, Encode as _, ReadCursor, WriteCursor, encode_vec};
 +use ironrdp_dvc::{DvcMessage, DvcProcessor as _};
 +use ironrdp_egfx::client::{GraphicsPipelineClient, GraphicsPipelineHandler};
 +use ironrdp_egfx::pdu::{
-+    Avc420Region, CapabilitiesConfirmPdu, CapabilitiesV8Flags, CapabilitiesV81Flags, CapabilitySet, CapabilityVersion,
-+    Codec1Type, Color, CreateSurfacePdu, EndFramePdu, GfxPdu, MapSurfaceToOutputPdu, PixelFormat, ResetGraphicsPdu,
-+    SolidFillPdu, StartFramePdu, Timestamp, WireToSurface1Pdu, encode_avc420_bitmap_stream,
++    Avc420BitmapStream, Avc420Region, Avc444BitmapStream, CapabilitiesConfirmPdu, CapabilitiesV8Flags,
++    CapabilitiesV81Flags, CapabilitiesV107Flags, CapabilitySet, CapabilityVersion, Codec1Type, Color, CreateSurfacePdu,
++    Encoding, EndFramePdu, GfxPdu, MapSurfaceToOutputPdu, PixelFormat, ResetGraphicsPdu, SolidFillPdu, StartFramePdu,
++    Timestamp, WireToSurface1Pdu, encode_avc420_bitmap_stream,
 +};
 +use ironrdp_graphics::zgfx::wrap_uncompressed;
 +use ironrdp_pdu::geometry::ExclusiveRectangle;
 +
 +struct NoopHandler;
 +impl GraphicsPipelineHandler for NoopHandler {}
++
++/// Advertises V10.7 (H.264 as AVC444) ahead of the default sets, as the web client does.
++struct AvcHandler;
++impl GraphicsPipelineHandler for AvcHandler {
++    fn capabilities(&self) -> Vec<CapabilitySet> {
++        vec![
++            CapabilitySet::V10_7 {
++                flags: CapabilitiesV107Flags::SMALL_CACHE,
++            },
++            CapabilitySet::V8_1 {
++                flags: CapabilitiesV81Flags::AVC420_ENABLED | CapabilitiesV81Flags::SMALL_CACHE,
++            },
++            CapabilitySet::V8 {
++                flags: CapabilitiesV8Flags::SMALL_CACHE,
++            },
++        ]
++    }
++}
++
++fn advertised(client: &mut GraphicsPipelineClient) -> Vec<CapabilityVersion> {
++    let messages = client.start(0).expect("start");
++    let encoded = encode_vec(messages[0].as_ref()).expect("encode");
++    let GfxPdu::CapabilitiesAdvertise(caps) = GfxPdu::decode(&mut ReadCursor::new(&encoded)).expect("decode") else {
++        panic!("expected CapabilitiesAdvertise");
++    };
++    caps.0.iter().map(|cap| cap.version).collect()
++}
++
++/// An AVC444 `WireToSurface1` (codec AVC444v2) with the given LC and streams.
++fn avc444(encoding: Encoding, stream1: &[u8], stream2: Option<&[u8]>) -> GfxPdu {
++    let region = [rect(0, 0, 16, 8)];
++    let quality = [ironrdp_egfx::pdu::QuantQuality {
++        quantization_parameter: 22,
++        progressive: false,
++        quality: 100,
++    }];
++    let stream = |data| Avc420BitmapStream {
++        rectangles: region.to_vec(),
++        quant_qual_vals: quality.to_vec(),
++        data,
++    };
++    let pdu = Avc444BitmapStream {
++        encoding,
++        stream1: stream(stream1),
++        stream2: stream2.map(stream),
++    };
++    let mut bitmap_data = vec![0u8; pdu.size()];
++    pdu.encode(&mut WriteCursor::new(&mut bitmap_data)).expect("encode");
++    GfxPdu::WireToSurface1(WireToSurface1Pdu {
++        surface_id: 1,
++        codec_id: Codec1Type::Avc444v2,
++        pixel_format: PixelFormat::XRgb,
++        destination_rectangle: rect(0, 0, 16, 8),
++        bitmap_data,
++    })
++}
 +
 +fn rect(left: u16, top: u16, right: u16, bottom: u16) -> ExclusiveRectangle {
 +    ExclusiveRectangle {
@@ -1412,6 +1538,68 @@ index 00000000..e7d1e0c6
 +    assert!(client.take_h264_frames().is_empty());
 +    assert_eq!(client.pending_h264_frames(), 0);
 +}
++
++#[test]
++fn avc444_versions_are_advertised_by_a_handler_that_asks_for_them() {
++    let mut client = GraphicsPipelineClient::new(Box::new(AvcHandler), None).with_external_h264();
++    assert_eq!(
++        advertised(&mut client),
++        [CapabilityVersion::V10_7, CapabilityVersion::V8_1, CapabilityVersion::V8]
++    );
++    // Without an H.264 decoder, every version that implies H.264 is left out.
++    let mut client = GraphicsPipelineClient::new(Box::new(AvcHandler), None);
++    assert_eq!(advertised(&mut client), [CapabilityVersion::V8]);
++}
++
++#[test]
++fn avc444_main_views_are_shown_and_auxiliary_views_only_decoded() {
++    let mut client = client();
++    let main = [0, 0, 0, 1, 0x21, 0x01];
++    let auxiliary = [0, 0, 0, 1, 0x21, 0x02];
++    process_all(
++        &mut client,
++        &[
++            start(1),
++            // LC 0: main view and auxiliary view
++            avc444(Encoding::LUMA_AND_CHROMA, &main, Some(&auxiliary)),
++            end(1),
++            start(2),
++            // LC 1: main view alone
++            avc444(Encoding::LUMA, &main, None),
++            end(2),
++            start(3),
++            // LC 2: auxiliary view alone
++            avc444(Encoding::CHROMA, &auxiliary, None),
++            end(3),
++        ],
++    );
++    let frames = client.take_h264_frames();
++    // Every access unit goes to the decoder, in order, so that the stream stays whole.
++    let handed_out: Vec<(&[u8], usize)> = frames.iter().map(|f| (f.data.as_slice(), f.regions.len())).collect();
++    assert_eq!(
++        handed_out,
++        [(&main[..], 1), (&auxiliary[..], 0), (&main[..], 1), (&auxiliary[..], 0)]
++    );
++
++    let mut acknowledged = Vec::new();
++    for frame in &frames {
++        let pixels =
++            (!frame.regions.is_empty()).then(|| solid(u8::try_from(frame.id).expect("small id"), rect(0, 0, 16, 8)));
++        let pixels = pixels.unwrap_or_default();
++        acknowledged.extend(acks(
++            &client.complete_h264_frame(frame.id, Some(pixels)).expect("complete"),
++        ));
++    }
++    // Each acknowledgement counts the frames still waiting behind it.
++    assert_eq!(acknowledged, [(1, 2), (2, 1), (3, 0)]);
++    // The last picture shown is the second main view; the auxiliary views leave the surface alone.
++    let output = client.drain_output();
++    let last = output.last().expect("output");
++    assert_eq!(
++        last.data,
++        solid(u8::try_from(frames[2].id).expect("small id"), rect(0, 0, 16, 8))
++    );
++}
 diff --git a/crates/ironrdp-testsuite-core/tests/egfx/h264.rs b/crates/ironrdp-testsuite-core/tests/egfx/h264.rs
 new file mode 100644
 index 00000000..2aeb8c8d
@@ -1590,16 +1778,16 @@ index cadb9b8b..f91ffbf0 100644
  mod wire_to_surface_real_world;
 diff --git a/crates/ironrdp-web/src/h264.rs b/crates/ironrdp-web/src/h264.rs
 new file mode 100644
-index 00000000..d1f62e07
+index 00000000..e9a2f5e7
 --- /dev/null
 +++ b/crates/ironrdp-web/src/h264.rs
 @@ -0,0 +1,97 @@
-+//! H.264 (AVC420) through a JavaScript decoder: the `h264_decoder` extension.
++//! H.264 through a JavaScript decoder: the `h264_decoder` extension.
 +//!
-+//! The graphics pipeline hands each AVC420 frame out ([`GraphicsPipelineClient::with_external_h264`]); the session
-+//! loop passes it to the decoder object given with the extension (in practice a WebCodecs `VideoDecoder`, which
-+//! is asynchronous and often hardware-accelerated). The decoder calls back with the pixels of the frame's regions,
-+//! which come back to the session loop as an [`RdpInputEvent::H264Decoded`] and complete the frame.
++//! The graphics pipeline hands each H.264 access unit out ([`GraphicsPipelineClient::with_external_h264`]); the
++//! session loop passes it to the decoder object given with the extension (in practice a WebCodecs `VideoDecoder`,
++//! which is asynchronous and often hardware-accelerated). The decoder calls back with the pixels of the frame's
++//! regions, which come back to the session loop as an [`RdpInputEvent::H264Decoded`] and complete the frame.
 +//!
 +//! The decoder object has `decode(frame, done)` and optionally `close()`. `frame` is `{ id, surfaceId, keyFrame,
 +//! data: Uint8Array, destination: { left, top, right, bottom }, regions: [{ left, top, right, bottom }] }`
@@ -1704,7 +1892,7 @@ index 8ac2b44b..0c4e56a1 100644
  mod input;
  mod network_client;
 diff --git a/crates/ironrdp-web/src/session.rs b/crates/ironrdp-web/src/session.rs
-index a96ae6e3..b306d08b 100644
+index a96ae6e3..83f921c3 100644
 --- a/crates/ironrdp-web/src/session.rs
 +++ b/crates/ironrdp-web/src/session.rs
 @@ -94,6 +94,7 @@ struct SessionBuilderInner {
@@ -1728,7 +1916,7 @@ index a96ae6e3..b306d08b 100644
                  self.0.borrow_mut().audio_input_callback = audio_input.dyn_into::<js_sys::Function>().ok();
              };
 +            |h264_decoder: JsValue| {
-+                // An object decoding AVC420 for the graphics pipeline (see crate::h264); anything else: no H.264.
++                // An object decoding H.264 for the graphics pipeline (see crate::h264); anything else: no H.264.
 +                self.0.borrow_mut().h264_decoder = h264_decoder.is_object().then_some(h264_decoder);
 +            };
              |enable_credssp: bool| { self.0.borrow_mut().enable_credssp = enable_credssp };
@@ -1766,7 +1954,7 @@ index a96ae6e3..b306d08b 100644
      AudioInput(crate::audio_input::AudioInputMessage),
      /// Microphone backend → event loop: captured audio for the server.
      AudioInputUplink(crate::audio_input::AudioInputUplink),
-+    /// JS H.264 decoder → event loop: a decoded AVC420 frame (see [`crate::h264`]).
++    /// JS H.264 decoder → event loop: a decoded H.264 access unit (see [`crate::h264`]).
 +    H264Decoded {
 +        id: u32,
 +        pixels: Option<Vec<u8>>,
@@ -1787,7 +1975,7 @@ index a96ae6e3..b306d08b 100644
          }
          .build();
  
-+        // Decodes AVC420 for the graphics pipeline; closed when the session ends.
++        // Decodes H.264 for the graphics pipeline; closed when the session ends.
 +        let h264 = self
 +            .h264_decoder
 +            .clone()
@@ -1815,7 +2003,7 @@ index a96ae6e3..b306d08b 100644
                  }
              };
  
-+            // AVC420 frames the graphics pipeline received go to the decoder right away, so decoding overlaps
++            // H.264 the graphics pipeline received goes to the decoder right away, so decoding overlaps
 +            // with receiving what follows.
 +            if let Some(h264) = &h264 {
 +                for frame in active_stage.take_graphics_h264_frames() {
@@ -1861,12 +2049,66 @@ index a96ae6e3..b306d08b 100644
      }
      if use_display_control {
          drdynvc = drdynvc.with_dynamic_channel(DisplayControlClient::new(|_| Ok(Vec::new())));
+@@ -2474,5 +2517,52 @@ mod tests {
+     }
+ }
+ 
++/// The session drains the EGFX compositor itself; the handler only chooses the capability sets.
+ struct NoopEgfxHandler;
+-impl ironrdp_egfx::client::GraphicsPipelineHandler for NoopEgfxHandler {}
++
++impl ironrdp_egfx::client::GraphicsPipelineHandler for NoopEgfxHandler {
++    /// Every version from V10.7 down, as the server matches versions exactly and takes the highest it knows. Those
++    /// from V10 on enable H.264 as AVC444 (which the external decoder takes as its YUV420 main view): Windows only
++    /// streams H.264 to them, and ignores AVC420 in V8.1. Without an H.264 decoder, the client leaves out every
++    /// version that implies H.264, and V8 remains.
++    fn capabilities(&self) -> Vec<ironrdp_egfx::pdu::CapabilitySet> {
++        use ironrdp_egfx::pdu::{
++            CapabilitiesV8Flags, CapabilitiesV10Flags, CapabilitiesV81Flags, CapabilitiesV103Flags,
++            CapabilitiesV104Flags, CapabilitiesV107Flags, CapabilitySet,
++        };
++
++        vec![
++            CapabilitySet::V10_7 {
++                flags: CapabilitiesV107Flags::SMALL_CACHE,
++            },
++            CapabilitySet::V10_6 {
++                flags: CapabilitiesV104Flags::SMALL_CACHE,
++            },
++            CapabilitySet::V10_6Err {
++                flags: CapabilitiesV104Flags::SMALL_CACHE,
++            },
++            CapabilitySet::V10_5 {
++                flags: CapabilitiesV104Flags::SMALL_CACHE,
++            },
++            CapabilitySet::V10_4 {
++                flags: CapabilitiesV104Flags::SMALL_CACHE,
++            },
++            CapabilitySet::V10_3 {
++                flags: CapabilitiesV103Flags::empty(),
++            },
++            CapabilitySet::V10_2 {
++                flags: CapabilitiesV10Flags::SMALL_CACHE,
++            },
++            CapabilitySet::V10_1,
++            CapabilitySet::V10 {
++                flags: CapabilitiesV10Flags::SMALL_CACHE,
++            },
++            CapabilitySet::V8_1 {
++                flags: CapabilitiesV81Flags::AVC420_ENABLED | CapabilitiesV81Flags::SMALL_CACHE,
++            },
++            CapabilitySet::V8 {
++                flags: CapabilitiesV8Flags::SMALL_CACHE,
++            },
++        ]
++    }
++}
 diff --git a/web-client/iron-remote-desktop-rdp/src/H264Decoder.test.ts b/web-client/iron-remote-desktop-rdp/src/H264Decoder.test.ts
 new file mode 100644
-index 00000000..d7eab87a
+index 00000000..46cbfe78
 --- /dev/null
 +++ b/web-client/iron-remote-desktop-rdp/src/H264Decoder.test.ts
-@@ -0,0 +1,285 @@
+@@ -0,0 +1,302 @@
 +import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 +import { WebCodecsH264Decoder, h264Supported, type H264Frame } from './H264Decoder';
 +
@@ -2127,6 +2369,23 @@ index 00000000..d7eab87a
 +        expect(Array.from(done.mock.calls[0][1] as Uint8Array)).toEqual([7, 7, 7, 7, 7, 7, 7, 7]);
 +    });
 +
++    it('decodes an AVC444 auxiliary view without reading its picture', async () => {
++        decoder.decode(frame(0, true), done);
++        decoder.decode(frame(1, false, []), done);
++        expect(FakeDecoder.instances[0].chunks.map((c) => c.timestamp)).toEqual([0, 1]);
++        FakeDecoder.instances[0].emit(0);
++        FakeDecoder.instances[0].emit(1, 64, 32, new Error('an auxiliary view is never read'));
++        await flush();
++        // Completions may come in any order (the session applies them in order).
++        const completed = done.mock.calls.map((call) => [call[0], (call[1] as Uint8Array).length]);
++        expect(completed.sort((a, b) => a[0] - b[0])).toEqual([
++            [0, 8],
++            [1, 0],
++        ]);
++        expect(decoder.stats.frames).toBe(2);
++        expect(decoder.stats.auxiliary).toBe(1);
++    });
++
 +    it('keeps one decoder per surface', () => {
 +        decoder.decode(frame(0, true), done);
 +        decoder.decode({ ...frame(1, true), surfaceId: 2 }, done);
@@ -2154,10 +2413,10 @@ index 00000000..d7eab87a
 +});
 diff --git a/web-client/iron-remote-desktop-rdp/src/H264Decoder.ts b/web-client/iron-remote-desktop-rdp/src/H264Decoder.ts
 new file mode 100644
-index 00000000..03ee19b6
+index 00000000..47e01a70
 --- /dev/null
 +++ b/web-client/iron-remote-desktop-rdp/src/H264Decoder.ts
-@@ -0,0 +1,401 @@
+@@ -0,0 +1,410 @@
 +/**
 + * H.264 (AVC420) for the graphics pipeline, decoded with the browser's WebCodecs `VideoDecoder` (hardware-accelerated
 + * where the platform offers it). Given to a session with the `h264Decoder` extension.
@@ -2178,7 +2437,7 @@ index 00000000..03ee19b6
 +    bottom: number;
 +}
 +
-+/** An AVC420 frame, as the session hands it out. */
++/** An H.264 access unit, as the session hands it out: AVC420, or a view of AVC444. */
 +export interface H264Frame {
 +    /** One more than the previous frame's. */
 +    id: number;
@@ -2190,7 +2449,10 @@ index 00000000..03ee19b6
 +    data: Uint8Array;
 +    /** The destination rectangle on the surface. */
 +    destination: H264Rectangle;
-+    /** The rectangles to take from the picture, in surface coordinates, within `destination`. */
++    /**
++     * The rectangles to take from the picture, in surface coordinates, within `destination`. Empty for an AVC444
++     * auxiliary (chroma) view, which is decoded to keep the stream whole but not shown.
++     */
 +    regions: H264Rectangle[];
 +}
 +
@@ -2204,6 +2466,8 @@ index 00000000..03ee19b6
 +    /** Frames decoded and handed back. */
 +    frames: number;
 +    keyFrames: number;
++    /** Of those, AVC444 auxiliary views (decoded, not shown): a server sending them streams AVC444. */
++    auxiliary: number;
 +    /** Frames passed over while waiting for a key frame. */
 +    skipped: number;
 +    /** Frames the decoder never output (completed without pixels). */
@@ -2277,6 +2541,7 @@ index 00000000..03ee19b6
 +    readonly stats: H264DecoderStats = {
 +        frames: 0,
 +        keyFrames: 0,
++        auxiliary: 0,
 +        skipped: 0,
 +        dropped: 0,
 +        pending: 0,
@@ -2395,6 +2660,9 @@ index 00000000..03ee19b6
 +                }
 +                const latency = this.now() - pending.since;
 +                this.stats.frames++;
++                if (pending.frame.regions.length === 0) {
++                    this.stats.auxiliary++;
++                }
 +                this.stats.lastLatencyMs = latency;
 +                this.stats.maxLatencyMs = Math.max(this.stats.maxLatencyMs, latency);
 +                pending.done(id, pixels);
@@ -2560,7 +2828,7 @@ index 00000000..03ee19b6
 +    return String(error);
 +}
 diff --git a/web-client/iron-remote-desktop-rdp/src/main.ts b/web-client/iron-remote-desktop-rdp/src/main.ts
-index bf0e2cdb..f7eb57ef 100644
+index bf0e2cdb..87cf1063 100644
 --- a/web-client/iron-remote-desktop-rdp/src/main.ts
 +++ b/web-client/iron-remote-desktop-rdp/src/main.ts
 @@ -8,6 +8,7 @@ import wasm_init, {
@@ -2571,7 +2839,7 @@ index bf0e2cdb..f7eb57ef 100644
  
  export async function init(log_level: string) {
      await wasm_init();
-@@ -45,11 +46,25 @@ export function displayControl(enable: boolean): Extension {
+@@ -45,11 +46,26 @@ export function displayControl(enable: boolean): Extension {
      return new Extension('display_control', enable);
  }
  
@@ -2585,8 +2853,9 @@ index bf0e2cdb..f7eb57ef 100644
  }
  
 +/**
-+ * H.264 (AVC420) in the graphics pipeline, decoded by `decoder` (see `WebCodecsH264Decoder`, and `h264Supported`
-+ * to find out first whether the browser can). Also advertises CAPVERSION_81 with AVC420. Needs `graphicsPipeline`.
++ * H.264 in the graphics pipeline, decoded by `decoder` (see `WebCodecsH264Decoder`, and `h264Supported` to find out
++ * first whether the browser can). Also advertises the capability sets with H.264: V10.7 down to V10 (AVC444, taken
++ * as its YUV420 main view) and V8.1 with AVC420. Needs `graphicsPipeline`.
 + */
 +export function h264Decoder(decoder: { decode(frame: H264Frame, done: H264Done): void; close?(): void }): Extension {
 +    return new Extension('h264_decoder', decoder);
