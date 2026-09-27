@@ -1,6 +1,9 @@
 # Changelog
 
-## 0.2.6
+## 0.2.7
+
+(0.2.6 was never released: its staged publish on npm didn't go through, and npm doesn't reuse a version
+number. 0.2.7 is the same change.)
 
 **Security**
 - Files copied on the remote desktop are saved inside the folder you save them to (Downloads). Their names come from
