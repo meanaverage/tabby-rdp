@@ -172,8 +172,8 @@ tabby-rdp ships IronRDP with a short series of patches ([ironrdp/](ironrdp)). Th
 | Fit the web component to its container, not the whole window | [Devolutions/IronRDP#2006](https://github.com/Devolutions/IronRDP/pull/2006) |
 | Set up the clipboard before signaling `ready`, so it works for apps that connect right away | [Devolutions/IronRDP#2018](https://github.com/Devolutions/IronRDP/pull/2018) |
 | Echo the correct size in the sound channel's Training Confirm | [Devolutions/IronRDP#2019](https://github.com/Devolutions/IronRDP/pull/2019) |
-| The graphics pipeline in the web client, per connection, following its resets | Planned |
-| Sound in the web client | Planned |
+| The graphics pipeline in the web client, following its resets | Covered by [Devolutions/IronRDP#1977](https://github.com/Devolutions/IronRDP/pull/1977) (not ours; [tested with GNOME](https://github.com/Devolutions/IronRDP/pull/1977#issuecomment-5851624036)) |
+| Sound in the web client | [Devolutions/IronRDP#2020](https://github.com/Devolutions/IronRDP/pull/2020) |
 
 The aim is to make IronRDP's browser client work well with both Linux and Windows desktops, for everyone who embeds
 it, not just this plugin.

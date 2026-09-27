@@ -806,9 +806,11 @@ export class RemoteDesktopService {
                 .withDesktopSize({ width, height })
                 // Display control lets the remote monitor follow the pane (live resize, remote scaling).
                 .withExtension(rdp.displayControl(true))
-                // GNOME Remote Desktop requires the graphics pipeline; Windows does better with bitmaps
-                // (IronRDP decodes EGFX without H.264, which Windows would want).
-                .withExtension(rdp.graphicsPipeline(spec.kind === 'gnome'))
+            // GNOME Remote Desktop requires the graphics pipeline; Windows does better with bitmaps (IronRDP decodes
+            // EGFX without H.264, which Windows would want). A build without the switch decides by itself.
+            if (typeof rdp.graphicsPipeline === 'function') {
+                config.withExtension(rdp.graphicsPipeline(spec.kind === 'gnome'))
+            }
             if (settings.sound) {
                 session.audio?.close()
                 session.audio = new AudioPlayer()
