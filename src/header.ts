@@ -1,9 +1,10 @@
 import { Injectable, NgZone } from '@angular/core'
 import { AppService, MenuItemOptions, PlatformService } from 'tabby-core'
 import { RemoteDesktopService } from './desktop.service'
+import { DesktopKeyboard } from './keyboard'
 import { isSSHTab } from './ssh'
 import { desktopPaneOf, RemoteTargets } from './targets'
-import { desktopChoices, settingsMenu, toggleLabel } from './ui'
+import { desktopActions, desktopChoices, settingsMenu, toggleLabel } from './ui'
 
 // Font Awesome Free 6.7.2 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free
 // (Icons: CC BY 4.0) Copyright 2024 Fonticons, Inc.
@@ -28,6 +29,7 @@ export class HeaderControls {
         private desktop: RemoteDesktopService,
         private targets: RemoteTargets,
         private platform: PlatformService,
+        private keyboard: DesktopKeyboard,
         private zone: NgZone,
     ) { }
 
@@ -117,7 +119,10 @@ export class HeaderControls {
             event.preventDefault()
             this.zone.run(() => {
                 const pane = desktopPaneOf(this.app.activeTab)
-                const choices = pane ? desktopChoices(this.desktop, pane, this.targets.cached(pane)?.label) : []
+                const choices = pane ? [
+                    ...desktopChoices(this.desktop, pane, this.targets.cached(pane)?.label),
+                    ...desktopActions(this.desktop, this.keyboard, pane),
+                ] : []
                 const settings: MenuItemOptions = { label: 'Remote desktop settings', submenu: settingsMenu(this.desktop, pane) }
                 this.platform.popupContextMenu(choices.length ? [...choices, { type: 'separator' }, settings] : settingsMenu(this.desktop, pane), event)
             })

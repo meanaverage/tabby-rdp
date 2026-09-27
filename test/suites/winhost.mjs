@@ -26,6 +26,8 @@ await suite('winhost', async t => {
     })`)
     check('SSH tab to the Windows host connected', await ev(`H.pane = await H.openSSH({ host: ${JSON.stringify(host)}, user: ${JSON.stringify(user)}, port: ${Number(port)} }); return !!H.pane`))
     const key = await ev('return (await RD.targets.targetOf(H.pane)).key')
+    const trustedBefore = await ev('return JSON.stringify(H.config.store.remoteDesktop.trustedCertificates ?? [])')
+    t.onCleanup(() => ev(`H.inZone(() => { H.config.store.remoteDesktop.trustedCertificates = ${trustedBefore}; H.config.save() })`))
     const keychainWorks = await t.keychainWorks()
     if (keychainWorks) {
         await t.keychain(`deletePassword('tabby-rdp', ${JSON.stringify(key)})`)
@@ -45,6 +47,7 @@ await suite('winhost', async t => {
     // 2. Signing in with the Windows account: connected, with a picture.
     await ev(`H.submit(${JSON.stringify(win.account || user)}, ${JSON.stringify(win.password)})`)
     check('desktop connected', !!(await t.waitFor('return H.connected(H.pane)', 40)), await ev('return RD.desktop.logOf(H.pane).slice(-4)'))
+    check('its certificate is remembered on first use, under the SSH account', !!(await ev(`return (H.config.store.remoteDesktop.trustedCertificates ?? []).find(e => e?.desktop === ${JSON.stringify(key)})?.sha256`)))
     check('Windows frame decoded', !!(await t.waitFor('const c = H.canvas(H.pane); return c?.colors > 10 ? c : null', 10)), await ev('return H.canvas(H.pane)'))
     await t.dump('H.pane', 'winhost-connected')
     check('the menu offers the way back to the console', (await ev('return (await H.menu(H.pane)).map(i => i.label)')).includes('Back to console'))

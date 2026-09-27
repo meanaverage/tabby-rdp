@@ -31,6 +31,8 @@ await suite('desktops', async t => {
         },
     })`)
     const saved = await ev('return JSON.stringify(H.config.store.remoteDesktop.desktops ?? [])')
+    const trustedBefore = await ev('return JSON.stringify(H.config.store.remoteDesktop.trustedCertificates ?? [])')
+    t.onCleanup(() => ev(`H.inZone(() => { H.config.store.remoteDesktop.trustedCertificates = ${trustedBefore}; H.config.save() })`))
     t.onCleanup(() => ev(`H.inZone(() => { H.config.store.remoteDesktop.desktops = ${saved}; H.config.save() })`))
     await ev(`H.inZone(() => { H.config.store.remoteDesktop.desktops = []; H.config.save() })`)
 
@@ -97,6 +99,8 @@ await suite('desktops', async t => {
     await ev(`H.fill({ name: ${JSON.stringify(EDITED)}, address: ${JSON.stringify(EDITED_ID)} })`)
     const edited = await t.waitFor(`const d = (H.config.store.remoteDesktop.desktops ?? [])[0]; return d?.name === ${JSON.stringify(EDITED)} ? d : null`, 5)
     check('the edited entry is saved (same host, new address)', edited?.host === 'localhost' && edited.port === 3389 && edited.via === entry?.via && edited.username === 'tabby', edited)
+    check('its remembered certificate moved to the new address', await ev(`const list = H.config.store.remoteDesktop.trustedCertificates ?? []
+        return list.some(e => e.desktop === ${JSON.stringify(editedKey)}) && !list.some(e => e.desktop === ${JSON.stringify(key)})`))
     check('its sharpness moved to the new address', await ev(`const list = H.config.store.remoteDesktop.desktopSharpness ?? []
         return list.some(e => e.desktop === ${JSON.stringify(editedKey)}) && !list.some(e => e.desktop === ${JSON.stringify(key)})`))
     const renamed = await ev('return await H.labels()')

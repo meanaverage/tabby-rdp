@@ -1,12 +1,24 @@
 import { RemoteTarget } from './targets'
+import { parseWake, WakeSpec } from './wake'
 
 /**
  * What kind of RDP server a desktop is. 'gnome': the SSH host's own desktop, set up automatically (headless
  * GNOME Remote Desktop, generated credentials). 'windows': a Windows machine the SSH host can reach (e.g. a
  * VM with its RDP port forwarded to the host's loopback), or the SSH host itself when it runs Windows; signs in
- * with the Windows account.
+ * with the Windows account. 'xrdp': a Linux desktop other than GNOME (KDE, XFCE, MATE, …) served by xrdp; signs in
+ * with the Linux account.
  */
-export type DesktopKind = 'gnome' | 'windows'
+export type DesktopKind = 'gnome' | 'windows' | 'xrdp'
+
+/**
+ * What the remote setup found on an SSH host (see remoteSetup.ts): which desktop is its own (GNOME, xrdp, or Windows'
+ * RDP server when the host runs Windows), and xrdp's port and the account to suggest when xrdp runs there.
+ */
+export interface OwnDesktopFound {
+    kind: 'gnome' | 'xrdp' | 'windows'
+    xrdpPort?: number
+    xrdpUser?: string
+}
 
 /** A desktop reachable through an SSH connection. */
 export interface DesktopSpec {
@@ -20,6 +32,8 @@ export interface DesktopSpec {
     port: number
     username?: string
     domain?: string
+    /** How to start it when it doesn't answer (a VM on the SSH host, or Wake-on-LAN). */
+    wake?: WakeSpec
 }
 
 /**
@@ -31,8 +45,9 @@ export interface DesktopSpec {
  *           via: myhost            # SSH host alias, hostname, user@hostname or user@hostname:port
  *           host: 192.168.122.20   # as seen from that host
  *           port: 3389
- *           kind: windows
+ *           kind: windows          # or xrdp, or gnome
  *           username: alice
+ *           wake: { vm: win11 }    # optional: start it when it's off; or { mac: "aa:bb:cc:dd:ee:ff" }
  */
 export interface ExtraDesktopConfig {
     name?: string
@@ -42,6 +57,7 @@ export interface ExtraDesktopConfig {
     kind?: string
     username?: string
     domain?: string
+    wake?: { vm?: string, mac?: string, broadcast?: string, port?: number }
 }
 
 export const OWN_DESKTOP = 'own'
@@ -65,23 +81,28 @@ export function specOf (extra: ExtraDesktopConfig): DesktopSpec | null {
     return {
         id: `${host}:${port}`,
         name: extra.name ? String(extra.name) : `${host}:${port}`,
-        kind: extra.kind === 'gnome' ? 'gnome' : 'windows',
+        kind: extra.kind === 'gnome' || extra.kind === 'xrdp' ? extra.kind : 'windows',
         host,
         port,
         username: extra.username ? String(extra.username) : undefined,
         domain: extra.domain ? String(extra.domain) : undefined,
+        wake: parseWake(extra.wake),
     }
 }
 
 /**
  * The SSH host's own desktop, then the configured desktops behind it, then `more` (RDP profiles going through this
- * host). The own desktop of a Windows host (`ownKind`) is its RDP server, signed in to with the Windows account (the
- * SSH user, to start with).
+ * host). `found`: what the setup found there the last time (none yet: GNOME, as the setup will try first). A host
+ * with only xrdp has it as its own desktop; one with both GNOME and xrdp also offers xrdp, as a desktop at its
+ * loopback port. A Windows host's own desktop is its RDP server, signed in to with the Windows account (the SSH user,
+ * to start with).
  */
-export function desktopsFor (target: RemoteTarget, extras: ExtraDesktopConfig[] | undefined, ownKind: DesktopKind = 'gnome', more: ExtraDesktopConfig[] = []): DesktopSpec[] {
-    const own: DesktopSpec = ownKind === 'windows'
-        ? { id: OWN_DESKTOP, name: `${target.label} desktop`, kind: 'windows', host: '127.0.0.1', port: 3389, username: target.key.replace(/@[^@]*$/, '') || undefined }
-        : { id: OWN_DESKTOP, name: `${target.label} desktop`, kind: 'gnome', host: '127.0.0.1', port: 0 }
+export function desktopsFor (target: RemoteTarget, extras: ExtraDesktopConfig[] | undefined, found?: OwnDesktopFound, more: ExtraDesktopConfig[] = []): DesktopSpec[] {
+    const own: DesktopSpec = found?.kind === 'xrdp'
+        ? { id: OWN_DESKTOP, name: `${target.label} desktop`, kind: 'xrdp', host: '127.0.0.1', port: found.xrdpPort ?? 3389, username: found.xrdpUser }
+        : found?.kind === 'windows'
+            ? { id: OWN_DESKTOP, name: `${target.label} desktop`, kind: 'windows', host: '127.0.0.1', port: 3389, username: target.key.replace(/@[^@]*$/, '') || undefined }
+            : { id: OWN_DESKTOP, name: `${target.label} desktop`, kind: 'gnome', host: '127.0.0.1', port: 0 }
     const specs: DesktopSpec[] = [own]
     const behind = (Array.isArray(extras) ? extras : []).filter(extra => extra?.via && viaMatches(extra.via, target))
     for (const extra of [...behind, ...more]) {
@@ -89,6 +110,17 @@ export function desktopsFor (target: RemoteTarget, extras: ExtraDesktopConfig[] 
         if (spec && !specs.some(s => s.id === spec.id)) {
             specs.push(spec)
         }
+    }
+    // Configured entries come first: one for the same port keeps its name.
+    if (found?.kind === 'gnome' && found.xrdpPort && !specs.some(s => s.id === `127.0.0.1:${found.xrdpPort}`)) {
+        specs.push({
+            id: `127.0.0.1:${found.xrdpPort}`,
+            name: `${target.label} desktop (xrdp)`,
+            kind: 'xrdp',
+            host: '127.0.0.1',
+            port: found.xrdpPort,
+            username: found.xrdpUser,
+        })
     }
     return specs
 }

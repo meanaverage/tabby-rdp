@@ -5,7 +5,7 @@ import { Duplex } from 'stream'
 import { BaseTabComponent, SplitTabComponent } from 'tabby-core'
 import { DesktopSpec, DIRECT_KEY, specOf } from './desktops'
 import { formatAddress } from './desktopForm'
-import { execRemote, isConnected, isSSHTab, openTcpStream, SSHTab } from './ssh'
+import { execRemote, isConnected, isSSHTab, openTcpStream, pingRemote, SSHTab } from './ssh'
 
 /** Tabby profile type of remote desktop tabs (see rdpProfile.ts). */
 export const RDP_PROFILE_TYPE = 'rdp'
@@ -28,6 +28,8 @@ export interface RemoteTarget {
     profileId?: string
     /** A remote desktop tab's one desktop, connected to directly: no SSH host, no console, no desktop of its own. */
     direct?: DesktopSpec
+    /** Round-trip time to the SSH server in ms, where it is cheap to measure (Tabby's own connection). */
+    ping?: () => Promise<number>
 }
 
 /** A terminal pane the desktop can be layered over (an SSH tab, or a local terminal running `ssh`), or a remote desktop tab. */
@@ -187,6 +189,7 @@ class TabbySSHTarget implements RemoteTarget {
     openTcp (host: string, port: number): Promise<Duplex> { return openTcpStream(this.tab, host, port) }
     exec (command: string, stdin: string): Promise<string> { return execRemote(this.tab, command, stdin) }
     isOpen (): boolean { return isConnected(this.tab) }
+    ping (): Promise<number> { return pingRemote(this.tab) }
     get reconnectSSH (): (() => Promise<void>) | undefined {
         return typeof this.tab.reconnect === 'function' ? () => this.tab.reconnect!() : undefined
     }
@@ -246,7 +249,8 @@ export class RemoteTargets {
             if (isRDPTab(pane)) {
                 // Made afresh each time (it holds no state), so that an edited profile applies on the next connection.
                 const profile = pane.profile as { name?: string, options?: any }
-                const spec = specOf({ ...profile.options, name: profile.name })
+                // No `wake` for a direct one: starting a machine takes an SSH host to do it from.
+                const spec = specOf({ ...profile.options, name: profile.name, wake: undefined })
                 target = spec && new DirectTarget(formatAddress(spec.host, spec.port), spec)
             } else if (isSSHTab(pane)) {
                 const o = pane.profile?.options ?? {}

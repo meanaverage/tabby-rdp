@@ -62,6 +62,19 @@ export async function openTcpStream (tab: SSHTab, host: string, port: number): P
     return stream
 }
 
+/**
+ * One round trip to the SSH server: opening a session channel waits for the server's confirmation, and nothing
+ * runs on the remote until a command is requested on it, so this costs next to nothing there.
+ */
+export async function pingRemote (tab: SSHTab): Promise<number> {
+    const ssh = client(tab)
+    const started = performance.now()
+    const channel = await ssh.openSessionChannel()
+    const ms = performance.now() - started
+    ssh.activateChannel(channel).then((c: any) => c.close()).catch(() => null)
+    return ms
+}
+
 // Printed after a command's output, so that execRemote knows all of it arrived.
 const END = '__trd_exec_end__'
 

@@ -42,6 +42,8 @@ await suite('profiles', async t => {
         async labels (p) { return (await H.menu(p)).map(i => i.label) },
     })`)
     const profilesBefore = await ev('return JSON.stringify(H.config.store.profiles ?? [])')
+    const trustedBefore = await ev('return JSON.stringify(H.config.store.remoteDesktop.trustedCertificates ?? [])')
+    t.onCleanup(() => ev(`H.inZone(() => { H.config.store.remoteDesktop.trustedCertificates = ${trustedBefore}; H.config.save() })`))
     t.onCleanup(() => ev(`H.inZone(() => { H.config.store.profiles = ${profilesBefore}; H.config.save() })`))
 
     // 0. The host's own desktop once, so that its account exists; then its password.
@@ -83,11 +85,14 @@ await suite('profiles', async t => {
         check('sign-in form: the profile\'s name, its user name filled in', form?.title === `Sign in to ${DIRECT}` && form.user === 'tabby', form)
         await ev(`H.submit(H.rdp, ${JSON.stringify(password)})`)
         check('the direct desktop connects', !!(await t.waitFor('return H.connected(H.rdp)', 40)), await ev('return RD.desktop.logOf(H.rdp).slice(-4)'))
+        check('its certificate is remembered on first use, under rdp#<address>', !!(await ev(`return (H.config.store.remoteDesktop.trustedCertificates ?? []).find(e => e?.desktop === ${JSON.stringify(directKey)})?.sha256`)))
         check('connected directly, not via a host', await ev(`return RD.desktop.logOf(H.rdp).some(l => l.includes(${JSON.stringify(`Connecting to ${DIRECT}…`)}))`))
         const frame = await t.waitFor('const c = H.canvas(H.rdp); return c?.colors > 3 ? c : null', 10)
         check('picture drawn, sized to the tab', !!frame && Math.abs(frame.w - frame.paneW) <= 2 && Math.abs(frame.h - frame.paneH) <= 2, frame)
         const labels = await ev('return await H.labels(H.rdp)')
         check('its menu has no console or host entries', !labels.includes('Back to console') && !labels.some(l => /^Add a desktop behind/.test(l ?? '')) && labels.includes('Disconnect remote desktop'), labels)
+        check('its menu has the desktop actions (send keys, view only, screenshot, sign in again)', labels.includes('Send keys') && labels.some(l => /^View only/.test(l ?? '')) &&
+            labels.some(l => /^Save a screenshot/.test(l ?? '')) && labels.includes('Sign in again…'), labels)
         await ev('await H.inZone(() => RD.desktop.toggle(H.rdp))')
         check('the desktop/console switch leaves it showing', await ev('return RD.desktop.isVisible(H.rdp)'))
         await sleep(100)

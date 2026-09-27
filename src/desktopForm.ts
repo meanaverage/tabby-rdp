@@ -1,4 +1,5 @@
 import { ExtraDesktopConfig } from './desktops'
+import { wakeFromText } from './wake'
 
 /** host:port, [v6]:port, or a bare host (RDP's 3389); null if it doesn't look like an address. */
 export function parseAddress (text: string): { host: string, port: number } | null {
@@ -11,6 +12,11 @@ export function parseAddress (text: string): { host: string, port: number } | nu
 /** The address as the form shows it. */
 export function formatAddress (host: string, port: number): string {
     return `${host.includes(':') ? `[${host}]` : host}:${port}`
+}
+
+/** An entry's `wake` as the form's field shows it: the VM's name, or the MAC address. */
+function wakeTextOf (entry: ExtraDesktopConfig): string {
+    return entry.wake?.vm ?? entry.wake?.mac ?? ''
 }
 
 export interface DesktopFormOptions {
@@ -40,10 +46,12 @@ export function askDesktop (pane: HTMLElement, options: DesktopFormOptions): Pro
                 <input class="form-control" name="address" placeholder="Address as seen from the host, e.g. 127.0.0.1:3389" spellcheck="false">
                 <select class="form-control" name="kind">
                     <option value="windows">Windows (or another RDP server)</option>
+                    <option value="xrdp">xrdp (Linux: KDE, XFCE, MATE, …)</option>
                     <option value="gnome">GNOME Remote Desktop (needs the graphics pipeline)</option>
                 </select>
                 <input class="form-control" name="username" placeholder="User name (optional; asked when connecting)" spellcheck="false">
                 <input class="form-control" name="domain" placeholder="Domain (optional)" spellcheck="false">
+                <input class="form-control" name="wake" placeholder="Start it when off (optional): libvirt VM name, or MAC address" title="A libvirt VM on the host, started with virsh; or a MAC address to wake over the network from the host" spellcheck="false">
                 <div class="trd-signin-buttons">
                     <button type="button" class="btn btn-secondary" name="cancel">Cancel</button>
                     <button type="submit" class="btn btn-primary"></button>
@@ -58,9 +66,10 @@ export function askDesktop (pane: HTMLElement, options: DesktopFormOptions): Pro
     const initial = options.entry
     field('name').value = initial.name ?? ''
     field('address').value = formatAddress(initial.host ?? '127.0.0.1', Number(initial.port ?? 3389))
-    field<HTMLSelectElement>('kind').value = initial.kind === 'gnome' ? 'gnome' : 'windows'
+    field<HTMLSelectElement>('kind').value = initial.kind === 'gnome' || initial.kind === 'xrdp' ? initial.kind : 'windows'
     field('username').value = initial.username ?? ''
     field('domain').value = initial.domain ?? ''
+    field('wake').value = wakeTextOf(initial)
 
     if (getComputedStyle(pane).position === 'static') {
         pane.style.position = 'relative'
@@ -105,17 +114,22 @@ export function askDesktop (pane: HTMLElement, options: DesktopFormOptions): Pro
             }
             const username = field('username').value.trim()
             const domain = field('domain').value.trim()
+            const kind = field<HTMLSelectElement>('kind').value
+            const wakeText = field('wake').value.trim()
+            // An unchanged wake keeps what the field doesn't show (a Wake-on-LAN broadcast address and port).
+            const wake = wakeText && wakeText === wakeTextOf(initial) ? initial.wake : wakeFromText(wakeText)
             // Other keys of an edited entry (hand-written ones) are kept.
             const entry: ExtraDesktopConfig = {
                 ...initial,
                 name,
                 host: address.host,
                 port: address.port,
-                kind: field<HTMLSelectElement>('kind').value === 'gnome' ? 'gnome' : 'windows',
+                kind: kind === 'gnome' || kind === 'xrdp' ? kind : 'windows',
                 username: username || undefined,
                 domain: domain || undefined,
+                wake,
             }
-            for (const key of ['username', 'domain'] as const) {
+            for (const key of ['username', 'domain', 'wake'] as const) {
                 if (entry[key] === undefined) {
                     delete entry[key]
                 }

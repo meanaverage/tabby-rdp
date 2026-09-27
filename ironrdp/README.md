@@ -2,7 +2,7 @@
 
 tabby-rdp's remote desktop is [IronRDP](https://github.com/Devolutions/IronRDP)'s web client (Rust compiled to
 WebAssembly, plus its `iron-remote-desktop` web component), bundled in `vendor/`. Released IronRDP connects to
-Windows, but not to GNOME Remote Desktop, and its web client has no sound. The patches here close those gaps. The
+Windows, but not to GNOME Remote Desktop, and its web client has no sound or microphone. The patches here close those gaps. The
 fixes among them are meant for upstream, and are submitted there one by one.
 
 `vendor/` is built from IronRDP at [`BASE_COMMIT`](BASE_COMMIT) with the patches in [`patches/`](patches) applied in
@@ -18,6 +18,7 @@ order, by `npm run build:ironrdp` ([`scripts/build-ironrdp.sh`](../scripts/build
 | 4 | **fix(rdpsnd): echo the Training PDU's `wPackSize`** | The Training Confirm carried the data length instead of the PDU size ([MS-RDPEA] 2.2.3.2). GNOME Remote Desktop checks it and never started sound. | [#2019](https://github.com/Devolutions/IronRDP/pull/2019) |
 | 5 | **feat(web): graphics pipeline (EGFX) per connection, following its resets** | GNOME Remote Desktop only speaks the graphics pipeline. A `graphicsPipeline(true)` extension turns it on per connection (off by default, as before), and the canvas follows EGFX ResetGraphics, which is how GNOME answers a resize. | Superseded by [#1977](https://github.com/Devolutions/IronRDP/pull/1977) (not ours), which turns the pipeline on for every connection; drop this patch when it lands |
 | 6 | **feat(web): audio playback through an `audioPlayback` callback** | The web client had no sound. An RDPSND backend hands 16-bit PCM to a JavaScript callback; with sound on, a device-less RDPDR is attached too, since Windows only starts playback once RDPDR is up. | [#2020](https://github.com/Devolutions/IronRDP/pull/2020) |
+| 7 | **feat(web): microphone redirection (AUDIO_INPUT) through an `audioInput` callback** | The web client couldn't redirect a microphone. With an `audioInput(callback)` extension it advertises audio capture and serves the AUDIO_INPUT channel with `ironrdp-rdpeai`'s client, a fresh one each time the server opens it; the callback hears `open` (the format) and `close`, and JavaScript pushes 16-bit PCM back with `audioInputData`. | Not submitted yet |
 
 Each patch carries its own tests where IronRDP has a place for them (`ironrdp-testsuite-core`, the web component's
 vitest suite).

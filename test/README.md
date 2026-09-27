@@ -10,6 +10,7 @@ npm test -- keyboard files        # some suites
 npm test -- trd-pty               # trd-pty's own tests, on the test host
 npm test -- windows               # the Windows suite (TRD_TEST_WIN_*)
 npm test -- winhost               # SSH to Windows itself (TRD_TEST_WIN_OPENSSH)
+npm test -- xrdp                  # the xrdp suite (TRD_TEST_XRDP_*)
 npm test -- --packed e2e          # with the plugin installed as npm would install it (npm pack)
 npm test -- --keep e2e            # leave the test Tabby open afterwards
 npm test -- --port 9334 e2e       # use a Tabby already running with --remote-debugging-port=9334
@@ -40,6 +41,8 @@ automatically in the test profile.
 | `TRD_TEST_WIN_WINRM` | windows | Its WinRM address as seen from that host, e.g. `192.168.122.20:5985`. Enables the checks inside Windows. |
 | `TRD_TEST_WINRM_PYTHON` | windows | Python with `pywinrm` on that host (default: the one `provision.sh` installs, else `python3`). |
 | `TRD_TEST_WIN_OPENSSH` | winhost | `user@host[:port]` of a Windows machine running OpenSSH Server, accepting the test key (`TRD_TEST_SSH_KEY` or the agent). Signs in with `TRD_TEST_WIN_USER` / `TRD_TEST_WIN_PASSWORD`. |
+| `TRD_TEST_XRDP_USER`, `TRD_TEST_XRDP_PASSWORD` | xrdp | The account on the test host that signs in to xrdp (default user `tabbyxrdp`; see `testbed/linux/xrdp.sh`). The suite is skipped without the password. |
+| `TRD_TEST_XRDP_PORT` | xrdp | xrdp's port on the test host (default 3390). |
 | `TRD_TEST_DUMP` | all | A folder to save pictures of the remote screen at checkpoints. |
 
 ## Tabby on another machine
@@ -67,14 +70,20 @@ system keychain doesn't answer (Linux without an unlocked keyring), the keychain
 | [desk](suites/desk.mjs) | Logins in the shared session, `desk`, typing in the desktop terminal, RDP and SSH disconnects keeping the session, turning `desk` off and on. |
 | [resize](suites/resize.mjs) | Resize to fit, reconnect at the new size, keep the resolution, Retina with GNOME's scale. |
 | [keyboard](suites/keyboard.mjs) | Tabby shortcuts kept off the covered console, ⌘ as Ctrl, no stuck keys, the shortcuts that stay Tabby's. |
+| [actions](suites/actions.mjs) | Send keys (also from the console), ⌃⌘ with a key as Super with it, View only (label, mouse, keys, across a reconnect), screenshots to Downloads and the clipboard, actual size with a fixed resolution. |
 | [clipboard](suites/clipboard.mjs) | Text both ways, through the terminal `desk` opens. |
 | [files](suites/files.mjs) | Files both ways with Files (Nautilus): copy there and save here; drop here and paste there. |
 | [audio](suites/audio.mjs) | A tone played on the desktop arrives as sound; with sound off, none is set up. |
+| [microphone](suites/microphone.mjs) | Recording on the desktop opens the microphone here, a tone fed in as the microphone arrives there, and it is released when the recording stops; with the setting off, none is set up. |
 | [reconnect](suites/reconnect.mjs) | A dropped SSH connection: "Reconnect SSH", automatic reconnect (also while hidden), Stop, Try again. |
-| [desktops](suites/desktops.mjs) | "Add a desktop behind…", its sign-in and keychain entry, "Edit a desktop" (keychain entry and sharpness following a new address), "Remove a desktop" (using the host's own GNOME desktop as the extra one). |
-| [profiles](suites/profiles.mjs) | "Remote desktop (RDP)" profiles: quick connect; a direct one in its own tab (sign-in, picture, no console, one tab per server, Disconnect and Connect, recovery); one through a saved SSH profile, opening its SSH tab with the desktop over it; .rdp files: the parser, "Import an .rdp file…" (the test host's GNOME as the RDP server). |
-| [windows](suites/windows.mjs) | A Windows desktop behind an SSH host: sign-in, keychain, picture, resize, reconnect; with WinRM, typing, clipboard, sound and files, each checked inside Windows. |
-| [winhost](suites/winhost.mjs) | An SSH host that is itself Windows: detected on the first open, its own desktop signed in to with the Windows account, no setup the second time. |
+| [desktops](suites/desktops.mjs) | "Add a desktop behind…", its sign-in and keychain entry, "Edit a desktop" (keychain entry, sharpness and remembered certificate following a new address), "Remove a desktop" (using the host's own GNOME desktop as the extra one). |
+| [profiles](suites/profiles.mjs) | "Remote desktop (RDP)" profiles: quick connect; a direct one in its own tab (sign-in, certificate remembered, picture, no console, desktop actions, one tab per server, Disconnect and Connect, recovery); one through a saved SSH profile, opening its SSH tab with the desktop over it; .rdp files: the parser, "Import an .rdp file…" (the test host's GNOME as the RDP server). |
+| [certificates](suites/certificates.mjs) | The own desktop's certificate checked against the setup's; a desktop behind the host remembered on first use, a changed certificate stopped before sign-in (Cancel, "Trust the new certificate", also on an automatic reconnect), forgotten on removal. |
+| [windows](suites/windows.mjs) | A Windows desktop behind an SSH host: sign-in, keychain, picture, resize, reconnect, its certificate remembered and a changed one stopped; with WinRM, typing, clipboard, sound and files, each checked inside Windows. |
+| [winhost](suites/winhost.mjs) | An SSH host that is itself Windows: detected on the first open, its own desktop signed in to with the Windows account, its certificate remembered, no setup the second time. |
+| [xrdp](suites/xrdp.mjs) | xrdp next to GNOME (a second desktop) and without GNOME (the host's own desktop): sign-in and xrdp's autologon, picture, typing, clipboard, keychain, "Sign in again…", live resize (xrdp 0.10+), and the error when neither runs. |
+| [status](suites/status.mjs) | The connection-status indicator: off by default, the menu toggle and its config, throughput, fps, round trip and path, only while the desktop shows. |
+| [wake](suites/wake.mjs) | Starting a desktop behind a host (`wake`): the probe, a Wake-on-LAN packet to a stand-in machine on the test host, the wait, no waking on automatic reconnects, a missing VM, Cancel, the add form's field. |
 | [trd-pty](unit/trd-pty.py) | The shared-session helper on its own, on the test host. |
 
 Checks print `PASS`, `FAIL` or `SKIP`; some suites also print `TIME` lines (connection and reconnection times, for

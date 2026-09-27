@@ -20,7 +20,7 @@ export interface RDPProfile extends ConnectableProfile {
         /** The RDP server: as this computer sees it, or as the `via` host sees it. */
         host: string
         port: number
-        kind: 'windows' | 'gnome'
+        kind: 'windows' | 'gnome' | 'xrdp'
         /** Optional; the sign-in form asks. DOMAIN\user works too. */
         username: string
         domain: string
@@ -167,6 +167,7 @@ export class RDPProfileSettingsComponent implements ProfileSettingsComponent<RDP
                 <label>Kind</label>
                 <select class="form-control" name="kind">
                     <option value="windows">Windows (or another RDP server)</option>
+                    <option value="xrdp">xrdp (Linux: KDE, XFCE, MATE, …)</option>
                     <option value="gnome">GNOME Remote Desktop (needs the graphics pipeline)</option>
                 </select>
             </div>
@@ -180,7 +181,7 @@ export class RDPProfileSettingsComponent implements ProfileSettingsComponent<RDP
             </div>`
         const field = <T extends HTMLInputElement | HTMLSelectElement = HTMLInputElement>(name: string) => root.querySelector(`[name="${name}"]`) as T
         field('address').value = o.host ? formatAddress(o.host, o.port || 3389) : ''
-        field<HTMLSelectElement>('kind').value = o.kind === 'gnome' ? 'gnome' : 'windows'
+        field<HTMLSelectElement>('kind').value = o.kind === 'gnome' || o.kind === 'xrdp' ? o.kind : 'windows'
         field('username').value = o.username ?? ''
         field('domain').value = o.domain ?? ''
 
@@ -193,7 +194,10 @@ export class RDPProfileSettingsComponent implements ProfileSettingsComponent<RDP
                 o.port = address.port
             }
         })
-        field<HTMLSelectElement>('kind').addEventListener('change', () => { o.kind = field<HTMLSelectElement>('kind').value === 'gnome' ? 'gnome' : 'windows' })
+        field<HTMLSelectElement>('kind').addEventListener('change', () => {
+            const kind = field<HTMLSelectElement>('kind').value
+            o.kind = kind === 'gnome' || kind === 'xrdp' ? kind : 'windows'
+        })
         field('username').addEventListener('input', () => { o.username = field('username').value.trim() })
         field('domain').addEventListener('input', () => { o.domain = field('domain').value.trim() })
 
@@ -216,10 +220,11 @@ export class RDPProfileSettingsComponent implements ProfileSettingsComponent<RDP
             return
         }
         if ((o.via ?? '') !== via) {
-            // Reached another way, it is another desktop. A direct one's saved account was its own; one behind a host
-            // shares it with that host's desktop at the same address, so it stays.
+            // Reached another way, it is another desktop. A direct one's saved account and certificate were its own; one
+            // behind a host shares them with that host's desktop at the same address, so they stay.
             if (!via) {
                 forgetCredentials(`${DIRECT_KEY}#${id}`)
+                this.injector.get(RemoteDesktopService).forgetCertificatesFor(id, true)
             }
             return
         }
@@ -306,9 +311,13 @@ export class RDPProfilesService extends QuickConnectProfileProvider<RDPProfile> 
     }
 
     override deleteProfile (profile: RDPProfile): void {
-        // A direct desktop's saved account is its own; one behind a host shares it with that host's desktop at the same address.
+        // A direct desktop's saved account and certificate are its own; one behind a host shares them with that host's
+        // desktop at the same address.
         if (!profile.options.via) {
-            forgetCredentials(`${DIRECT_KEY}#${desktopIdOf(profile.options)}`)
+            const id = desktopIdOf(profile.options)
+            forgetCredentials(`${DIRECT_KEY}#${id}`)
+            this.injector.get(RemoteDesktopService).forgetCertificatesFor(id, true)
+            this.config.save()
         }
     }
 }
