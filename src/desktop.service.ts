@@ -69,6 +69,8 @@ export interface DesktopSettings {
     macShortcuts: boolean
     /** Play the remote desktop's sound here (applies on the next connect). */
     sound: boolean
+    /** H.264 in the graphics pipeline, decoded by the browser (WebCodecs), where it can (applies on the next connect). */
+    h264: boolean
 }
 
 interface RemoteSize {
@@ -144,6 +146,8 @@ class DesktopSession {
     audio: AudioPlayer | null = null
     /** Files through the clipboard (drop on the desktop, or copy on the remote). */
     files: FileTransfer | null = null
+    /** Decodes H.264 for the graphics pipeline (IronRDP's WebCodecsH264Decoder), when this connection uses it. */
+    h264: any = null
     /** Resolves when the session is disposed (ends a pending sign-in). */
     readonly disposed: Promise<void>
     private markDisposed!: () => void
@@ -242,6 +246,7 @@ class DesktopSession {
         this.disposers.forEach(f => f())
         try { this.ui?.shutdown() } catch { }
         this.audio?.close()
+        this.h264?.close()
         this.files?.dispose()
         this.proxy?.close()
         this.overlay.remove()
@@ -259,6 +264,10 @@ export class RemoteDesktopService {
     readonly changed$ = new Subject<void>()
     private sessions = new Map<DesktopPane, DesktopSession>()
     private ironrdp: Promise<any> | null = null
+    /** Whether the browser decodes H.264 (asked once). */
+    private h264Support: Promise<boolean> | null = null
+    /** Desktops (session keys) where H.264 decoding failed: they connect without it until Tabby restarts. */
+    private h264Failed = new Set<string>()
 
     constructor (
         private app: AppService,
@@ -611,6 +620,7 @@ export class RemoteDesktopService {
             desk: store.desk === true,
             macShortcuts: store.macShortcuts !== false,
             sound: store.sound !== false,
+            h264: store.h264 !== false,
         }
     }
 
@@ -653,6 +663,9 @@ export class RemoteDesktopService {
     updateSettings (change: Partial<DesktopSettings>): void {
         const store = this.config.store.remoteDesktop
         Object.assign(store, change)
+        if (change.h264) {
+            this.h264Failed.clear()  // turned on again: give it another try everywhere
+        }
         this.config.save()
         for (const [pane, session] of this.sessions) {
             this.followPane(pane, session)
@@ -715,6 +728,18 @@ export class RemoteDesktopService {
                 session.log.push(`scale: ${/^RD_(OK|ERR) (.*)$/m.exec(out)?.[2] ?? out.trim().slice(-120)}`)
             }, e => session.log.push(`scale: ${e?.message ?? e}`))
         }
+    }
+
+    /**
+     * Whether this connection decodes H.264: the setting, the browser (WebCodecs), and no failure on this desktop
+     * since Tabby started.
+     */
+    private async useH264 (rdp: any, session: DesktopSession, settings: DesktopSettings): Promise<boolean> {
+        if (!settings.h264 || this.h264Failed.has(session.key) || typeof rdp.h264Decoder !== 'function') {
+            return false
+        }
+        this.h264Support ??= Promise.resolve(rdp.h264Supported()).catch(() => false)
+        return this.h264Support
     }
 
     /** Status log of the pane's desktop session (for tests and troubleshooting). */
@@ -848,10 +873,21 @@ export class RemoteDesktopService {
                 .withDesktopSize({ width, height })
                 // Display control lets the remote monitor follow the pane (live resize, remote scaling).
                 .withExtension(rdp.displayControl(true))
-            // GNOME Remote Desktop requires the graphics pipeline; Windows does better with bitmaps (IronRDP decodes
-            // EGFX without H.264, which Windows would want). A build without the switch decides by itself.
+            // H.264 in the graphics pipeline, decoded by the browser (hardware-accelerated where it can be). A decoder
+            // failure ends the connection, which then reconnects without H.264 (see below).
+            session.h264?.close()
+            session.h264 = null
+            if (await this.useH264(rdp, session, settings)) {
+                session.h264 = new rdp.WebCodecsH264Decoder({ onFailure: (reason: string) => session.log.push(`h264: failed: ${reason}`) })
+                config.withExtension(rdp.h264Decoder(session.h264))
+            }
+            const pipeline = spec.kind === 'gnome' || !!session.h264
+            session.log.push(`graphics: ${pipeline ? 'graphics pipeline' : 'bitmaps'}${session.h264 ? ' with H.264' : ''}`)
+            // GNOME Remote Desktop requires the graphics pipeline. Windows does better with bitmaps than with the
+            // pipeline without H.264; with H.264 it streams what changes a lot (video) as video. A build without the
+            // switch decides by itself.
             if (typeof rdp.graphicsPipeline === 'function') {
-                config.withExtension(rdp.graphicsPipeline(spec.kind === 'gnome'))
+                config.withExtension(rdp.graphicsPipeline(pipeline))
             }
             if (settings.sound) {
                 session.audio?.close()
@@ -899,6 +935,15 @@ export class RemoteDesktopService {
             try {
                 end = await info.run()
             } catch (e: any) {
+                if (session.h264?.failed) {
+                    // Reconnects (automatically, like any dropped connection) without H.264, unless the browser only
+                    // took an idle decoder back (a hidden window): then with it, as a new stream starts with a key frame.
+                    if (session.h264.reclaimed) {
+                        return { connected: true, error: 'the video decoder was reclaimed' }
+                    }
+                    this.h264Failed.add(session.key)
+                    return { connected: true, error: `H.264 decoding failed (${session.h264.failed}); continuing without it` }
+                }
                 return { connected: true, error: typeof e?.backtrace === 'function' ? e.backtrace().split('\n')[0] : (e?.message ?? String(e)) }
             }
             return { connected: true, reason: end?.reason?.() }

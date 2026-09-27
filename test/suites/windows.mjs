@@ -1,9 +1,11 @@
 // A Windows desktop behind an SSH host (TRD_TEST_WIN_*): configured under remoteDesktop.desktops and offered in the
 // host's menus; the sign-in form (a wrong password, then the right one); the keychain; the picture; live resize;
 // reconnecting with the saved account. With WinRM (TRD_TEST_WIN_WINRM), also typing, the clipboard both ways,
-// sound, and files both ways with Explorer, each checked inside Windows. See test/README.md for the test machine.
+// sound, and files both ways with Explorer, each checked inside Windows, and H.264: a window flipping between two
+// colors comes out in those colors. See test/README.md for the test machine.
 import { suite } from '../lib/harness.mjs'
 import { windowsGuest } from '../lib/windows.mjs'
+import { sampleFlip, windowsFlip } from '../lib/graphics.mjs'
 
 const NAME = 'Windows (test)'
 
@@ -39,7 +41,7 @@ await suite('windows', async t => {
     const desktops = await ev('return JSON.stringify(H.config.store.remoteDesktop.desktops ?? [])')
     t.onCleanup(() => ev(`H.inZone(() => { H.config.store.remoteDesktop.desktops = ${desktops}; H.config.save() })`))
     await ev(`H.inZone(() => { H.config.store.remoteDesktop.desktops = [{ name: ${JSON.stringify(NAME)}, via: ${JSON.stringify(win.host)}, host: ${JSON.stringify(winHost)}, port: ${winPort}, kind: 'windows', username: ${JSON.stringify(win.account)} }]; H.config.save() })`)
-    await t.settings({ sound: true, macShortcuts: true, sharpness: 'standard' })
+    await t.settings({ sound: true, macShortcuts: true, sharpness: 'standard', h264: true })
     check('SSH tab connected', await ev(`H.pane = await H.openSSH({ host: ${JSON.stringify(win.host)}, user: ${JSON.stringify(win.user)} }); return !!H.pane`))
     const key = await ev(`return (await RD.targets.targetOf(H.pane)).key + '#' + ${JSON.stringify(ID)}`)
     const keychainWorks = await t.keychainWorks()
@@ -88,6 +90,10 @@ await suite('windows', async t => {
         t.skip('the account is saved in the keychain, and reused', 'the system keychain does not answer (Linux: no unlocked keyring)')
     }
     check('the header names the desktop', /Windows|console/.test(await ev(`return document.querySelector('.trd-header-toggle')?.title ?? ''`)))
+    // With H.264 (on by default, where Tabby's WebCodecs decodes it) Windows gets the graphics pipeline; else bitmaps.
+    const graphics = await ev('return RD.desktop.logOf(H.pane).findLast(l => /^graphics: /.test(l)) ?? null')
+    const decodes = await ev('return !!H.session(H.pane)?.h264')
+    check(decodes ? 'graphics pipeline with H.264' : 'bitmaps (this Tabby does not decode H.264)', decodes ? /with H\.264/.test(graphics ?? '') : /bitmaps/.test(graphics ?? ''), graphics)
 
     if (winrm) {
         // 4. Typing: Start (the Windows key), "notepad", Enter; Windows runs Notepad.
@@ -115,6 +121,29 @@ if (Test-Path $state) { Get-ChildItem $state -File | Where-Object { $keep -notco
             await sleep(1500)
         }
         await sleep(3000)
+
+        // H.264: a full-screen window flipping between two colors (fast-changing, which Windows streams as video).
+        const h264 = () => ev('const d = H.session(H.pane)?.h264; return d ? { ...d.stats, failed: d.failed } : null')
+        const h264Before = await h264()
+        await inSession('trd-flip', windowsFlip(15))
+        await sleep(4000)
+        const picture = await sampleFlip(t, 'H.pane')
+        await t.dump('H.pane', 'windows-flip')
+        check('the picture has the window\'s colors (both of them, nothing else)', picture.ok, picture)
+        if (decodes) {
+            const after = await h264()
+            const frames = (after?.frames ?? 0) - (h264Before?.frames ?? 0)
+            check('no H.264 decoder failure', !after?.failed, after)
+            if (frames > 0) {
+                check(`H.264 frames decoded (${frames} while sampling; last ${after.lastLatencyMs.toFixed(1)} ms from arrival to pixels)`, true)
+                t.time('H.264 frame, arrival to pixels (last, Windows)', Math.round(after.lastLatencyMs))
+            } else {
+                t.skip('H.264 frames decoded', 'Windows sent this window without H.264')
+            }
+        }
+        await sleep(12000)  // the window closes by itself
+        await dropTask('trd-flip')
+
         await t.clickDesktop('H.pane')
         // Right after a first sign-in, Start can take a while to accept typing: one more try if needed.
         let typed = ''

@@ -79,13 +79,37 @@ SSH host; nothing runs on either machine. It signs in with its own account: a fo
 optionally the keychain (service `tabby-rdp`, through the `keytar` module Tabby itself uses for SSH passwords). A
 wrong password brings the form back and drops the saved one.
 
-- **Graphics:** Windows gets IronRDP's bitmap path. The graphics pipeline, which GNOME requires, stays off for it:
-  without an H.264 decoder only the basic EGFX capability set is advertised, and Windows does better with bitmaps.
+- **Graphics:** with H.264 (below), the graphics pipeline, as for GNOME. Without it, IronRDP's bitmap path: with
+  only the basic EGFX capability set advertised, Windows does better with bitmaps than with the pipeline.
 - **TLS:** Windows' self-signed RDP certificate only allows key encipherment, and the TLS library in Electron
   (BoringSSL) enforces that, which rules out every ECDHE and TLS 1.3 handshake. When a handshake fails for that reason,
   the proxy repeats the X.224 exchange on a fresh tunnel and uses TLS 1.2 with RSA key exchange for that desktop. The
   connection is still encrypted, without forward secrecy. A certificate with the digital-signature usage on the
   Windows side avoids the fallback.
+
+## Graphics
+
+GNOME Remote Desktop only speaks RDP's graphics pipeline (EGFX), which the patched web client decodes in
+WebAssembly: RemoteFX Progressive, ClearCodec, planar. With H.264 as well (setting `h264`, on by default), the
+client advertises EGFX 8.1 with AVC420 and H.264 is decoded by the browser's WebCodecs `VideoDecoder`, hardware-
+accelerated where the platform offers it (VideoToolbox on macOS, Direct3D 11 on Windows, VA-API or software on
+Linux). That is, where Tabby's WebCodecs says it decodes H.264 (`VideoDecoder.isConfigSupported`, asked once).
+
+- **Order:** the web client hands each H.264 frame to the decoder as it arrives, and applies the decoded pixels (the
+  frame's region rectangles, read back as RGBA) to the EGFX surface in the order the server sent them. Commands after
+  a frame wait for it, and so does its frame acknowledgement: the server paces what it sends by those, so the queue
+  stays short and the picture never runs ahead of what was drawn. Everything after decoding (surfaces, caches,
+  ResetGraphics on resize, device pixels for Retina) is the same path as for the other codecs.
+- **Latency:** without a VUI `bitstream_restriction` in the stream, conformant decoders (Chromium's among them) hold
+  every picture until their buffer is full, so the SPS is amended to declare no reordering, as WebRTC does. Colors
+  are decoded as full-range BT.709 whatever the stream signals, as MS-RDPEGFX specifies.
+- **Failures:** a decoder error, or a frame that doesn't come out of the decoder within 3 s, ends the connection, which
+  reconnects by itself without H.264 for that desktop (until Tabby restarts, or the setting is turned on again).
+- **GNOME** sends H.264 only with a hardware encoder (VA-API or NVENC on the remote); otherwise RemoteFX, as before.
+- **Windows** gets the graphics pipeline only with H.264. Windows decides what it sends as H.264 (with EGFX 8.1,
+  typically what changes a lot, such as video) and sends the rest with its other codecs.
+- **AVC444** (H.264 with full chroma, what Windows prefers for text with EGFX 10 and later) isn't advertised: it needs
+  two YUV420 pictures combined into 4:4:4, which the decoder doesn't do.
 
 ## Keyboard
 

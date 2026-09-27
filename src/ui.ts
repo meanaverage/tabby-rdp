@@ -35,6 +35,8 @@ export class RemoteDesktopConfig extends ConfigProvider {
             macShortcuts: true,
             // Play the remote desktop's sound (applies on the next connect).
             sound: true,
+            // H.264 in the graphics pipeline, decoded by the browser, where it can (applies on the next connect).
+            h264: true,
             // More desktops behind SSH hosts (e.g. a Windows VM whose RDP port the host forwards); see desktops.ts.
             desktops: [],
             // Sharpness for particular desktops, overriding `sharpness`: [{ desktop: <session key>, sharpness }].
@@ -158,6 +160,12 @@ export function settingsMenu (desktop: RemoteDesktopService, pane?: DesktopPane 
             label: 'Play the remote desktop\'s sound (applies on the next connect)',
             checked: current.sound,
             click: () => desktop.updateSettings({ sound: !current.sound }),
+        },
+        {
+            type: 'checkbox',
+            label: 'Video decoding (H.264, hardware-accelerated where available; applies on the next connect)',
+            checked: current.h264,
+            click: () => desktop.updateSettings({ h264: !current.h264 }),
         },
         ...process.platform === 'darwin' ? [{
             type: 'checkbox' as const,
