@@ -614,6 +614,41 @@ export class RemoteDesktopService {
         }
     }
 
+    /** The sharpness chosen for the pane's desktop in particular (`remoteDesktop.desktopSharpness`), or null. */
+    ownSharpness (pane: DesktopPane): DesktopSettings['sharpness'] | null {
+        const key = this.sessions.get(pane)?.key
+        return key ? this.sharpnessFor(key) : null
+    }
+
+    /** Sets (or, with null, clears) the sharpness of the pane's desktop in particular, and applies it. */
+    setOwnSharpness (pane: DesktopPane, sharpness: DesktopSettings['sharpness'] | null): void {
+        const key = this.sessions.get(pane)?.key
+        if (!key) {
+            return
+        }
+        const store = this.config.store.remoteDesktop
+        const others = (Array.isArray(store.desktopSharpness) ? store.desktopSharpness : []).filter((e: any) => e?.desktop !== key)
+        store.desktopSharpness = sharpness ? [...others, { desktop: key, sharpness }] : others
+        this.config.save()
+        for (const [p, session] of this.sessions) {
+            if (session.key === key) {
+                this.followPane(p, session)
+            }
+        }
+    }
+
+    private sharpnessFor (key: string): DesktopSettings['sharpness'] | null {
+        const list = this.config.store.remoteDesktop?.desktopSharpness
+        const value = (Array.isArray(list) ? list : []).find((e: any) => e?.desktop === key)?.sharpness
+        return value === 'retina' || value === 'standard' ? value : null
+    }
+
+    /** The settings for a desktop: the defaults, with its own sharpness if it has one. */
+    private settingsFor (session: DesktopSession): DesktopSettings {
+        const settings = this.settings()
+        return { ...settings, sharpness: this.sharpnessFor(session.key) ?? settings.sharpness }
+    }
+
     /** Changes a setting, saves it, and applies it to open desktops. */
     updateSettings (change: Partial<DesktopSettings>): void {
         const store = this.config.store.remoteDesktop
@@ -646,7 +681,7 @@ export class RemoteDesktopService {
         if (session.state !== 'connected' || !session.visible || !rect.width || !rect.height) {
             return  // hidden panes measure 0; they catch up when shown again
         }
-        const settings = this.settings()
+        const settings = this.settingsFor(session)
         const wanted = remoteSizeFor(rect, settings)
         const current = session.remoteSize
         if (settings.resize === 'off' || current && current.width === wanted.width && current.height === wanted.height && current.scale === wanted.scale) {
@@ -665,10 +700,17 @@ export class RemoteDesktopService {
 
     private applySize (session: DesktopSession, size: RemoteSize): void {
         session.log.push(`resize: ${size.width}x${size.height} @${size.scale}%`)
+        const before = session.remoteSize
         session.remoteSize = size
-        session.ui.resize(size.width, size.height, size.scale)
-        // Windows honors the scale in the monitor layout; grd needs it set through Mutter.
-        if (size.scale !== 100 && session.remote && session.spec.id === OWN_DESKTOP) {
+        if (session.spec.kind === 'windows') {
+            // Windows takes the scale from the monitor layout only when it also has the monitor's physical size (mm).
+            const mm = (px: number) => Math.round(px / (size.scale / 100) / 96 * 25.4)
+            session.ui.resize(size.width, size.height, size.scale, mm(size.width), mm(size.height))
+        } else {
+            session.ui.resize(size.width, size.height, size.scale)
+        }
+        // grd ignores the scale in the monitor layout: it's set through Mutter (also back to 100%).
+        if ((size.scale !== 100 || (before?.scale ?? 100) !== 100) && session.remote && session.spec.id === OWN_DESKTOP) {
             session.remote.exec(`python3 - ${size.width} ${size.height} ${size.scale / 100}`, SCALE_SCRIPT).then(out => {
                 session.log.push(`scale: ${/^RD_(OK|ERR) (.*)$/m.exec(out)?.[2] ?? out.trim().slice(-120)}`)
             }, e => session.log.push(`scale: ${e?.message ?? e}`))
@@ -789,7 +831,7 @@ export class RemoteDesktopService {
             }
 
             // Size the remote display to the pane (see the sharpness setting).
-            const settings = this.settings()
+            const settings = this.settingsFor(session)
             const size = remoteSizeFor(session.overlay.getBoundingClientRect(), settings)
             const { width, height } = size
 
@@ -835,8 +877,9 @@ export class RemoteDesktopService {
             }
             session.ui.setVisibility(true)
             session.remoteSize = { width, height, scale: 100 }
-            if (size.scale !== 100) {
-                // Retina: the connection starts unscaled; ask for the matching remote scale right away.
+            if (size.scale !== 100 || spec.kind === 'windows') {
+                // Retina: the connection starts unscaled; ask for the matching remote scale right away. Windows also
+                // keeps a signed-in session's scale from the last connection: set it either way.
                 this.applySize(session, size)
             }
             this.watchSize(pane, session)

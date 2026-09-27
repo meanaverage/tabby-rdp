@@ -118,8 +118,8 @@ export class HeaderControls {
             this.zone.run(() => {
                 const pane = desktopPaneOf(this.app.activeTab)
                 const choices = pane ? desktopChoices(this.desktop, pane, this.targets.cached(pane)?.label) : []
-                const settings: MenuItemOptions = { label: 'Remote desktop settings', submenu: settingsMenu(this.desktop) }
-                this.platform.popupContextMenu(choices.length ? [...choices, { type: 'separator' }, settings] : settingsMenu(this.desktop), event)
+                const settings: MenuItemOptions = { label: 'Remote desktop settings', submenu: settingsMenu(this.desktop, pane) }
+                this.platform.popupContextMenu(choices.length ? [...choices, { type: 'separator' }, settings] : settingsMenu(this.desktop, pane), event)
             })
         })
         this.disconnectButton.title = 'Disconnect remote desktop'

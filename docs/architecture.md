@@ -68,7 +68,9 @@ of its pane. (A second client on the same account would get a second, empty moni
 **Resizing** uses RDP display control: grd answers a new monitor layout with an EGFX ResetGraphics, which the patched
 web client follows. **Retina** (device pixels) also needs GNOME's scale set to match, which grd doesn't do from the
 RDP scale factor: the plugin sets it through Mutter's `DisplayConfig` (temporarily, like Display settings before
-"Keep changes"), and keeps it applied while grd settles its monitor.
+"Keep changes"), and keeps it applied while grd settles its monitor. Windows takes the scale from the monitor layout
+itself, but only when the layout also carries the monitor's physical size, which the plugin derives from the pane (96
+CSS pixels to the inch). A desktop can have its own sharpness (`desktopSharpness`), overriding the default.
 
 ## Desktops behind a host
 

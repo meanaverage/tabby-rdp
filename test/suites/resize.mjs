@@ -75,4 +75,25 @@ await suite('resize', async t => {
         logical = await t.remote('H.pane', `gdbus call --session --dest org.gnome.Mutter.DisplayConfig --object-path /org/gnome/Mutter/DisplayConfig --method org.gnome.Mutter.DisplayConfig.GetCurrentState | grep -o '\\[(0, 0, [0-9.]*'`)
     }
     check('retina: logical monitor scale in Mutter', dpr <= 1 || logical.includes(dpr.toFixed(1)), { logical, applied, monitors: await t.remote('H.pane', "gdbus call --session --dest org.gnome.Mutter.DisplayConfig --object-path /org/gnome/Mutter/DisplayConfig --method org.gnome.Mutter.DisplayConfig.GetCurrentState | tr -s ' ' | cut -c1-400") })
+
+    // A desktop's own sharpness: Standard for this one while the default is Retina, then "As above" again.
+    const sharpness = await ev('return JSON.stringify(H.config.store.remoteDesktop.desktopSharpness ?? [])')
+    t.onCleanup(() => ev(`H.inZone(() => { H.config.store.remoteDesktop.desktopSharpness = ${sharpness}; H.config.save() })`))
+    const offered = await ev(`const s = (await H.menu(H.pane)).find(i => i.label === 'Remote desktop settings')?.submenu ?? []
+        return s.filter(i => i.type === 'radio').map(i => i.label + (i.checked ? '*' : ''))`)
+    check('the settings offer a sharpness for this desktop ("As above" chosen)', offered.includes('As above*') && offered.filter(l => l.startsWith('Retina')).length === 2, offered)
+    await ev('H.inZone(() => RD.desktop.setOwnSharpness(H.pane, "standard"))')
+    const own = await settle()
+    check('own sharpness: Standard for this desktop, while the default is Retina', Math.abs(own.w - own.paneW) <= 4, own)
+    let unscaled = ''
+    for (let i = 0; i < 20 && !(dpr <= 1 || unscaled.includes('1.0')); i++) {
+        if (i) await sleep(250)
+        unscaled = await t.remote('H.pane', `gdbus call --session --dest org.gnome.Mutter.DisplayConfig --object-path /org/gnome/Mutter/DisplayConfig --method org.gnome.Mutter.DisplayConfig.GetCurrentState | grep -o '\\[(0, 0, [0-9.]*'`)
+    }
+    check('own sharpness: GNOME back at 100%', dpr <= 1 || unscaled.includes('1.0'), unscaled)
+    check('own sharpness: kept in the config for this desktop', await ev(`const key = (await RD.targets.targetOf(H.pane)).key
+        return (H.config.store.remoteDesktop.desktopSharpness ?? []).some(e => e.desktop === key && e.sharpness === 'standard')`))
+    await ev('H.inZone(() => RD.desktop.setOwnSharpness(H.pane, null))')
+    const back = await settle()
+    check('"As above": the default again (Retina)', dpr <= 1 || Math.abs(back.w - back.paneW * dpr) <= 4, back)
 })

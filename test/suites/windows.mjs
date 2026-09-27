@@ -20,7 +20,7 @@ await suite('windows', async t => {
     // Waits for the latest connection attempt to end one way or another.
     const outcome = () => t.waitFor(`const log = RD.desktop.logOf(H.pane); const after = log.slice(log.findLastIndex(l => /Connecting to/.test(l)) + 1)
         return after.find(l => /Z $/.test(l)) ?? after.find(l => /failed|ended|cancelled/.test(l)) ?? (H.signin() ? 'signin' : null)`, 40)
-    const { guest, inSession, dropTask } = windowsGuest(t, 'H.pane')
+    const { guest, inSession, dropTask, dpi } = windowsGuest(t, 'H.pane')
     await ev(`Object.assign(H, {
         signin () {
             const f = H.overlay(H.pane)?.querySelector('.trd-signin form')
@@ -39,7 +39,7 @@ await suite('windows', async t => {
     const desktops = await ev('return JSON.stringify(H.config.store.remoteDesktop.desktops ?? [])')
     t.onCleanup(() => ev(`H.inZone(() => { H.config.store.remoteDesktop.desktops = ${desktops}; H.config.save() })`))
     await ev(`H.inZone(() => { H.config.store.remoteDesktop.desktops = [{ name: ${JSON.stringify(NAME)}, via: ${JSON.stringify(win.host)}, host: ${JSON.stringify(winHost)}, port: ${winPort}, kind: 'windows', username: ${JSON.stringify(win.account)} }]; H.config.save() })`)
-    await t.settings({ sound: true, macShortcuts: true })
+    await t.settings({ sound: true, macShortcuts: true, sharpness: 'standard' })
     check('SSH tab connected', await ev(`H.pane = await H.openSSH({ host: ${JSON.stringify(win.host)}, user: ${JSON.stringify(win.user)} }); return !!H.pane`))
     const key = await ev(`return (await RD.targets.targetOf(H.pane)).key + '#' + ${JSON.stringify(ID)}`)
     const keychainWorks = await t.keychainWorks()
@@ -220,6 +220,22 @@ if (Test-Path $state) { Get-ChildItem $state -File | Where-Object { $keep -notco
     const resized = await t.waitFor(`const c = H.canvas(H.pane); return c && Math.abs(c.w - c.paneW) <= 2 && Math.abs(c.h - c.paneH) <= 2 && c.w !== ${frame?.w ?? 0} ? c : null`, 10, 250)
     check('live resize: the Windows resolution follows the pane', !!resized, { before: frame, now: await ev('return H.canvas(H.pane)') })
     check('live resize: same session', (await log()).filter(l => /Connecting to/.test(l)).length === 2)  // wrong password, then right
+
+    // 9b. Windows' scale follows the sharpness: Retina for this desktop only is 200% there (at device pixels), and
+    // "As above" (the default, Standard) back to 100%.
+    const dpr = await ev('return window.devicePixelRatio')
+    if (winrm && dpr > 1) {
+        const sharpness = await ev('return JSON.stringify(H.config.store.remoteDesktop.desktopSharpness ?? [])')
+        t.onCleanup(() => ev(`H.inZone(() => { H.config.store.remoteDesktop.desktopSharpness = ${sharpness}; H.config.save() })`))
+        await ev('H.inZone(() => RD.desktop.setOwnSharpness(H.pane, "retina"))')
+        await sleep(3000)
+        const retina = await dpi()
+        check(`Retina for this desktop: Windows at ${Math.round(96 * dpr)} DPI`, retina === Math.round(96 * dpr), retina)
+        await ev('H.inZone(() => RD.desktop.setOwnSharpness(H.pane, null))')
+        await sleep(3000)
+        const standard = await dpi()
+        check('"As above" (Standard): Windows back at 96 DPI', standard === 96, standard)
+    }
 
     // 10. Back to the console; then the toggle reopens Windows with the saved account (no form).
     await ev('H.inZone(() => RD.desktop.showConsole(H.pane))')

@@ -37,6 +37,8 @@ export class RemoteDesktopConfig extends ConfigProvider {
             sound: true,
             // More desktops behind SSH hosts (e.g. a Windows VM whose RDP port the host forwards); see desktops.ts.
             desktops: [],
+            // Sharpness for particular desktops, overriding `sharpness`: [{ desktop: <session key>, sharpness }].
+            desktopSharpness: [],
         },
     }
 
@@ -105,13 +107,13 @@ export class RemoteDesktopContextMenu extends TabContextMenuItemProvider {
         if (this.desktop.has(pane)) {
             items.push({ label: 'Disconnect remote desktop', click: () => this.desktop.disconnect(pane) })
         }
-        items.push({ label: 'Remote desktop settings', submenu: settingsMenu(this.desktop) })
+        items.push({ label: 'Remote desktop settings', submenu: settingsMenu(this.desktop, pane) })
         return items
     }
 }
 
 /** Radio items for the `remoteDesktop` settings; shared by the context menus and the header button. */
-export function settingsMenu (desktop: RemoteDesktopService): MenuItemOptions[] {
+export function settingsMenu (desktop: RemoteDesktopService, pane?: DesktopPane | null): MenuItemOptions[] {
     const current = desktop.settings()
     const radio = <K extends keyof DesktopSettings>(key: K, value: DesktopSettings[K], label: string): MenuItemOptions => ({
         type: 'radio',
@@ -119,6 +121,21 @@ export function settingsMenu (desktop: RemoteDesktopService): MenuItemOptions[] 
         checked: current[key] === value,
         click: () => desktop.updateSettings({ [key]: value } as Partial<DesktopSettings>),
     })
+    // The desktop open in this pane can have its own sharpness (for example, Retina for Windows only).
+    const spec = pane ? desktop.desktopOf(pane) : null
+    const own = pane ? desktop.ownSharpness(pane) : null
+    const ownRadio = (value: DesktopSettings['sharpness'] | null, label: string): MenuItemOptions => ({
+        type: 'radio',
+        label,
+        checked: own === value,
+        click: () => desktop.setOwnSharpness(pane!, value),
+    })
+    const ownSharpness: MenuItemOptions[] = spec ? [
+        { label: `For ${spec.name} only`, enabled: false },
+        ownRadio(null, 'As above'),
+        ownRadio('standard', 'Standard'),
+        ownRadio('retina', 'Retina'),
+    ] : []
     return [
         { label: 'When the pane is resized', enabled: false },
         radio('resize', 'live', 'Resize the remote desktop to fit'),
@@ -128,6 +145,7 @@ export function settingsMenu (desktop: RemoteDesktopService): MenuItemOptions[] 
         { label: 'Sharpness', enabled: false },
         radio('sharpness', 'standard', 'Standard'),
         radio('sharpness', 'retina', 'Retina (device pixels, remote scaled to match)'),
+        ...ownSharpness,
         { type: 'separator' },
         {
             type: 'checkbox',

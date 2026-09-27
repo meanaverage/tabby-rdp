@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.2.5
+
+**New**
+- Sharpness per desktop: in the menu of a tab with a desktop open, **For \<desktop\> only**: As above, Standard or
+  Retina. For example, Retina for a Windows VM and Standard for a GNOME host. Kept in the config
+  (`remoteDesktop.desktopSharpness`).
+
+**Fixed**
+- Retina on Windows: Windows stayed at 100%, so its UI was tiny at device pixels. It takes the scale from the monitor
+  layout only together with the monitor's physical size, which the plugin now sends; Windows follows every change of
+  the setting, also back to 100%.
+- Going from Retina back to Standard left GNOME at its Retina scale.
+
 ## 0.2.4
 
 Tabby on Linux, tested end to end for the first time (Ubuntu 24.04 on arm64, Tabby 1.0.237):
