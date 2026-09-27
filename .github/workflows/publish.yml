@@ -1,0 +1,40 @@
+name: Publish
+
+# Publishes to npm, with provenance, when a version tag (v1.2.3) is pushed. Authenticates by npm trusted publishing
+# (OIDC, no token); see CONTRIBUTING.md for the one-time setup on npmjs.com.
+#
+# vendor/ (IronRDP's build) is committed and published as it is in the tagged commit; CI does not rebuild it.
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  id-token: write   # the OIDC token for trusted publishing and provenance
+  contents: read
+
+jobs:
+  publish:
+    name: Publish to npm
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+      # Trusted publishing needs npm 11.5.1 or later; Node 22 comes with npm 10.
+      - run: npm install -g npm@11
+      - name: Tag matches package.json
+        run: |
+          version="v$(node -p "require('./package.json').version")"
+          if [ "$version" != "$GITHUB_REF_NAME" ]; then
+            echo "tag $GITHUB_REF_NAME, but package.json says $version" >&2
+            exit 1
+          fi
+      - run: npm ci
+      - run: npm run build
+      - run: npm publish --provenance --access public
+        env:
+          # Used only without trusted publishing: an npm access token that can publish (see CONTRIBUTING.md).
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

@@ -37,6 +37,21 @@ Changes to IronRDP go in the patch series, one focused patch per change, with te
 them; see [ironrdp/README.md](ironrdp/README.md). Fixes that belong upstream should also go to
 [Devolutions/IronRDP](https://github.com/Devolutions/IronRDP) as pull requests.
 
+## Releasing
+
+Pushing a tag `v<version>` (matching `version` in package.json) runs [`publish.yml`](.github/workflows/publish.yml),
+which builds and publishes to npm with provenance. It publishes `vendor/` as committed in the tagged commit (CI does
+not rebuild IronRDP), so run `npm run build:ironrdp` and commit its output before tagging if the patches changed.
+
+The workflow authenticates with npm trusted publishing (OIDC, no token to keep). One-time setup, by a maintainer of
+the package on npmjs.com: the package's **Settings › Trusted publishing**, choose **GitHub Actions**, and enter
+owner/user `meanaverage`, repository `tabby-rdp`, workflow filename `publish.yml` (no environment). After a first
+publish that way, **Settings › Publishing access** can be set to require two-factor authentication and disallow
+tokens.
+
+Fallback without trusted publishing: create an npm access token that can publish the package and add it to the
+repository's secrets as `NPM_TOKEN`; the workflow passes it to npm, which uses it when there is no trusted publisher.
+
 ## Style
 
 Match the code around you: 4-space indentation, no semicolons in TypeScript, comments that explain why rather than
