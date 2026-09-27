@@ -14,7 +14,7 @@ await suite('e2e', async t => {
         async entries (header, p) {
             const { TabContextMenuItemProvider } = require('tabby-core')
             const items = (await Promise.all(RD.injector.get(TabContextMenuItemProvider).map(x => x.getItems(header ? H.topOf(p) : p, header)))).flat()
-            return items.filter(i => /remote desktop|console/i.test(i.label ?? '') && i.label !== 'Remote desktop settings' && !/^Send files/.test(i.label ?? ''))
+            return items.filter(i => i.enabled !== false && /remote desktop|console/i.test(i.label ?? '') && i.label !== 'Remote desktop settings' && !/^Send files/.test(i.label ?? ''))
         },
         async clickEntry (header, label, p) {
             const item = (await H.entries(header, p)).find(i => i.label === label)

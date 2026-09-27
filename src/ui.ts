@@ -97,7 +97,12 @@ export class RemoteDesktopContextMenu extends TabContextMenuItemProvider {
         if (!pane || !this.desktop.has(pane) && !await this.targets.targetOf(pane)) {
             return []
         }
+        // A heading, so the items below read as this plugin's rather than Tabby's.
+        const connectedTo = this.desktop.isConnected(pane) ? this.desktop.desktopOf(pane)?.name : undefined
         const items: MenuItemOptions[] = [{
+            label: connectedTo ? `Remote Desktop — connected to ${connectedTo}` : 'Remote Desktop',
+            enabled: false,
+        }, {
             label: toggleLabel(this.desktop, pane),
             click: () => this.desktop.toggle(pane),
         }, ...desktopChoices(this.desktop, pane, this.targets.cached(pane)?.label)]

@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- The plugin's items in a terminal's or tab's menu start with a **Remote Desktop** heading (naming the desktop
+  while one is connected), so they read as the plugin's rather than Tabby's.
+
 ## 0.2.7
 
 (0.2.6 was never released: its staged publish on npm didn't go through, and npm doesn't reuse a version
