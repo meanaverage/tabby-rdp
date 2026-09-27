@@ -18,7 +18,7 @@ import { fileURLToPath } from 'node:url'
 import { waitForPort } from './lib/cdp.mjs'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
-const LINUX_SUITES = ['e2e', 'desk', 'resize', 'keyboard', 'actions', 'clipboard', 'files', 'audio', 'microphone', 'reconnect', 'desktops', 'profiles', 'certificates', 'status', 'wake']
+const LINUX_SUITES = ['e2e', 'desk', 'resize', 'keyboard', 'actions', 'clipboard', 'files', 'audio', 'microphone', 'graphics', 'reconnect', 'desktops', 'profiles', 'certificates', 'status', 'wake']
 const ALL_SUITES = [...LINUX_SUITES, 'windows', 'winhost', 'xrdp', 'trd-pty', 'screenshots']
 
 const args = process.argv.slice(2)

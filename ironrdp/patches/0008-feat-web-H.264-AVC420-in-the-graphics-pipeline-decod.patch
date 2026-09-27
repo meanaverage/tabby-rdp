@@ -1,0 +1,2600 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: meanaverage <18336095+meanaverage@users.noreply.github.com>
+Date: Sun, 27 Sep 2026 02:01:49 -0700
+Subject: [PATCH 8/8] feat(web): H.264 (AVC420) in the graphics pipeline,
+ decoded by WebCodecs
+
+The web client's graphics pipeline advertised CAPVERSION_8 only, so servers
+sent RemoteFX Progressive, ClearCodec and planar, all decoded in
+WebAssembly on the main thread. With the new `h264Decoder(decoder)`
+extension it also advertises CAPVERSION_81 with AVC420, and a
+`WebCodecsH264Decoder` decodes the H.264 with the browser's VideoDecoder
+(hardware-accelerated where the platform has it).
+
+ironrdp-egfx: `GraphicsPipelineClient::with_external_h264` hands AVC420
+frames out instead of decoding them in `process` (`take_h264_frames`), for
+decoders that are asynchronous or live elsewhere. The caller returns each
+frame's region pixels with `complete_h264_frame`. Commands after a frame,
+its EndFrame and so its FrameAcknowledge wait until then, since surface
+commands read the pixels the frame produces and the acknowledgement paces
+the server; frames can be decoded ahead, and are applied in order. The
+queue depth in acknowledgements counts the frames still waiting.
+
+A new `h264` module prepares the bitstream for platform decoders:
+MS-RDPEGFX specifies Annex B (a length-prefixed chain is converted), and an
+SPS without a VUI bitstream_restriction gets one declaring
+max_num_reorder_frames = 0, as WebRTC does. Without it, conformant decoders
+(Chromium's, in front of VideoToolbox, VA-API and D3D11) hold every picture
+until the decoded picture buffer is full: with a VUI-less High profile
+stream, no frame came out of Chrome's VideoDecoder before the next went in.
+
+ironrdp-session: `ActiveStage::take_graphics_h264_frames` and
+`complete_graphics_h264_frame`, which sends the acknowledgements and drains
+the compositor as `process` does.
+
+ironrdp-web and iron-remote-desktop-rdp: the session loop hands frames to
+the decoder object as they arrive and completes them as it calls back.
+`WebCodecsH264Decoder` keeps a VideoDecoder per surface, starts each at a
+key frame, reads the regions back as RGBA (`VideoFrame.copyTo`, or a canvas
+where the browser can't convert), and decodes as full-range BT.709
+whatever the stream signals (MS-RDPEGFX 3.3.8.3.1). A decoder error, or a
+frame that doesn't come out within `stallMs`, fails it, which ends the
+session with an error: the application can reconnect without H.264.
+`h264Supported()` asks VideoDecoder.isConfigSupported first.
+
+AVC444 is not advertised (no CAPVERSION_10 and later): it needs the two
+YUV420 views combined into 4:4:4, which this doesn't do.
+---
+ crates/ironrdp-egfx/README.md                 |   9 +
+ crates/ironrdp-egfx/src/client.rs             | 283 +++++++++-
+ crates/ironrdp-egfx/src/h264.rs               | 500 ++++++++++++++++++
+ crates/ironrdp-egfx/src/lib.rs                |   1 +
+ crates/ironrdp-session/src/active_stage.rs    | 103 +++-
+ .../tests/egfx/external_h264.rs               | 298 +++++++++++
+ .../ironrdp-testsuite-core/tests/egfx/h264.rs | 158 ++++++
+ .../ironrdp-testsuite-core/tests/egfx/mod.rs  |   2 +
+ crates/ironrdp-web/src/h264.rs                |  97 ++++
+ crates/ironrdp-web/src/lib.rs                 |   1 +
+ crates/ironrdp-web/src/session.rs             |  55 +-
+ .../src/H264Decoder.test.ts                   | 285 ++++++++++
+ .../src/H264Decoder.ts                        | 401 ++++++++++++++
+ .../iron-remote-desktop-rdp/src/main.ts       |  17 +-
+ 14 files changed, 2171 insertions(+), 39 deletions(-)
+ create mode 100644 crates/ironrdp-egfx/src/h264.rs
+ create mode 100644 crates/ironrdp-testsuite-core/tests/egfx/external_h264.rs
+ create mode 100644 crates/ironrdp-testsuite-core/tests/egfx/h264.rs
+ create mode 100644 crates/ironrdp-web/src/h264.rs
+ create mode 100644 web-client/iron-remote-desktop-rdp/src/H264Decoder.test.ts
+ create mode 100644 web-client/iron-remote-desktop-rdp/src/H264Decoder.ts
+
+diff --git a/crates/ironrdp-egfx/README.md b/crates/ironrdp-egfx/README.md
+index 2145e61b..0997b89b 100644
+--- a/crates/ironrdp-egfx/README.md
++++ b/crates/ironrdp-egfx/README.md
+@@ -5,6 +5,15 @@ Graphics Pipeline Extension ([MS-RDPEGFX]) implementation for IronRDP.
+ Provides PDU types and client/server processors for the Display Pipeline Virtual
+ Channel Extension, including H.264/AVC420 and AVC444 video streaming support.
+ 
++## Platform H.264 decoders
++
++A client can also decode AVC420 outside the channel processor, with a decoder that is asynchronous or lives
++elsewhere (a browser's WebCodecs `VideoDecoder`, a hardware decoder): `GraphicsPipelineClient::with_external_h264`
++hands each frame out (`take_h264_frames`) and applies its pixels, in order, when they come back
++(`complete_h264_frame`); commands after it and its frame acknowledgement wait until then. The `h264` module prepares
++the bitstream for such decoders (Annex B, and an SPS that declares output in decoding order, without which conformant
++decoders hold every picture back).
++
+ ## OpenH264 Integration
+ 
+ This crate contains optional integration support for OpenH264 through the
+diff --git a/crates/ironrdp-egfx/src/client.rs b/crates/ironrdp-egfx/src/client.rs
+index a9a471c6..f3a23047 100644
+--- a/crates/ironrdp-egfx/src/client.rs
++++ b/crates/ironrdp-egfx/src/client.rs
+@@ -53,7 +53,7 @@
+ //! [3.3.5.2]: https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-rdpegfx/90aba3e3-d4a8-4af1-b1bb-a94e2313bbf0
+ //! [3.3.5.12]: https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-rdpegfx/e3c80bff-3e4e-4e65-b7c2-c2cd6b1fb4f5
+ 
+-use std::collections::BTreeMap;
++use std::collections::{BTreeMap, VecDeque};
+ 
+ use ironrdp_core::{Decode as _, ReadCursor, impl_as_any};
+ use ironrdp_dvc::{DvcClientProcessor, DvcMessage, DvcProcessor};
+@@ -68,6 +68,7 @@ use tracing::{debug, trace, warn};
+ use crate::CHANNEL_NAME;
+ use crate::compositor::{Compositor, OutputUpdate};
+ use crate::decode::H264Decoder;
++use crate::h264;
+ use crate::pdu::{
+     Avc420BitmapStream, CacheImportReplyPdu, CacheToSurfacePdu, CapabilitiesAdvertisePdu, CapabilitiesV8Flags,
+     CapabilitiesV81Flags, CapabilitiesV107Flags, CapabilitySet, Codec1Type, DeleteEncodingContextPdu,
+@@ -209,6 +210,47 @@ pub struct BitmapUpdate {
+     pub height: u16,
+ }
+ 
++// ============================================================================
++// External H.264 Decoding
++// ============================================================================
++
++/// An AVC420 frame for a decoder outside the processor
++///
++/// See [`GraphicsPipelineClient::with_external_h264`]. The caller decodes [`H264Frame::data`] and passes the
++/// pixels of [`H264Frame::regions`] to [`GraphicsPipelineClient::complete_h264_frame`].
++#[derive(Debug, Clone)]
++#[non_exhaustive]
++pub struct H264Frame {
++    /// Identifies the frame to [`GraphicsPipelineClient::complete_h264_frame`]; one more than the previous frame's.
++    pub id: u32,
++    /// The surface the frame belongs to. Each surface carries its own H.264 stream.
++    pub surface_id: u16,
++    /// The `WireToSurface1` destination rectangle (exclusive `right`/`bottom`).
++    pub destination_rectangle: ExclusiveRectangle,
++    /// The rectangles this frame updates, in surface coordinates (exclusive `right`/`bottom`), clipped to the
++    /// destination rectangle. Only these are taken from the decoded picture: the region mask crops it
++    /// ([MS-RDPEGFX] 2.2.4.4).
++    ///
++    /// [MS-RDPEGFX] 2.2.4.4: https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-rdpegfx/5f12c20e-2ea1-4ad1-a2a0-019ee3893731
++    pub regions: Vec<ExclusiveRectangle>,
++    /// The access unit, as an Annex B byte stream that declares output in decoding order
++    /// (see [`h264::with_low_latency_output`]).
++    pub data: Vec<u8>,
++    /// Whether the access unit holds an IDR picture, which a new decoder can start from.
++    pub key_frame: bool,
++}
++
++/// A command waiting to be applied, in the order the server sent it.
++enum Queued {
++    Pdu(GfxPdu),
++    /// An AVC420 frame handed to the external decoder: applied once its pixels are in.
++    H264 {
++        id: u32,
++        surface_id: u16,
++        regions: Vec<ExclusiveRectangle>,
++    },
++}
++
+ // ============================================================================
+ // Handler Trait
+ // ============================================================================
+@@ -422,6 +464,18 @@ pub struct GraphicsPipelineClient {
+     frames_queued: u32,
+     total_frames_decoded: u32,
+     pending_output_reset: Option<(u16, u16)>,
++
++    /// AVC420 frames go to a decoder outside the processor ([`Self::with_external_h264`]).
++    external_h264: bool,
++    next_h264_id: u32,
++    /// Frames for the external decoder, not yet taken.
++    h264_frames: Vec<H264Frame>,
++    /// Decoded pixels (or `None` for a frame the decoder skipped) that arrived before their turn.
++    h264_results: BTreeMap<u32, Option<Vec<u8>>>,
++    /// Commands waiting behind a frame the external decoder has not finished.
++    queue: VecDeque<Queued>,
++    /// `EndFrame`s in `queue`: frames received but not yet processed.
++    queued_frame_ends: u32,
+ }
+ 
+ impl GraphicsPipelineClient {
+@@ -449,7 +503,61 @@ impl GraphicsPipelineClient {
+             frames_queued: 0,
+             total_frames_decoded: 0,
+             pending_output_reset: None,
++            external_h264: false,
++            next_h264_id: 0,
++            h264_frames: Vec::new(),
++            h264_results: BTreeMap::new(),
++            queue: VecDeque::new(),
++            queued_frame_ends: 0,
++        }
++    }
++
++    /// Decodes AVC420 outside the processor, for decoders that are asynchronous or live elsewhere (a browser's
++    /// WebCodecs `VideoDecoder`, a hardware decoder on another thread).
++    ///
++    /// AVC capability sets are advertised as with an [`H264Decoder`]. Each AVC420 `WireToSurface1` becomes an
++    /// [`H264Frame`], taken with [`Self::take_h264_frames`]; the caller decodes it and hands the pixels back with
++    /// [`Self::complete_h264_frame`]. Commands after it, including its `EndFrame` and so its `FrameAcknowledge`,
++    /// wait until then: surface commands read and write the pixels the frame produces, and the acknowledgement
++    /// tells the server the frame was shown, which paces what it sends. Frames can be decoded ahead (all taken
++    /// frames can be in flight at once); their pixels are applied in order.
++    #[must_use]
++    pub fn with_external_h264(mut self) -> Self {
++        self.external_h264 = true;
++        self
++    }
++
++    /// Takes the AVC420 frames to decode, in the order received (see [`Self::with_external_h264`]).
++    #[must_use]
++    pub fn take_h264_frames(&mut self) -> Vec<H264Frame> {
++        core::mem::take(&mut self.h264_frames)
++    }
++
++    /// Hands back a frame from [`Self::take_h264_frames`], and processes what waited for it.
++    ///
++    /// `pixels` holds RGBA8888 for each of the frame's regions in turn, row-major and tightly packed; `None` means
++    /// the frame was not decoded (a decoder that is waiting for a key frame, say), which leaves its regions as they
++    /// were. Returns the messages to send, frame acknowledgements among them.
++    pub fn complete_h264_frame(&mut self, id: u32, pixels: Option<Vec<u8>>) -> PduResult<Vec<DvcMessage>> {
++        if !self
++            .queue
++            .iter()
++            .any(|queued| matches!(queued, Queued::H264 { id: queued_id, .. } if *queued_id == id))
++        {
++            warn!(id, "Completion for an H.264 frame that is not pending");
++            return Ok(Vec::new());
+         }
++        self.h264_results.insert(id, pixels);
++        self.process_queue()
++    }
++
++    /// Frames handed to the external decoder whose pixels have not been applied yet.
++    #[must_use]
++    pub fn pending_h264_frames(&self) -> usize {
++        self.queue
++            .iter()
++            .filter(|queued| matches!(queued, Queued::H264 { .. }))
++            .count()
+     }
+ 
+     // ========================================================================
+@@ -507,6 +615,160 @@ impl GraphicsPipelineClient {
+         self.pending_output_reset.take()
+     }
+ 
++    // ========================================================================
++    // Command Queue
++    // ========================================================================
++
++    /// Queues a decoded PDU; with an external H.264 decoder, an AVC420 frame is handed out right away, so that
++    /// decoding overlaps with receiving what follows.
++    fn enqueue(&mut self, pdu: GfxPdu) -> PduResult<()> {
++        let pdu = match pdu {
++            GfxPdu::WireToSurface1(wire) if self.external_h264 && wire.codec_id == Codec1Type::Avc420 => {
++                let queued = self.hand_out_avc420(&wire)?;
++                self.queue.push_back(queued);
++                return Ok(());
++            }
++            other => other,
++        };
++        if matches!(pdu, GfxPdu::EndFrame(_)) {
++            self.queued_frame_ends = self.queued_frame_ends.saturating_add(1);
++        }
++        self.queue.push_back(Queued::Pdu(pdu));
++        Ok(())
++    }
++
++    /// Processes queued commands until one waits for the external decoder.
++    fn process_queue(&mut self) -> PduResult<Vec<DvcMessage>> {
++        let mut responses = Vec::new();
++        loop {
++            let ready = match self.queue.front() {
++                None => break,
++                Some(Queued::H264 { id, .. }) => self.h264_results.contains_key(id),
++                Some(Queued::Pdu(_)) => true,
++            };
++            if !ready {
++                break;
++            }
++            match self.queue.pop_front() {
++                Some(Queued::Pdu(pdu)) => {
++                    if matches!(pdu, GfxPdu::EndFrame(_)) {
++                        self.queued_frame_ends = self.queued_frame_ends.saturating_sub(1);
++                    }
++                    responses.extend(self.handle_pdu(pdu)?);
++                }
++                Some(Queued::H264 {
++                    id,
++                    surface_id,
++                    regions,
++                }) => {
++                    let pixels = self.h264_results.remove(&id).flatten();
++                    self.apply_h264_frame(surface_id, &regions, pixels)?;
++                }
++                None => break,
++            }
++        }
++        Ok(responses)
++    }
++
++    fn hand_out_avc420(&mut self, pdu: &crate::pdu::WireToSurface1Pdu) -> PduResult<Queued> {
++        let rect = &pdu.destination_rectangle;
++        if rect.left > rect.right || rect.top > rect.bottom {
++            return Err(pdu_other_err!("invalid destination rectangle ordering"));
++        }
++        let mut cursor = ReadCursor::new(&pdu.bitmap_data);
++        let stream = Avc420BitmapStream::decode(&mut cursor).map_err(|e| decode_err!(e))?;
++
++        let regions: Vec<ExclusiveRectangle> = stream
++            .rectangles
++            .iter()
++            .filter_map(|region| {
++                let clipped = ExclusiveRectangle {
++                    left: region.left.max(rect.left),
++                    top: region.top.max(rect.top),
++                    right: region.right.min(rect.right),
++                    bottom: region.bottom.min(rect.bottom),
++                };
++                (clipped.left < clipped.right && clipped.top < clipped.bottom).then_some(clipped)
++            })
++            .collect();
++
++        let annex_b = h264::to_annex_b(stream.data);
++        let data = h264::with_low_latency_output(&annex_b).into_owned();
++        let key_frame = h264::is_key_frame(&data);
++
++        let id = self.next_h264_id;
++        self.next_h264_id = self.next_h264_id.wrapping_add(1);
++        trace!(
++            id,
++            surface_id = pdu.surface_id,
++            key_frame,
++            regions = regions.len(),
++            "AVC420 frame handed out"
++        );
++        self.h264_frames.push(H264Frame {
++            id,
++            surface_id: pdu.surface_id,
++            destination_rectangle: rect.clone(),
++            regions: regions.clone(),
++            data,
++            key_frame,
++        });
++        Ok(Queued::H264 {
++            id,
++            surface_id: pdu.surface_id,
++            regions,
++        })
++    }
++
++    /// Applies an externally decoded frame's regions to its surface, as an in-process decode would.
++    fn apply_h264_frame(
++        &mut self,
++        surface_id: u16,
++        regions: &[ExclusiveRectangle],
++        pixels: Option<Vec<u8>>,
++    ) -> PduResult<()> {
++        if !self.surfaces.contains_key(&surface_id) {
++            return Err(pdu_other_err!("unknown surface in WireToSurface1"));
++        }
++        let Some(pixels) = pixels else {
++            debug!(surface_id, "H.264 frame not decoded; its regions keep their pixels");
++            return Ok(());
++        };
++        let expected: usize = regions.iter().map(rgba_len).sum();
++        if pixels.len() != expected {
++            warn!(
++                expected,
++                actual = pixels.len(),
++                "Decoded H.264 pixels do not match the frame's regions"
++            );
++            return Err(pdu_other_err!("decoded H.264 pixels do not match the frame's regions"));
++        }
++        let mut apply = |region: &ExclusiveRectangle, data: Vec<u8>| {
++            self.compositor.apply_bitmap(surface_id, region, &data);
++            let update = BitmapUpdate {
++                surface_id,
++                destination_rectangle: region.clone(),
++                codec_id: Codec1Type::Avc420,
++                data,
++                width: region.right - region.left,
++                height: region.bottom - region.top,
++            };
++            self.handler.on_bitmap_updated(&update);
++        };
++        if let [region] = regions {
++            // The usual case (a whole-picture update): no copy for the handler.
++            apply(region, pixels);
++        } else {
++            let mut rest = pixels.as_slice();
++            for region in regions {
++                let (data, remaining) = rest.split_at(rgba_len(region));
++                rest = remaining;
++                apply(region, data.to_vec());
++            }
++        }
++        Ok(())
++    }
++
+     // ========================================================================
+     // PDU Handlers
+     // ========================================================================
+@@ -1126,8 +1388,9 @@ impl GraphicsPipelineClient {
+         // Per [3.3.5.12]: client MUST send FrameAcknowledge after EndFrame.
+         // We send the actual queue depth (not Unavailable / 0xFFFFFFFF as FreeRDP does);
+         // the real value gives the server backpressure information for frame pacing.
++        // Frames still waiting behind an H.264 frame being decoded outside count as queued too.
+         let ack = GfxPdu::FrameAcknowledge(FrameAcknowledgePdu {
+-            queue_depth: QueueDepth::from_u32(self.frames_queued),
++            queue_depth: QueueDepth::from_u32(self.frames_queued.saturating_add(self.queued_frame_ends)),
+             frame_id,
+             total_frames_decoded: self.total_frames_decoded,
+         });
+@@ -1145,7 +1408,7 @@ impl DvcProcessor for GraphicsPipelineClient {
+     }
+ 
+     fn start(&mut self, _channel_id: u32) -> PduResult<Vec<DvcMessage>> {
+-        let caps = if self.h264_decoder.is_some() {
++        let caps = if self.h264_decoder.is_some() || self.external_h264 {
+             self.handler.capabilities()
+         } else {
+             // No H.264 decoder: filter out capability sets that imply AVC support.
+@@ -1197,14 +1460,11 @@ impl DvcProcessor for GraphicsPipelineClient {
+             }
+         }
+ 
+-        // Process decoded PDUs
+-        let mut responses: Vec<DvcMessage> = Vec::new();
++        // Process decoded PDUs, in order behind any H.264 frame still being decoded outside
+         for pdu in pdus {
+-            let pdu_responses = self.handle_pdu(pdu)?;
+-            responses.extend(pdu_responses);
++            self.enqueue(pdu)?;
+         }
+-
+-        Ok(responses)
++        self.process_queue()
+     }
+ }
+ 
+@@ -1214,6 +1474,11 @@ impl DvcClientProcessor for GraphicsPipelineClient {}
+ // Frame Cropping
+ // ============================================================================
+ 
++/// Bytes of RGBA8888 for a rectangle.
++fn rgba_len(rect: &ExclusiveRectangle) -> usize {
++    usize::from(rect.right.saturating_sub(rect.left)) * usize::from(rect.bottom.saturating_sub(rect.top)) * 4
++}
++
+ /// Convert BGRA pixel data to RGBA8888
+ ///
+ /// ClearCodec produces BGRA output per [MS-RDPEGFX 2.2.4.1]. Reorder to
+diff --git a/crates/ironrdp-egfx/src/h264.rs b/crates/ironrdp-egfx/src/h264.rs
+new file mode 100644
+index 00000000..b9e0b12e
+--- /dev/null
++++ b/crates/ironrdp-egfx/src/h264.rs
+@@ -0,0 +1,500 @@
++//! H.264 bitstream helpers for decoders that run outside the channel processor
++//!
++//! A platform decoder (a browser's WebCodecs `VideoDecoder`, VideoToolbox, Media Foundation, VA-API) takes an
++//! ITU-T H.264 Annex B byte stream, which is what [MS-RDPEGFX] 2.2.4.4 specifies for AVC420 bitmap streams. These
++//! helpers bring the bitstream into the shape such decoders expect, and answer the questions a caller of one has to
++//! answer (is this access unit a key frame?).
++//!
++//! [MS-RDPEGFX] 2.2.4.4: https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-rdpegfx/5f12c20e-2ea1-4ad1-a2a0-019ee3893731
++
++use std::borrow::Cow;
++
++use crate::pdu::avc_to_annex_b;
++
++const NAL_TYPE_IDR: u8 = 5;
++const NAL_TYPE_SPS: u8 = 7;
++
++/// Returns the bitstream as an Annex B byte stream.
++///
++/// MS-RDPEGFX specifies Annex B, and servers such as GNOME Remote Desktop send it; an input that is instead a
++/// complete chain of 4-byte length-prefixed NAL units (as some encoders produce) is converted. A leading start code
++/// is taken as Annex B first, so a stream that happens to also parse as a length chain is left alone.
++#[must_use]
++pub fn to_annex_b(data: &[u8]) -> Cow<'_, [u8]> {
++    if starts_with_start_code(data) || !is_length_prefixed(data) {
++        Cow::Borrowed(data)
++    } else {
++        Cow::Owned(avc_to_annex_b(data))
++    }
++}
++
++fn starts_with_start_code(data: &[u8]) -> bool {
++    data.starts_with(&[0, 0, 1]) || data.starts_with(&[0, 0, 0, 1])
++}
++
++/// Whether `data` is a non-empty chain of 4-byte big-endian length prefixes, each followed by a NAL unit with a
++/// clear forbidden_zero_bit, ending exactly at the end of the buffer.
++fn is_length_prefixed(mut data: &[u8]) -> bool {
++    if data.is_empty() {
++        return false;
++    }
++    while !data.is_empty() {
++        let Some((prefix, rest)) = data.split_first_chunk::<4>() else {
++            return false;
++        };
++        let Ok(length) = usize::try_from(u32::from_be_bytes(*prefix)) else {
++            return false;
++        };
++        if length == 0 || length > rest.len() || rest[0] & 0x80 != 0 {
++            return false;
++        }
++        data = &rest[length..];
++    }
++    true
++}
++
++/// The NAL units of an Annex B byte stream, without start codes or trailing zero bytes.
++pub fn nal_units(annex_b: &[u8]) -> impl Iterator<Item = &[u8]> {
++    let mut rest = find_start_code(annex_b).map(|(_, payload)| payload);
++    core::iter::from_fn(move || {
++        loop {
++            let current = rest?;
++            let (nal, next) = match find_start_code(current) {
++                Some((start, payload)) => (&current[..start], Some(payload)),
++                None => (current, None),
++            };
++            rest = next;
++            // Zero bytes before a start code are trailing_zero_8bits (or the first byte of a 4-byte start code),
++            // not part of the NAL unit, whose last byte is never zero.
++            let end = nal.iter().rposition(|&byte| byte != 0).map_or(0, |last| last + 1);
++            if end > 0 {
++                return Some(&nal[..end]);
++            }
++        }
++    })
++}
++
++/// Finds the first `00 00 01`; returns its offset and what follows it.
++fn find_start_code(data: &[u8]) -> Option<(usize, &[u8])> {
++    data.windows(3)
++        .position(|window| window == [0, 0, 1])
++        .map(|start| (start, &data[start + 3..]))
++}
++
++fn nal_type(nal: &[u8]) -> Option<u8> {
++    nal.first().map(|header| header & 0x1F)
++}
++
++/// Whether the access unit contains an IDR picture, which a decoder can start from.
++#[must_use]
++pub fn is_key_frame(annex_b: &[u8]) -> bool {
++    nal_units(annex_b).any(|nal| nal_type(nal) == Some(NAL_TYPE_IDR))
++}
++
++/// Declares, in each sequence parameter set that leaves it open, that pictures are output in decoding order.
++///
++/// Without a VUI `bitstream_restriction`, a decoder has to assume the stream may reorder pictures, and conformant
++/// ones (Chromium's, which drives VideoToolbox, VA-API and D3D11 behind WebCodecs) hold each decoded picture back
++/// until the decoded picture buffer is full. A remote desktop never sends B-frames, but encoders that omit the VUI
++/// then delay every frame by several others, and the last frame of an update is not shown until more arrive. This
++/// adds `bitstream_restriction` with `max_num_reorder_frames = 0` (and `max_dec_frame_buffering =
++/// max_num_ref_frames`), as WebRTC does for the same reason. SPSs that already carry a restriction, or that cannot
++/// be parsed, are left unchanged, and so is everything else in the stream.
++#[must_use]
++pub fn with_low_latency_output(annex_b: &[u8]) -> Cow<'_, [u8]> {
++    if !nal_units(annex_b).any(|nal| nal_type(nal) == Some(NAL_TYPE_SPS) && low_latency_sps(nal).is_some()) {
++        return Cow::Borrowed(annex_b);
++    }
++    let mut out = Vec::with_capacity(annex_b.len() + 16);
++    for nal in nal_units(annex_b) {
++        out.extend_from_slice(&[0, 0, 0, 1]);
++        match (nal_type(nal) == Some(NAL_TYPE_SPS))
++            .then(|| low_latency_sps(nal))
++            .flatten()
++        {
++            Some(rewritten) => out.extend_from_slice(&rewritten),
++            None => out.extend_from_slice(nal),
++        }
++    }
++    Cow::Owned(out)
++}
++
++/// What [`parse_sps`] reads from a sequence parameter set.
++#[derive(Debug, Clone, PartialEq, Eq)]
++#[non_exhaustive]
++pub struct SpsInfo {
++    pub profile_idc: u8,
++    pub level_idc: u8,
++    pub max_num_ref_frames: u32,
++    pub width_in_mbs: u32,
++    pub height_in_map_units: u32,
++    /// `video_full_range_flag`, when the VUI signals the video type.
++    pub full_range: Option<bool>,
++    /// `max_num_reorder_frames` and `max_dec_frame_buffering`, when the VUI has a `bitstream_restriction`.
++    pub bitstream_restriction: Option<(u32, u32)>,
++}
++
++/// Parses a sequence parameter set NAL unit (header byte included), up to the end of its VUI.
++#[must_use]
++pub fn parse_sps(nal: &[u8]) -> Option<SpsInfo> {
++    if nal_type(nal) != Some(NAL_TYPE_SPS) {
++        return None;
++    }
++    let rbsp = unescape(&nal[1..]);
++    let mut reader = BitReader::new(&rbsp);
++    let layout = SpsLayout::read(&mut reader)?;
++    Some(layout.info)
++}
++
++/// The rewritten SPS NAL unit, or `None` when it already has a bitstream restriction or cannot be parsed.
++fn low_latency_sps(nal: &[u8]) -> Option<Vec<u8>> {
++    let rbsp = unescape(nal.get(1..)?);
++    let mut reader = BitReader::new(&rbsp);
++    let layout = SpsLayout::read(&mut reader)?;
++    if layout.info.bitstream_restriction.is_some() {
++        return None;
++    }
++
++    let mut writer = BitWriter::default();
++    // Everything before the flag that is changed stays as it was, bit for bit.
++    writer.copy_bits(&rbsp, layout.open_flag_position);
++    if !layout.has_vui {
++        writer.bit(true); // vui_parameters_present_flag
++        writer.bit(false); // aspect_ratio_info_present_flag
++        writer.bit(false); // overscan_info_present_flag
++        writer.bit(false); // video_signal_type_present_flag
++        writer.bit(false); // chroma_loc_info_present_flag
++        writer.bit(false); // timing_info_present_flag
++        writer.bit(false); // nal_hrd_parameters_present_flag
++        writer.bit(false); // vcl_hrd_parameters_present_flag
++        writer.bit(false); // pic_struct_present_flag
++    }
++    writer.bit(true); // bitstream_restriction_flag
++    writer.bit(true); // motion_vectors_over_pic_boundaries_flag
++    writer.ue(2); // max_bytes_per_pic_denom (the inferred default)
++    writer.ue(1); // max_bits_per_mb_denom (the inferred default)
++    writer.ue(16); // log2_max_mv_length_horizontal
++    writer.ue(16); // log2_max_mv_length_vertical
++    writer.ue(0); // max_num_reorder_frames
++    writer.ue(layout.info.max_num_ref_frames.max(1)); // max_dec_frame_buffering
++    writer.bit(true); // rbsp_stop_one_bit
++    let rbsp = writer.finish();
++
++    let mut out = Vec::with_capacity(rbsp.len() + 8);
++    out.push(nal[0]);
++    escape_into(&rbsp, &mut out);
++    Some(out)
++}
++
++/// An SPS as far as this module needs it.
++struct SpsLayout {
++    info: SpsInfo,
++    has_vui: bool,
++    /// Bit position of the flag to set: `vui_parameters_present_flag` without a VUI, else
++    /// `bitstream_restriction_flag`.
++    open_flag_position: usize,
++}
++
++const MAX_UE: u32 = 1 << 16;
++
++impl SpsLayout {
++    fn read(r: &mut BitReader<'_>) -> Option<Self> {
++        let profile_idc = u8::try_from(r.bits(8)?).ok()?;
++        r.bits(8)?; // constraint_set flags, reserved_zero_2bits
++        let level_idc = u8::try_from(r.bits(8)?).ok()?;
++        r.ue()?; // seq_parameter_set_id
++        if matches!(
++            profile_idc,
++            100 | 110 | 122 | 244 | 44 | 83 | 86 | 118 | 128 | 138 | 139 | 134 | 135
++        ) {
++            let chroma_format_idc = r.ue()?;
++            if chroma_format_idc == 3 {
++                r.bits(1)?; // separate_colour_plane_flag
++            }
++            r.ue()?; // bit_depth_luma_minus8
++            r.ue()?; // bit_depth_chroma_minus8
++            r.bits(1)?; // qpprime_y_zero_transform_bypass_flag
++            if r.flag()? {
++                // seq_scaling_matrix_present_flag
++                let lists = if chroma_format_idc == 3 { 12 } else { 8 };
++                for index in 0..lists {
++                    if r.flag()? {
++                        skip_scaling_list(r, if index < 6 { 16 } else { 64 })?;
++                    }
++                }
++            }
++        }
++        r.ue()?; // log2_max_frame_num_minus4
++        match r.ue()? {
++            // pic_order_cnt_type
++            0 => {
++                r.ue()?; // log2_max_pic_order_cnt_lsb_minus4
++            }
++            1 => {
++                r.bits(1)?; // delta_pic_order_always_zero_flag
++                r.se()?; // offset_for_non_ref_pic
++                r.se()?; // offset_for_top_to_bottom_field
++                let cycle = r.ue()?;
++                if cycle > 255 {
++                    return None;
++                }
++                for _ in 0..cycle {
++                    r.se()?; // offset_for_ref_frame
++                }
++            }
++            2 => {}
++            _ => return None,
++        }
++        let max_num_ref_frames = r.ue()?;
++        r.bits(1)?; // gaps_in_frame_num_value_allowed_flag
++        let width_in_mbs = r.ue()?.checked_add(1)?;
++        let height_in_map_units = r.ue()?.checked_add(1)?;
++        if !r.flag()? {
++            // frame_mbs_only_flag
++            r.bits(1)?; // mb_adaptive_frame_field_flag
++        }
++        r.bits(1)?; // direct_8x8_inference_flag
++        if r.flag()? {
++            // frame_cropping_flag
++            for _ in 0..4 {
++                r.ue()?;
++            }
++        }
++
++        let mut info = SpsInfo {
++            profile_idc,
++            level_idc,
++            max_num_ref_frames,
++            width_in_mbs,
++            height_in_map_units,
++            full_range: None,
++            bitstream_restriction: None,
++        };
++        let vui_flag_position = r.position();
++        if !r.flag()? {
++            return Some(Self {
++                info,
++                has_vui: false,
++                open_flag_position: vui_flag_position,
++            });
++        }
++
++        if r.flag()? {
++            // aspect_ratio_info_present_flag
++            if r.bits(8)? == 255 {
++                r.bits(16)?; // sar_width
++                r.bits(16)?; // sar_height
++            }
++        }
++        if r.flag()? {
++            // overscan_info_present_flag
++            r.bits(1)?;
++        }
++        if r.flag()? {
++            // video_signal_type_present_flag
++            r.bits(3)?; // video_format
++            info.full_range = Some(r.flag()?);
++            if r.flag()? {
++                // colour_description_present_flag
++                r.bits(24)?;
++            }
++        }
++        if r.flag()? {
++            // chroma_loc_info_present_flag
++            r.ue()?;
++            r.ue()?;
++        }
++        if r.flag()? {
++            // timing_info_present_flag
++            r.bits(32)?;
++            r.bits(32)?;
++            r.bits(1)?;
++        }
++        let nal_hrd = r.flag()?;
++        if nal_hrd {
++            skip_hrd_parameters(r)?;
++        }
++        let vcl_hrd = r.flag()?;
++        if vcl_hrd {
++            skip_hrd_parameters(r)?;
++        }
++        if nal_hrd || vcl_hrd {
++            r.bits(1)?; // low_delay_hrd_flag
++        }
++        r.bits(1)?; // pic_struct_present_flag
++        let restriction_flag_position = r.position();
++        if r.flag()? {
++            r.bits(1)?; // motion_vectors_over_pic_boundaries_flag
++            r.ue()?; // max_bytes_per_pic_denom
++            r.ue()?; // max_bits_per_mb_denom
++            r.ue()?; // log2_max_mv_length_horizontal
++            r.ue()?; // log2_max_mv_length_vertical
++            let reorder = r.ue()?;
++            let buffering = r.ue()?;
++            info.bitstream_restriction = Some((reorder, buffering));
++        }
++        Some(Self {
++            info,
++            has_vui: true,
++            open_flag_position: restriction_flag_position,
++        })
++    }
++}
++
++fn skip_scaling_list(r: &mut BitReader<'_>, size: usize) -> Option<()> {
++    let mut last_scale = 8i64;
++    let mut next_scale = 8i64;
++    for _ in 0..size {
++        if next_scale != 0 {
++            let delta = i64::from(r.se()?);
++            next_scale = (last_scale + delta + 256).rem_euclid(256);
++        }
++        if next_scale != 0 {
++            last_scale = next_scale;
++        }
++    }
++    Some(())
++}
++
++fn skip_hrd_parameters(r: &mut BitReader<'_>) -> Option<()> {
++    let cpb_count = r.ue()?.checked_add(1)?;
++    if cpb_count > 32 {
++        return None;
++    }
++    r.bits(4)?; // bit_rate_scale
++    r.bits(4)?; // cpb_size_scale
++    for _ in 0..cpb_count {
++        r.ue()?; // bit_rate_value_minus1
++        r.ue()?; // cpb_size_value_minus1
++        r.bits(1)?; // cbr_flag
++    }
++    r.bits(20)?; // four 5-bit lengths
++    Some(())
++}
++
++/// Removes emulation prevention bytes (`00 00 03` -> `00 00`).
++fn unescape(data: &[u8]) -> Vec<u8> {
++    let mut out = Vec::with_capacity(data.len());
++    let mut zeros = 0;
++    for &byte in data {
++        if zeros >= 2 && byte == 3 {
++            zeros = 0;
++            continue;
++        }
++        zeros = if byte == 0 { zeros + 1 } else { 0 };
++        out.push(byte);
++    }
++    out
++}
++
++/// Inserts emulation prevention bytes so that no start code appears inside the NAL unit.
++fn escape_into(rbsp: &[u8], out: &mut Vec<u8>) {
++    let mut zeros = 0;
++    for &byte in rbsp {
++        if zeros >= 2 && byte <= 3 {
++            out.push(3);
++            zeros = 0;
++        }
++        zeros = if byte == 0 { zeros + 1 } else { 0 };
++        out.push(byte);
++    }
++}
++
++struct BitReader<'a> {
++    data: &'a [u8],
++    position: usize,
++}
++
++impl<'a> BitReader<'a> {
++    fn new(data: &'a [u8]) -> Self {
++        Self { data, position: 0 }
++    }
++
++    fn position(&self) -> usize {
++        self.position
++    }
++
++    fn bit(&mut self) -> Option<bool> {
++        let byte = self.data.get(self.position / 8)?;
++        let bit = (byte >> (7 - self.position % 8)) & 1;
++        self.position += 1;
++        Some(bit == 1)
++    }
++
++    fn flag(&mut self) -> Option<bool> {
++        self.bit()
++    }
++
++    fn bits(&mut self, count: u32) -> Option<u32> {
++        debug_assert!(count <= 32);
++        let mut value = 0u64;
++        for _ in 0..count {
++            value = (value << 1) | u64::from(self.bit()?);
++        }
++        u32::try_from(value).ok()
++    }
++
++    /// Unsigned Exp-Golomb, bounded well above anything an SPS holds.
++    fn ue(&mut self) -> Option<u32> {
++        let mut leading_zeros = 0;
++        while !self.bit()? {
++            leading_zeros += 1;
++            if leading_zeros > 16 {
++                return None;
++            }
++        }
++        let value = (1u32 << leading_zeros) - 1 + self.bits(leading_zeros)?;
++        (value <= MAX_UE).then_some(value)
++    }
++
++    /// Signed Exp-Golomb.
++    fn se(&mut self) -> Option<i32> {
++        let code = i32::try_from(self.ue()?).ok()?;
++        Some(if code % 2 == 1 { (code + 1) / 2 } else { -(code / 2) })
++    }
++}
++
++#[derive(Default)]
++struct BitWriter {
++    data: Vec<u8>,
++    bits: usize,
++}
++
++impl BitWriter {
++    fn bit(&mut self, value: bool) {
++        if self.bits.is_multiple_of(8) {
++            self.data.push(0);
++        }
++        if value {
++            if let Some(last) = self.data.last_mut() {
++                *last |= 0x80 >> (self.bits % 8);
++            }
++        }
++        self.bits += 1;
++    }
++
++    fn copy_bits(&mut self, source: &[u8], count: usize) {
++        for position in 0..count {
++            let bit = source
++                .get(position / 8)
++                .is_some_and(|byte| (byte >> (7 - position % 8)) & 1 == 1);
++            self.bit(bit);
++        }
++    }
++
++    fn ue(&mut self, value: u32) {
++        let code = u64::from(value) + 1;
++        let length = 64 - code.leading_zeros();
++        for _ in 1..length {
++            self.bit(false);
++        }
++        for shift in (0..length).rev() {
++            self.bit((code >> shift) & 1 == 1);
++        }
++    }
++
++    /// The written bits, zero-padded to a byte boundary (the caller has written the stop bit).
++    fn finish(self) -> Vec<u8> {
++        self.data
++    }
++}
+diff --git a/crates/ironrdp-egfx/src/lib.rs b/crates/ironrdp-egfx/src/lib.rs
+index 284c2673..12243615 100644
+--- a/crates/ironrdp-egfx/src/lib.rs
++++ b/crates/ironrdp-egfx/src/lib.rs
+@@ -8,5 +8,6 @@ pub mod client;
+ pub mod compositor;
+ pub mod decode;
+ pub mod encode;
++pub mod h264;
+ pub mod pdu;
+ pub mod server;
+diff --git a/crates/ironrdp-session/src/active_stage.rs b/crates/ironrdp-session/src/active_stage.rs
+index f53e0aed..b80186a6 100644
+--- a/crates/ironrdp-session/src/active_stage.rs
++++ b/crates/ironrdp-session/src/active_stage.rs
+@@ -4,8 +4,10 @@ use ironrdp_bulk::{BulkCompressor, CompressionType as BulkCompressionType};
+ use ironrdp_core::{ReadCursor, WriteBuf};
+ use ironrdp_displaycontrol::client::DisplayControlClient;
+ use ironrdp_dvc::pdu::SoftSyncTunnelType;
+-use ironrdp_dvc::{DrdynvcClient, DvcClientProcessor, DvcMessageBatch, DynamicChannelMut, DynamicChannelRef};
+-use ironrdp_egfx::client::GraphicsPipelineClient;
++use ironrdp_dvc::{
++    DrdynvcClient, DvcClientProcessor, DvcMessageBatch, DynamicChannelMut, DynamicChannelRef, encode_dvc_messages,
++};
++use ironrdp_egfx::client::{GraphicsPipelineClient, H264Frame};
+ use ironrdp_graphics::pointer::DecodedPointer;
+ use ironrdp_pdu::gcc::{ChannelName, Monitor};
+ use ironrdp_pdu::geometry::{ExclusiveRectangle, InclusiveRectangle, Rectangle as _};
+@@ -24,7 +26,7 @@ use ironrdp_pdu::window::{
+ };
+ use ironrdp_pdu::{Action, mcs};
+ use ironrdp_rdpei::RdpeiClient;
+-use ironrdp_svc::{StaticChannelSet, SvcMessage, SvcProcessor, SvcProcessorMessages};
++use ironrdp_svc::{ChannelFlags, StaticChannelSet, SvcMessage, SvcProcessor, SvcProcessorMessages};
+ use tracing::{debug, warn};
+ 
+ use crate::fast_path::UpdateKind;
+@@ -230,26 +232,11 @@ impl ActiveStage {
+                     }
+                 }
+ 
+-                // Drain the client-side EGFX compositor: composite each completed-frame
+-                // output region into the image and surface it as a graphics update. EGFX
+-                // data only ever arrives over a DVC, which is X224-carried, so this stays
+-                // out of the Action::FastPath arm rather than running on every fast-path
+-                // frame (the highest-frequency path in a session).
+-                let (output_reset, graphics_updates) = self
+-                    .get_dvc_mut::<GraphicsPipelineClient>()
+-                    .map(|mut gfx| {
+-                        let gfx = gfx.processor_mut();
+-                        (gfx.take_output_reset(), gfx.drain_output())
+-                    })
+-                    .unwrap_or_default();
+-                if let Some((width, height)) = output_reset {
+-                    image.reset_preserving_pointer(width, height)?;
+-                    self.graphics_output_needs_full_refresh = true;
+-                }
+-                let (region, damage_regions) =
+-                    composite_graphics_updates(image, graphics_updates.into_iter().map(|u| (u.region, u.data)))?;
+-                self.damage_regions.extend(damage_regions);
+-                if let Some(region) = region {
++                // Drain the client-side EGFX compositor. EGFX data only ever arrives over a
++                // DVC, which is X224-carried, so this stays out of the Action::FastPath arm
++                // rather than running on every fast-path frame (the highest-frequency path in
++                // a session).
++                if let Some(region) = self.drain_graphics_pipeline(image)? {
+                     stage_outputs.push(ActiveStageOutput::GraphicsUpdate(region));
+                 }
+ 
+@@ -286,6 +273,33 @@ impl ActiveStage {
+             }
+         }
+ 
++        self.widen_to_full_refresh(image, &mut stage_outputs);
++
++        Ok(stage_outputs)
++    }
++
++    /// Composites each completed-frame output region of the client-side EGFX compositor
++    /// into the image; returns their union, to surface as a graphics update.
++    fn drain_graphics_pipeline(&mut self, image: &mut DecodedImage) -> SessionResult<Option<InclusiveRectangle>> {
++        let (output_reset, graphics_updates) = self
++            .get_dvc_mut::<GraphicsPipelineClient>()
++            .map(|mut gfx| {
++                let gfx = gfx.processor_mut();
++                (gfx.take_output_reset(), gfx.drain_output())
++            })
++            .unwrap_or_default();
++        if let Some((width, height)) = output_reset {
++            image.reset_preserving_pointer(width, height)?;
++            self.graphics_output_needs_full_refresh = true;
++        }
++        let (region, damage_regions) =
++            composite_graphics_updates(image, graphics_updates.into_iter().map(|u| (u.region, u.data)))?;
++        self.damage_regions.extend(damage_regions);
++        Ok(region)
++    }
++
++    /// After a graphics-output reset, the first graphics update covers the whole image.
++    fn widen_to_full_refresh(&mut self, image: &DecodedImage, stage_outputs: &mut [ActiveStageOutput]) {
+         if self.graphics_output_needs_full_refresh
+             && let Some(ActiveStageOutput::GraphicsUpdate(region)) = stage_outputs
+                 .iter_mut()
+@@ -301,7 +315,50 @@ impl ActiveStage {
+             self.damage_regions.push(region.clone());
+             self.graphics_output_needs_full_refresh = false;
+         }
++    }
+ 
++    /// Takes the AVC420 frames the graphics pipeline hands to an external decoder.
++    ///
++    /// Empty unless its [`GraphicsPipelineClient`] was built
++    /// [`with_external_h264`](GraphicsPipelineClient::with_external_h264). Decode each frame and pass the result
++    /// to [`Self::complete_graphics_h264_frame`].
++    pub fn take_graphics_h264_frames(&mut self) -> Vec<H264Frame> {
++        self.get_dvc_mut::<GraphicsPipelineClient>()
++            .map(|mut gfx| gfx.processor_mut().take_h264_frames())
++            .unwrap_or_default()
++    }
++
++    /// Completes an AVC420 frame decoded outside the graphics pipeline
++    /// (see [`GraphicsPipelineClient::complete_h264_frame`]).
++    ///
++    /// Processes the graphics commands that waited for it, as [`Self::process`] would have: the outputs are the
++    /// frame acknowledgements to send and the graphics update to draw.
++    pub fn complete_graphics_h264_frame(
++        &mut self,
++        image: &mut DecodedImage,
++        id: u32,
++        pixels: Option<Vec<u8>>,
++    ) -> SessionResult<Vec<ActiveStageOutput>> {
++        self.damage_regions.clear();
++        let Some(mut gfx) = self.get_dvc_mut::<GraphicsPipelineClient>() else {
++            return Ok(Vec::new());
++        };
++        let channel_id = gfx.channel_id();
++        let messages = gfx
++            .processor_mut()
++            .complete_h264_frame(id, pixels)
++            .map_err(SessionError::pdu)?;
++
++        let mut stage_outputs = Vec::new();
++        if !messages.is_empty() {
++            let messages =
++                encode_dvc_messages(channel_id, messages, ChannelFlags::empty()).map_err(SessionError::encode)?;
++            stage_outputs.push(ActiveStageOutput::ResponseFrame(self.encode_dvc_messages(messages)?));
++        }
++        if let Some(region) = self.drain_graphics_pipeline(image)? {
++            stage_outputs.push(ActiveStageOutput::GraphicsUpdate(region));
++        }
++        self.widen_to_full_refresh(image, &mut stage_outputs);
+         Ok(stage_outputs)
+     }
+ 
+diff --git a/crates/ironrdp-testsuite-core/tests/egfx/external_h264.rs b/crates/ironrdp-testsuite-core/tests/egfx/external_h264.rs
+new file mode 100644
+index 00000000..e7d1e0c6
+--- /dev/null
++++ b/crates/ironrdp-testsuite-core/tests/egfx/external_h264.rs
+@@ -0,0 +1,298 @@
++//! `GraphicsPipelineClient::with_external_h264`: AVC420 frames decoded outside the processor, whose pixels are
++//! applied (and frames acknowledged) in the order the server sent them.
++
++use ironrdp_core::{Decode as _, Encode as _, ReadCursor, WriteCursor, encode_vec};
++use ironrdp_dvc::{DvcMessage, DvcProcessor as _};
++use ironrdp_egfx::client::{GraphicsPipelineClient, GraphicsPipelineHandler};
++use ironrdp_egfx::pdu::{
++    Avc420Region, CapabilitiesConfirmPdu, CapabilitiesV8Flags, CapabilitiesV81Flags, CapabilitySet, CapabilityVersion,
++    Codec1Type, Color, CreateSurfacePdu, EndFramePdu, GfxPdu, MapSurfaceToOutputPdu, PixelFormat, ResetGraphicsPdu,
++    SolidFillPdu, StartFramePdu, Timestamp, WireToSurface1Pdu, encode_avc420_bitmap_stream,
++};
++use ironrdp_graphics::zgfx::wrap_uncompressed;
++use ironrdp_pdu::geometry::ExclusiveRectangle;
++
++struct NoopHandler;
++impl GraphicsPipelineHandler for NoopHandler {}
++
++fn rect(left: u16, top: u16, right: u16, bottom: u16) -> ExclusiveRectangle {
++    ExclusiveRectangle {
++        left,
++        top,
++        right,
++        bottom,
++    }
++}
++
++fn wire(pdu: &GfxPdu) -> Vec<u8> {
++    let mut buf = vec![0u8; pdu.size()];
++    pdu.encode(&mut WriteCursor::new(&mut buf)).expect("encode");
++    wrap_uncompressed(&buf)
++}
++
++fn acks(messages: &[DvcMessage]) -> Vec<(u32, u32)> {
++    messages
++        .iter()
++        .filter_map(|message| {
++            let encoded = encode_vec(message.as_ref()).expect("encode");
++            match GfxPdu::decode(&mut ReadCursor::new(&encoded)).expect("decode") {
++                GfxPdu::FrameAcknowledge(ack) => Some((ack.frame_id, ack.queue_depth.to_u32())),
++                _ => None,
++            }
++        })
++        .collect()
++}
++
++const IDR_ACCESS_UNIT: &[u8] = &[
++    0x00, 0x00, 0x00, 0x01, 0x27, 0x64, 0x00, 0x0d, 0xac, 0x56, 0x81, 0x41, 0xf9, // SPS, no VUI
++    0x00, 0x00, 0x00, 0x01, 0x28, 0xee, 0x3c, 0xb0, // PPS
++    0x00, 0x00, 0x00, 0x01, 0x25, 0xb8, 0x00, 0x04, // IDR slice
++];
++
++/// An active client with a 16x8 surface 1 mapped at the output origin.
++fn client() -> GraphicsPipelineClient {
++    let mut client = GraphicsPipelineClient::new(Box::new(NoopHandler), None).with_external_h264();
++    let setup = [
++        GfxPdu::CapabilitiesConfirm(CapabilitiesConfirmPdu::from_typed(&CapabilitySet::V8_1 {
++            flags: CapabilitiesV81Flags::AVC420_ENABLED,
++        })),
++        GfxPdu::ResetGraphics(ResetGraphicsPdu {
++            width: 16,
++            height: 8,
++            monitors: vec![],
++        }),
++        GfxPdu::CreateSurface(CreateSurfacePdu {
++            surface_id: 1,
++            width: 16,
++            height: 8,
++            pixel_format: PixelFormat::XRgb,
++        }),
++        GfxPdu::MapSurfaceToOutput(MapSurfaceToOutputPdu {
++            surface_id: 1,
++            output_origin_x: 0,
++            output_origin_y: 0,
++        }),
++    ];
++    for pdu in setup.into_iter().chain([start(0), end(0)]) {
++        client.process(0, &wire(&pdu)).expect("setup");
++    }
++    // Mapping the surface paints it: start from a committed, drained output.
++    let _ = client.drain_output();
++    client
++}
++
++fn start(frame_id: u32) -> GfxPdu {
++    GfxPdu::StartFrame(StartFramePdu {
++        timestamp: Timestamp {
++            milliseconds: 0,
++            seconds: 0,
++            minutes: 0,
++            hours: 0,
++        },
++        frame_id,
++    })
++}
++
++fn end(frame_id: u32) -> GfxPdu {
++    GfxPdu::EndFrame(EndFramePdu { frame_id })
++}
++
++fn avc420(regions: &[Avc420Region], data: &[u8]) -> GfxPdu {
++    GfxPdu::WireToSurface1(WireToSurface1Pdu {
++        surface_id: 1,
++        codec_id: Codec1Type::Avc420,
++        pixel_format: PixelFormat::XRgb,
++        destination_rectangle: rect(0, 0, 16, 8),
++        bitmap_data: encode_avc420_bitmap_stream(regions, data),
++    })
++}
++
++fn process_all(client: &mut GraphicsPipelineClient, pdus: &[GfxPdu]) -> Vec<DvcMessage> {
++    pdus.iter()
++        .flat_map(|pdu| client.process(0, &wire(pdu)).expect("process"))
++        .collect()
++}
++
++fn solid(r: u8, rect: ExclusiveRectangle) -> Vec<u8> {
++    let pixels = usize::from(rect.right - rect.left) * usize::from(rect.bottom - rect.top);
++    [r, 0, 0, 0xff].repeat(pixels)
++}
++
++#[test]
++fn avc420_is_advertised() {
++    let mut client = GraphicsPipelineClient::new(Box::new(NoopHandler), None).with_external_h264();
++    let messages = client.start(0).expect("start");
++    let encoded = encode_vec(messages[0].as_ref()).expect("encode");
++    let GfxPdu::CapabilitiesAdvertise(caps) = GfxPdu::decode(&mut ReadCursor::new(&encoded)).expect("decode") else {
++        panic!("expected CapabilitiesAdvertise");
++    };
++    let versions: Vec<CapabilityVersion> = caps.0.iter().map(|cap| cap.version).collect();
++    assert_eq!(versions, [CapabilityVersion::V8_1, CapabilityVersion::V8]);
++}
++
++#[test]
++fn frames_are_handed_out_and_acknowledged_once_applied() {
++    let mut client = client();
++    let regions = [
++        Avc420Region::new(2, 1, 6, 3, 22, 100),
++        Avc420Region::new(10, 4, 20, 6, 22, 100),
++    ];
++    let sent = process_all(&mut client, &[start(7), avc420(&regions, IDR_ACCESS_UNIT), end(7)]);
++    assert!(acks(&sent).is_empty(), "no acknowledgement before the pixels are in");
++    assert_eq!(client.pending_h264_frames(), 1);
++
++    let frames = client.take_h264_frames();
++    assert_eq!(frames.len(), 1);
++    let frame = &frames[0];
++    assert_eq!(frame.surface_id, 1);
++    assert!(frame.key_frame);
++    // The second region is clipped to the destination rectangle.
++    assert_eq!(frame.regions, [rect(2, 1, 6, 3), rect(10, 4, 16, 6)]);
++    // The SPS now declares output in decoding order; the rest is as sent.
++    assert!(frame.data.len() > IDR_ACCESS_UNIT.len());
++    assert!(frame.data.ends_with(&IDR_ACCESS_UNIT[13..]));
++    assert!(client.take_h264_frames().is_empty());
++    assert!(client.drain_output().is_empty(), "nothing drawn yet");
++
++    let pixels = [solid(1, frame.regions[0].clone()), solid(2, frame.regions[1].clone())].concat();
++    let sent = client.complete_h264_frame(frame.id, Some(pixels)).expect("complete");
++    assert_eq!(acks(&sent), [(7, 0)]);
++    assert_eq!(client.pending_h264_frames(), 0);
++
++    let output = client.drain_output();
++    assert_eq!(output.len(), 2);
++    assert_eq!(output[0].region, rect(2, 1, 6, 3));
++    assert_eq!(output[0].data, solid(1, rect(2, 1, 6, 3)));
++    assert_eq!(output[1].region, rect(10, 4, 16, 6));
++    assert_eq!(output[1].data, solid(2, rect(10, 4, 16, 6)));
++}
++
++#[test]
++fn commands_after_a_frame_wait_for_it() {
++    let mut client = client();
++    let fill = GfxPdu::SolidFill(SolidFillPdu {
++        surface_id: 1,
++        fill_pixel: Color {
++            b: 0,
++            g: 0,
++            r: 9,
++            xa: 0xff,
++        },
++        rectangles: vec![rect(0, 0, 2, 2)],
++    });
++    process_all(
++        &mut client,
++        &[
++            start(1),
++            avc420(&[Avc420Region::full_frame(16, 8, 22)], IDR_ACCESS_UNIT),
++            fill,
++            end(1),
++        ],
++    );
++    let frame = client.take_h264_frames().remove(0);
++
++    let sent = client
++        .complete_h264_frame(frame.id, Some(solid(1, rect(0, 0, 16, 8))))
++        .expect("complete");
++    assert_eq!(acks(&sent), [(1, 0)]);
++    // The fill came after the frame, so it is on top.
++    let output = client.drain_output();
++    let whole = output
++        .iter()
++        .find(|u| u.region == rect(0, 0, 16, 8))
++        .expect("full-surface update");
++    assert_eq!(&whole.data[..4], &[9, 0, 0, 0xff]);
++    assert_eq!(&whole.data[4 * 2..4 * 3], &[1, 0, 0, 0xff]);
++}
++
++#[test]
++fn frames_complete_in_order_whatever_order_the_decoder_finishes_in() {
++    let mut client = client();
++    let full = [Avc420Region::full_frame(16, 8, 22)];
++    process_all(
++        &mut client,
++        &[
++            start(1),
++            avc420(&full, IDR_ACCESS_UNIT),
++            end(1),
++            start(2),
++            avc420(&full, &[0, 0, 0, 1, 0x21, 0x9a]),
++            end(2),
++        ],
++    );
++    let frames = client.take_h264_frames();
++    assert_eq!(frames.len(), 2);
++    assert_eq!(frames[1].id, frames[0].id + 1);
++    assert!(!frames[1].key_frame);
++
++    let sent = client
++        .complete_h264_frame(frames[1].id, Some(solid(2, rect(0, 0, 16, 8))))
++        .expect("complete second");
++    assert!(acks(&sent).is_empty(), "the first frame is not in yet");
++
++    let sent = client
++        .complete_h264_frame(frames[0].id, Some(solid(1, rect(0, 0, 16, 8))))
++        .expect("complete first");
++    // Frame 1 is acknowledged while frame 2 still waits in the queue.
++    assert_eq!(acks(&sent), [(1, 1), (2, 0)]);
++    let output = client.drain_output();
++    assert_eq!(output.last().expect("output").data, solid(2, rect(0, 0, 16, 8)));
++}
++
++#[test]
++fn a_frame_without_pixels_is_still_acknowledged() {
++    let mut client = client();
++    process_all(
++        &mut client,
++        &[
++            start(3),
++            avc420(&[Avc420Region::full_frame(16, 8, 22)], IDR_ACCESS_UNIT),
++            end(3),
++        ],
++    );
++    let frame = client.take_h264_frames().remove(0);
++    let sent = client.complete_h264_frame(frame.id, None).expect("complete");
++    assert_eq!(acks(&sent), [(3, 0)]);
++    assert!(client.drain_output().is_empty());
++}
++
++#[test]
++fn pixels_that_do_not_match_the_regions_are_an_error() {
++    let mut client = client();
++    process_all(
++        &mut client,
++        &[
++            start(1),
++            avc420(&[Avc420Region::full_frame(16, 8, 22)], IDR_ACCESS_UNIT),
++            end(1),
++        ],
++    );
++    let frame = client.take_h264_frames().remove(0);
++    assert!(client.complete_h264_frame(frame.id, Some(vec![0; 12])).is_err());
++}
++
++#[test]
++fn length_prefixed_frames_are_handed_out_as_annex_b() {
++    let mut client = client();
++    let avc = [0, 0, 0, 2, 0x21, 0x9a];
++    process_all(&mut client, &[avc420(&[Avc420Region::full_frame(16, 8, 22)], &avc)]);
++    let frame = client.take_h264_frames().remove(0);
++    assert_eq!(frame.data, [0, 0, 0, 1, 0x21, 0x9a]);
++}
++
++#[test]
++fn without_external_decoding_nothing_is_handed_out() {
++    let mut client = GraphicsPipelineClient::new(Box::new(NoopHandler), None);
++    client
++        .process(
++            0,
++            &wire(&GfxPdu::CapabilitiesConfirm(CapabilitiesConfirmPdu::from_typed(
++                &CapabilitySet::V8 {
++                    flags: CapabilitiesV8Flags::empty(),
++                },
++            ))),
++        )
++        .expect("confirm");
++    assert!(client.take_h264_frames().is_empty());
++    assert_eq!(client.pending_h264_frames(), 0);
++}
+diff --git a/crates/ironrdp-testsuite-core/tests/egfx/h264.rs b/crates/ironrdp-testsuite-core/tests/egfx/h264.rs
+new file mode 100644
+index 00000000..2aeb8c8d
+--- /dev/null
++++ b/crates/ironrdp-testsuite-core/tests/egfx/h264.rs
+@@ -0,0 +1,158 @@
++use std::borrow::Cow;
++
++use ironrdp_egfx::h264::{is_key_frame, nal_units, parse_sps, to_annex_b, with_low_latency_output};
++
++/// SPS from macOS VideoToolbox (High, 320x240): no VUI at all.
++const SPS_WITHOUT_VUI: &[u8] = &[0x27, 0x64, 0x00, 0x0d, 0xac, 0x56, 0x81, 0x41, 0xf9];
++
++/// SPS from macOS VideoToolbox (High, 1920x1080, full-range BT.709): a VUI without `bitstream_restriction`.
++const SPS_WITH_VUI: &[u8] = &[
++    0x27, 0x64, 0x00, 0x28, 0xac, 0x56, 0x80, 0x78, 0x02, 0x27, 0xe5, 0x9b, 0x81, 0x01, 0x00, 0x81,
++];
++
++/// SPS from x264 (High, 320x240), which declares `max_num_reorder_frames = 0` itself.
++const SPS_WITH_RESTRICTION: &[u8] = &[
++    0x67, 0x64, 0x00, 0x0d, 0xac, 0xb2, 0x02, 0x83, 0xf6, 0x02, 0x20, 0x00, 0x00, 0x03, 0x00, 0x20, 0x00, 0x00, 0x07,
++    0x91, 0xe2, 0x85, 0x49,
++];
++
++/// The x264 SPS with its `bitstream_restriction` taken out: timing info with emulation prevention in the VUI.
++const SPS_WITH_TIMING: &[u8] = &[
++    0x67, 0x64, 0x00, 0x0d, 0xac, 0xb2, 0x02, 0x83, 0xf6, 0x02, 0x20, 0x00, 0x00, 0x03, 0x00, 0x20, 0x00, 0x00, 0x07,
++    0x90, 0x80,
++];
++
++fn annex_b(nals: &[&[u8]]) -> Vec<u8> {
++    nals.iter().flat_map(|nal| [&[0, 0, 0, 1][..], nal].concat()).collect()
++}
++
++fn sps_of(stream: &[u8]) -> Vec<u8> {
++    nal_units(stream)
++        .find(|nal| nal[0] & 0x1f == 7)
++        .expect("stream has an SPS")
++        .to_vec()
++}
++
++const PPS: &[u8] = &[0x28, 0xee, 0x3c, 0xb0];
++const IDR: &[u8] = &[0x25, 0xb8, 0x00, 0x04];
++const NON_IDR: &[u8] = &[0x21, 0x9a, 0x02, 0x04];
++
++#[test]
++fn annex_b_input_is_left_as_is() {
++    let stream = annex_b(&[SPS_WITHOUT_VUI, PPS, IDR]);
++    assert!(matches!(to_annex_b(&stream), Cow::Borrowed(_)));
++}
++
++#[test]
++fn length_prefixed_input_is_converted_to_annex_b() {
++    let mut avc = Vec::new();
++    for nal in [SPS_WITHOUT_VUI, PPS, IDR] {
++        avc.extend_from_slice(&u32::try_from(nal.len()).unwrap().to_be_bytes());
++        avc.extend_from_slice(nal);
++    }
++    assert_eq!(
++        to_annex_b(&avc).as_ref(),
++        annex_b(&[SPS_WITHOUT_VUI, PPS, IDR]).as_slice()
++    );
++}
++
++#[test]
++fn a_leading_start_code_wins_over_a_length_chain() {
++    // 00 00 00 01 is also a valid 1-byte length prefix here; MS-RDPEGFX specifies Annex B.
++    let stream = [0x00, 0x00, 0x00, 0x01, 0x09, 0x00, 0x00, 0x00, 0x01, 0x10];
++    assert!(matches!(to_annex_b(&stream), Cow::Borrowed(_)));
++}
++
++#[test]
++fn nal_units_split_on_three_and_four_byte_start_codes() {
++    let stream = [
++        0x00, 0x00, 0x00, 0x01, 0x09, 0xf0, // AUD
++        0x00, 0x00, 0x01, 0x67, 0x42, 0x00, 0x00, // SPS-ish, then a trailing zero byte
++        0x00, 0x00, 0x01, 0x65, 0x88,
++    ];
++    let units: Vec<&[u8]> = nal_units(&stream).collect();
++    assert_eq!(units, [&[0x09, 0xf0][..], &[0x67, 0x42][..], &[0x65, 0x88][..]]);
++}
++
++#[test]
++fn key_frames_hold_an_idr_picture() {
++    assert!(is_key_frame(&annex_b(&[SPS_WITHOUT_VUI, PPS, IDR])));
++    assert!(!is_key_frame(&annex_b(&[NON_IDR])));
++    assert!(!is_key_frame(&[]));
++}
++
++#[test]
++fn sps_fields_are_parsed() {
++    let info = parse_sps(SPS_WITH_VUI).expect("parses");
++    assert_eq!(info.profile_idc, 100);
++    assert_eq!(info.level_idc, 40);
++    assert_eq!(info.max_num_ref_frames, 1);
++    assert_eq!((info.width_in_mbs, info.height_in_map_units), (120, 68));
++    assert_eq!(info.full_range, Some(true));
++    assert_eq!(info.bitstream_restriction, None);
++
++    let info = parse_sps(SPS_WITH_RESTRICTION).expect("parses");
++    assert_eq!(info.bitstream_restriction, Some((0, 3)));
++    assert_eq!((info.width_in_mbs, info.height_in_map_units), (20, 15));
++}
++
++#[test]
++fn an_sps_without_vui_gets_one_that_declares_no_reordering() {
++    let stream = annex_b(&[SPS_WITHOUT_VUI, PPS, IDR]);
++    let rewritten = with_low_latency_output(&stream);
++    let sps = sps_of(&rewritten);
++    // Checked against FFmpeg's trace_headers, which reads the same fields back.
++    assert_eq!(
++        sps,
++        [
++            0x27, 0x64, 0x00, 0x0d, 0xac, 0x56, 0x81, 0x41, 0xfa, 0x01, 0xb4, 0x11, 0x08, 0xd4
++        ]
++    );
++    let info = parse_sps(&sps).expect("parses");
++    assert_eq!(info.bitstream_restriction, Some((0, 1)));
++    assert_eq!((info.width_in_mbs, info.height_in_map_units), (20, 15));
++
++    // The other NAL units are untouched.
++    let units: Vec<&[u8]> = nal_units(&rewritten).collect();
++    assert_eq!(&units[1..], [PPS, IDR]);
++}
++
++#[test]
++fn a_vui_without_restriction_keeps_its_fields() {
++    let stream = annex_b(&[SPS_WITH_VUI]);
++    let rewritten = with_low_latency_output(&stream);
++    let info = parse_sps(&sps_of(&rewritten)).expect("parses");
++    assert_eq!(info.full_range, Some(true));
++    assert_eq!(info.bitstream_restriction, Some((0, 1)));
++    assert_eq!((info.width_in_mbs, info.height_in_map_units), (120, 68));
++}
++
++#[test]
++fn emulation_prevention_survives_the_rewrite() {
++    let stream = annex_b(&[SPS_WITH_TIMING]);
++    let rewritten = with_low_latency_output(&stream);
++    let sps = sps_of(&rewritten);
++    assert_eq!(
++        sps,
++        [
++            0x67, 0x64, 0x00, 0x0d, 0xac, 0xb2, 0x02, 0x83, 0xf6, 0x02, 0x20, 0x00, 0x00, 0x03, 0x00, 0x20, 0x00, 0x00,
++            0x07, 0x91, 0xb4, 0x11, 0x08, 0xc9
++        ]
++    );
++    assert_eq!(parse_sps(&sps).expect("parses").bitstream_restriction, Some((0, 3)));
++}
++
++#[test]
++fn streams_that_already_declare_their_reordering_are_left_alone() {
++    let stream = annex_b(&[SPS_WITH_RESTRICTION, PPS, IDR]);
++    assert!(matches!(with_low_latency_output(&stream), Cow::Borrowed(_)));
++    let delta = annex_b(&[NON_IDR]);
++    assert!(matches!(with_low_latency_output(&delta), Cow::Borrowed(_)));
++}
++
++#[test]
++fn a_truncated_sps_is_left_alone() {
++    let stream = annex_b(&[&SPS_WITH_VUI[..6], PPS, IDR]);
++    assert!(parse_sps(&SPS_WITH_VUI[..6]).is_none());
++    assert!(matches!(with_low_latency_output(&stream), Cow::Borrowed(_)));
++}
+diff --git a/crates/ironrdp-testsuite-core/tests/egfx/mod.rs b/crates/ironrdp-testsuite-core/tests/egfx/mod.rs
+index cadb9b8b..f91ffbf0 100644
+--- a/crates/ironrdp-testsuite-core/tests/egfx/mod.rs
++++ b/crates/ironrdp-testsuite-core/tests/egfx/mod.rs
+@@ -4,5 +4,7 @@ mod client;
+ #[cfg(feature = "openh264-bundled")]
+ mod decode;
+ mod decoded_frame;
++mod external_h264;
++mod h264;
+ mod server;
+ mod wire_to_surface_real_world;
+diff --git a/crates/ironrdp-web/src/h264.rs b/crates/ironrdp-web/src/h264.rs
+new file mode 100644
+index 00000000..d1f62e07
+--- /dev/null
++++ b/crates/ironrdp-web/src/h264.rs
+@@ -0,0 +1,97 @@
++//! H.264 (AVC420) through a JavaScript decoder: the `h264_decoder` extension.
++//!
++//! The graphics pipeline hands each AVC420 frame out ([`GraphicsPipelineClient::with_external_h264`]); the session
++//! loop passes it to the decoder object given with the extension (in practice a WebCodecs `VideoDecoder`, which
++//! is asynchronous and often hardware-accelerated). The decoder calls back with the pixels of the frame's regions,
++//! which come back to the session loop as an [`RdpInputEvent::H264Decoded`] and complete the frame.
++//!
++//! The decoder object has `decode(frame, done)` and optionally `close()`. `frame` is `{ id, surfaceId, keyFrame,
++//! data: Uint8Array, destination: { left, top, right, bottom }, regions: [{ left, top, right, bottom }] }`
++//! (Annex B; rectangles in surface coordinates, exclusive right/bottom). `done(id, pixels, error)` takes the RGBA of
++//! each region in turn as one `Uint8Array`, or `null` for a frame that was not decoded; an `error` string ends the
++//! session.
++//!
++//! [`GraphicsPipelineClient::with_external_h264`]: ironrdp_egfx::client::GraphicsPipelineClient::with_external_h264
++
++use anyhow::Context as _;
++use futures_channel::mpsc;
++use ironrdp_egfx::client::H264Frame;
++use ironrdp_pdu::geometry::ExclusiveRectangle;
++use tracing::warn;
++use wasm_bindgen::JsCast as _;
++use wasm_bindgen::prelude::*;
++
++use crate::session::RdpInputEvent;
++
++pub(crate) struct JsH264Decoder {
++    decoder: JsValue,
++    decode: js_sys::Function,
++    done: Closure<dyn FnMut(u32, JsValue, JsValue)>,
++}
++
++impl JsH264Decoder {
++    pub(crate) fn new(decoder: JsValue, events: mpsc::UnboundedSender<RdpInputEvent>) -> anyhow::Result<Self> {
++        let decode = js_sys::Reflect::get(&decoder, &JsValue::from_str("decode"))
++            .ok()
++            .and_then(|decode| decode.dyn_into::<js_sys::Function>().ok())
++            .context("the H.264 decoder has no decode function")?;
++        let done = Closure::new(move |id: u32, pixels: JsValue, error: JsValue| {
++            let event = RdpInputEvent::H264Decoded {
++                id,
++                pixels: pixels.dyn_ref::<js_sys::Uint8Array>().map(js_sys::Uint8Array::to_vec),
++                error: error.as_string(),
++            };
++            if events.unbounded_send(event).is_err() {
++                warn!(id, "Decoded H.264 frame dropped: the session loop is gone");
++            }
++        });
++        Ok(Self { decoder, decode, done })
++    }
++
++    pub(crate) fn decode(&self, frame: H264Frame) -> anyhow::Result<()> {
++        let object = js_sys::Object::new();
++        let set = |key: &str, value: JsValue| {
++            let _ = js_sys::Reflect::set(&object, &JsValue::from_str(key), &value);
++        };
++        set("id", JsValue::from(frame.id));
++        set("surfaceId", JsValue::from(frame.surface_id));
++        set("keyFrame", JsValue::from(frame.key_frame));
++        set("data", js_sys::Uint8Array::from(frame.data.as_slice()).into());
++        set("destination", rectangle(&frame.destination_rectangle));
++        set(
++            "regions",
++            frame.regions.iter().map(rectangle).collect::<js_sys::Array>().into(),
++        );
++        self.decode
++            .call2(&self.decoder, &object, self.done.as_ref())
++            .map_err(|error| anyhow::anyhow!("H.264 decoder: {error:?}"))?;
++        Ok(())
++    }
++}
++
++impl Drop for JsH264Decoder {
++    fn drop(&mut self) {
++        // The session is over: release the decoder (hardware decoders are a limited resource).
++        let close = js_sys::Reflect::get(&self.decoder, &JsValue::from_str("close"))
++            .ok()
++            .and_then(|close| close.dyn_into::<js_sys::Function>().ok());
++        if let Some(close) = close {
++            if let Err(error) = close.call0(&self.decoder) {
++                warn!(?error, "Closing the H.264 decoder failed");
++            }
++        }
++    }
++}
++
++fn rectangle(rect: &ExclusiveRectangle) -> JsValue {
++    let object = js_sys::Object::new();
++    for (key, value) in [
++        ("left", rect.left),
++        ("top", rect.top),
++        ("right", rect.right),
++        ("bottom", rect.bottom),
++    ] {
++        let _ = js_sys::Reflect::set(&object, &JsValue::from_str(key), &JsValue::from(value));
++    }
++    object.into()
++}
+diff --git a/crates/ironrdp-web/src/lib.rs b/crates/ironrdp-web/src/lib.rs
+index 8ac2b44b..0c4e56a1 100644
+--- a/crates/ironrdp-web/src/lib.rs
++++ b/crates/ironrdp-web/src/lib.rs
+@@ -20,6 +20,7 @@ mod audio_input;
+ mod canvas;
+ mod clipboard;
+ mod error;
++mod h264;
+ mod image;
+ mod input;
+ mod network_client;
+diff --git a/crates/ironrdp-web/src/session.rs b/crates/ironrdp-web/src/session.rs
+index a96ae6e3..b306d08b 100644
+--- a/crates/ironrdp-web/src/session.rs
++++ b/crates/ironrdp-web/src/session.rs
+@@ -94,6 +94,7 @@ struct SessionBuilderInner {
+     use_graphics_pipeline: bool,
+     audio_playback_callback: Option<js_sys::Function>,
+     audio_input_callback: Option<js_sys::Function>,
++    h264_decoder: Option<JsValue>,
+     enable_credssp: bool,
+     enable_server_pointer: bool,
+     legacy_graphics: bool,
+@@ -142,6 +143,7 @@ impl Default for SessionBuilderInner {
+             use_graphics_pipeline: false,
+             audio_playback_callback: None,
+             audio_input_callback: None,
++            h264_decoder: None,
+             enable_credssp: true,
+             enable_server_pointer: true,
+             legacy_graphics: false,
+@@ -273,6 +275,10 @@ impl iron_remote_desktop::SessionBuilder for SessionBuilder {
+                 // A function told when to capture (see audio_input::to_js); anything else turns the microphone off.
+                 self.0.borrow_mut().audio_input_callback = audio_input.dyn_into::<js_sys::Function>().ok();
+             };
++            |h264_decoder: JsValue| {
++                // An object decoding AVC420 for the graphics pipeline (see crate::h264); anything else: no H.264.
++                self.0.borrow_mut().h264_decoder = h264_decoder.is_object().then_some(h264_decoder);
++            };
+             |enable_credssp: bool| { self.0.borrow_mut().enable_credssp = enable_credssp };
+             |enable_server_pointer: bool| { self.0.borrow_mut().enable_server_pointer = enable_server_pointer };
+             |legacy_graphics: bool| { self.0.borrow_mut().legacy_graphics = legacy_graphics };
+@@ -446,8 +452,10 @@ impl iron_remote_desktop::SessionBuilder for SessionBuilder {
+         let enable_credssp = self.0.borrow().enable_credssp;
+         config.enable_credssp = enable_credssp;
+         // Graphics pipeline (EGFX): required by GNOME Remote Desktop. Off by default: without an H.264
+-        // decoder only CAPVERSION_8 is advertised, and Windows servers do better with the bitmap path.
++        // decoder (the `h264_decoder` extension) only CAPVERSION_8 is advertised, and Windows servers do better
++        // with the bitmap path.
+         let use_graphics_pipeline = self.0.borrow().use_graphics_pipeline;
++        let h264_decoder = self.0.borrow().h264_decoder.clone().filter(|_| use_graphics_pipeline);
+         config.support_dyn_vc_gfx_protocol = use_graphics_pipeline;
+         // Audio playback (RDPSND) when a callback takes the audio.
+         let audio_playback_callback = self.0.borrow().audio_playback_callback.clone();
+@@ -550,6 +558,7 @@ impl iron_remote_desktop::SessionBuilder for SessionBuilder {
+             computer_name: client_name.clone(),
+             use_display_control,
+             use_graphics_pipeline,
++            use_h264: h264_decoder.is_some(),
+             audio_backend: audio_playback_callback
+                 .as_ref()
+                 .map(|_| crate::audio::WasmAudioBackend::new(input_events_tx.clone())),
+@@ -583,6 +592,7 @@ impl iron_remote_desktop::SessionBuilder for SessionBuilder {
+             audio_playback_callback,
+             audio_input_callback,
+             audio_input,
++            h264_decoder,
+ 
+             input_events_rx: RefCell::new(Some(input_events_rx)),
+             rdp_reader: RefCell::new(Some(rdp_reader)),
+@@ -608,6 +618,12 @@ pub(crate) enum RdpInputEvent {
+     AudioInput(crate::audio_input::AudioInputMessage),
+     /// Microphone backend → event loop: captured audio for the server.
+     AudioInputUplink(crate::audio_input::AudioInputUplink),
++    /// JS H.264 decoder → event loop: a decoded AVC420 frame (see [`crate::h264`]).
++    H264Decoded {
++        id: u32,
++        pixels: Option<Vec<u8>>,
++        error: Option<String>,
++    },
+     FastPath(FastPathInputEvents),
+     Resize {
+         width: u32,
+@@ -642,6 +658,7 @@ pub(crate) struct Session {
+     audio_input_callback: Option<js_sys::Function>,
+     /// Takes the PCM that JS captures (`audio_input_data`), when the microphone is on.
+     audio_input: Option<crate::audio_input::AudioInputSink>,
++    h264_decoder: Option<JsValue>,
+ 
+     // Consumed when `run` is called
+     input_events_rx: RefCell<Option<mpsc::UnboundedReceiver<RdpInputEvent>>>,
+@@ -769,6 +786,13 @@ impl iron_remote_desktop::Session for Session {
+         }
+         .build();
+ 
++        // Decodes AVC420 for the graphics pipeline; closed when the session ends.
++        let h264 = self
++            .h264_decoder
++            .clone()
++            .map(|decoder| crate::h264::JsH264Decoder::new(decoder, self.input_events_tx.clone()))
++            .transpose()?;
++
+         // Timer interval for driving clipboard lock timeouts (5 second interval)
+         let mut cleanup_interval = IntervalStream::new(5_000).fuse();
+ 
+@@ -971,6 +995,13 @@ impl iron_remote_desktop::Session for Session {
+                         RdpInputEvent::AudioInputUplink(uplink) => {
+                             vec![ActiveStageOutput::ResponseFrame(active_stage.encode_dvc_messages(uplink.into_messages())?)]
+                         }
++                        RdpInputEvent::H264Decoded { id, pixels, error } => {
++                            if let Some(error) = error {
++                                return Err(anyhow::anyhow!("H.264 decoding failed: {error}").into());
++                            }
++                            active_stage.complete_graphics_h264_frame(&mut image, id, pixels)
++                                .context("complete H.264 frame")?
++                        }
+                         RdpInputEvent::TerminateSession => {
+                             active_stage.graceful_shutdown()
+                                 .context("graceful shutdown")?
+@@ -1000,6 +1031,14 @@ impl iron_remote_desktop::Session for Session {
+                 }
+             };
+ 
++            // AVC420 frames the graphics pipeline received go to the decoder right away, so decoding overlaps
++            // with receiving what follows.
++            if let Some(h264) = &h264 {
++                for frame in active_stage.take_graphics_h264_frames() {
++                    h264.decode(frame)?;
++                }
++            }
++
+             for out in outputs {
+                 match out {
+                     ActiveStageOutput::ResponseFrame(frame) => {
+@@ -1693,6 +1732,7 @@ struct ConnectParams {
+     computer_name: String,
+     use_display_control: bool,
+     use_graphics_pipeline: bool,
++    use_h264: bool,
+     audio_backend: Option<crate::audio::WasmAudioBackend>,
+     audio_input_listener: Option<crate::audio_input::AudioInputListener>,
+ }
+@@ -1746,6 +1786,7 @@ async fn connect(
+         computer_name,
+         use_display_control,
+         use_graphics_pipeline,
++        use_h264,
+         audio_backend,
+         audio_input_listener,
+     }: ConnectParams,
+@@ -1792,11 +1833,13 @@ async fn connect(
+ 
+     let mut drdynvc = DrdynvcClient::new();
+     if use_graphics_pipeline {
+-        // The session drains the EGFX compositor into the image.
+-        drdynvc = drdynvc.with_dynamic_channel(ironrdp_egfx::client::GraphicsPipelineClient::new(
+-            Box::new(NoopEgfxHandler),
+-            None,
+-        ));
++        // The session drains the EGFX compositor into the image. With an H.264 decoder, AVC420 is advertised and
++        // its frames are handed out to that decoder.
++        let mut gfx = ironrdp_egfx::client::GraphicsPipelineClient::new(Box::new(NoopEgfxHandler), None);
++        if use_h264 {
++            gfx = gfx.with_external_h264();
++        }
++        drdynvc = drdynvc.with_dynamic_channel(gfx);
+     }
+     if use_display_control {
+         drdynvc = drdynvc.with_dynamic_channel(DisplayControlClient::new(|_| Ok(Vec::new())));
+diff --git a/web-client/iron-remote-desktop-rdp/src/H264Decoder.test.ts b/web-client/iron-remote-desktop-rdp/src/H264Decoder.test.ts
+new file mode 100644
+index 00000000..d7eab87a
+--- /dev/null
++++ b/web-client/iron-remote-desktop-rdp/src/H264Decoder.test.ts
+@@ -0,0 +1,285 @@
++import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
++import { WebCodecsH264Decoder, h264Supported, type H264Frame } from './H264Decoder';
++
++/**
++ * WebCodecsH264Decoder against a stand-in VideoDecoder (jsdom has no WebCodecs). Pictures are width x height, and
++ * each pixel's RGBA is (x, y, id, 255), so a test can tell which picture and which pixels a region was read from.
++ * The real decoder is checked in a browser by the plugin's end-to-end suite.
++ */
++
++interface FakeChunk {
++    type: 'key' | 'delta';
++    timestamp: number;
++    data: Uint8Array;
++}
++
++class FakePicture {
++    closed = false;
++    readonly visibleRect: { x: number; y: number; width: number; height: number };
++    readonly codedWidth: number;
++    readonly codedHeight: number;
++    constructor(
++        readonly timestamp: number,
++        width: number,
++        height: number,
++        private readonly failCopy?: Error,
++    ) {
++        this.visibleRect = { x: 0, y: 0, width, height };
++        this.codedWidth = width;
++        this.codedHeight = height;
++    }
++    async copyTo(
++        into: Uint8Array,
++        options: { rect: { x: number; y: number; width: number; height: number }; format: string },
++    ): Promise<void> {
++        if (this.failCopy) {
++            throw this.failCopy;
++        }
++        expect(options.format).toBe('RGBA');
++        const { x, y, width, height } = options.rect;
++        for (let row = 0; row < height; row++) {
++            for (let col = 0; col < width; col++) {
++                into.set([x + col, y + row, this.timestamp, 255], (row * width + col) * 4);
++            }
++        }
++    }
++    close(): void {
++        this.closed = true;
++    }
++}
++
++class FakeDecoder {
++    static instances: FakeDecoder[] = [];
++    state = 'unconfigured';
++    config: VideoDecoderConfig | null = null;
++    chunks: FakeChunk[] = [];
++    constructor(readonly init: { output: (picture: FakePicture) => void; error: (error: DOMException) => void }) {
++        FakeDecoder.instances.push(this);
++    }
++    configure(config: VideoDecoderConfig): void {
++        this.config = config;
++        this.state = 'configured';
++    }
++    decode(chunk: FakeChunk): void {
++        this.chunks.push(chunk);
++    }
++    close(): void {
++        this.state = 'closed';
++    }
++    /** Outputs the picture for a chunk it was given. */
++    emit(timestamp: number, width = 64, height = 32, failCopy?: Error): FakePicture {
++        const picture = new FakePicture(timestamp, width, height, failCopy);
++        this.init.output(picture);
++        return picture;
++    }
++}
++
++class FakeChunkClass implements FakeChunk {
++    type: 'key' | 'delta';
++    timestamp: number;
++    data: Uint8Array;
++    constructor(init: FakeChunk) {
++        this.type = init.type;
++        this.timestamp = init.timestamp;
++        this.data = init.data;
++    }
++}
++
++function frame(id: number, keyFrame: boolean, regions = [{ left: 0, top: 0, right: 2, bottom: 1 }]): H264Frame {
++    return {
++        id,
++        surfaceId: 1,
++        keyFrame,
++        data: new Uint8Array([0, 0, 0, 1, keyFrame ? 0x65 : 0x41]),
++        destination: { left: 0, top: 0, right: 64, bottom: 32 },
++        regions,
++    };
++}
++
++const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
++
++describe('WebCodecsH264Decoder', () => {
++    let clock = 0;
++    let decoder: WebCodecsH264Decoder;
++    let done: ReturnType<typeof vi.fn>;
++
++    beforeEach(() => {
++        FakeDecoder.instances = [];
++        vi.stubGlobal('VideoDecoder', FakeDecoder);
++        vi.stubGlobal('EncodedVideoChunk', FakeChunkClass);
++        clock = 0;
++        done = vi.fn();
++        decoder = new WebCodecsH264Decoder({ stallMs: 1000, now: () => clock });
++    });
++
++    afterEach(() => {
++        decoder.close();
++        vi.unstubAllGlobals();
++        vi.useRealTimers();
++    });
++
++    it('configures full-range BT.709 and low latency', () => {
++        decoder.decode(frame(0, true), done);
++        const config = FakeDecoder.instances[0].config!;
++        expect(config.codec).toMatch(/^avc1\./);
++        expect(config.optimizeForLatency).toBe(true);
++        expect(config.colorSpace).toEqual({ primaries: 'bt709', transfer: 'bt709', matrix: 'bt709', fullRange: true });
++    });
++
++    it('passes over delta frames until a key frame, then decodes', () => {
++        decoder.decode(frame(0, false), done);
++        expect(done).toHaveBeenCalledWith(0, null);
++        expect(decoder.stats.skipped).toBe(1);
++
++        decoder.decode(frame(1, true), done);
++        decoder.decode(frame(2, false), done);
++        const chunks = FakeDecoder.instances[0].chunks;
++        expect(chunks.map((c) => [c.type, c.timestamp])).toEqual([
++            ['key', 1],
++            ['delta', 2],
++        ]);
++        expect(decoder.stats.pending).toBe(2);
++    });
++
++    it('hands back the pixels of each region, in turn', async () => {
++        decoder.decode(
++            frame(0, true, [
++                { left: 1, top: 2, right: 3, bottom: 3 },
++                { left: 10, top: 20, right: 11, bottom: 22 },
++            ]),
++            done,
++        );
++        const picture = FakeDecoder.instances[0].emit(0);
++        await flush();
++        expect(done).toHaveBeenCalledTimes(1);
++        const [id, pixels] = done.mock.calls[0];
++        expect(id).toBe(0);
++        // (1,2) (2,2), then (10,20) (10,21)
++        expect(Array.from(pixels as Uint8Array)).toEqual([1, 2, 0, 255, 2, 2, 0, 255, 10, 20, 0, 255, 10, 21, 0, 255]);
++        expect(picture.closed).toBe(true);
++        expect(decoder.stats.frames).toBe(1);
++        expect(decoder.stats.pending).toBe(0);
++    });
++
++    it('takes a picture the size of a destination elsewhere on the surface as starting there', async () => {
++        const offset: H264Frame = {
++            ...frame(0, true, [{ left: 105, top: 51, right: 106, bottom: 52 }]),
++            destination: { left: 100, top: 50, right: 164, bottom: 82 },
++        };
++        decoder.decode(offset, done);
++        FakeDecoder.instances[0].emit(0);
++        await flush();
++        expect(Array.from(done.mock.calls[0][1] as Uint8Array)).toEqual([5, 1, 0, 255]);
++    });
++
++    it('completes frames the decoder never output without pixels', async () => {
++        decoder.decode(frame(0, true), done);
++        decoder.decode(frame(1, false), done);
++        decoder.decode(frame(2, false), done);
++        FakeDecoder.instances[0].emit(2);
++        await flush();
++        expect(done.mock.calls.map((call) => [call[0], call[1] === null])).toEqual([
++            [0, true],
++            [1, true],
++            [2, false],
++        ]);
++        expect(decoder.stats.dropped).toBe(2);
++    });
++
++    it('fails on a decoder error: frames in flight and later ones get the error', () => {
++        const onFailure = vi.fn();
++        decoder.close();
++        decoder = new WebCodecsH264Decoder({ onFailure, now: () => clock });
++        decoder.decode(frame(0, true), done);
++        FakeDecoder.instances[0].init.error(new DOMException('bad bitstream', 'EncodingError'));
++        expect(done).toHaveBeenCalledWith(0, null, 'EncodingError: bad bitstream');
++        expect(onFailure).toHaveBeenCalledWith('EncodingError: bad bitstream');
++        expect(FakeDecoder.instances[0].state).toBe('closed');
++
++        decoder.decode(frame(1, false), done);
++        expect(done).toHaveBeenLastCalledWith(1, null, 'EncodingError: bad bitstream');
++    });
++
++    it('tells a decoder the browser took back from one that failed', () => {
++        decoder.decode(frame(0, true), done);
++        FakeDecoder.instances[0].init.error(
++            new DOMException('Codec reclaimed due to inactivity.', 'QuotaExceededError'),
++        );
++        expect(decoder.failed).toMatch(/QuotaExceededError/);
++        expect(decoder.reclaimed).toBe(true);
++    });
++
++    it('fails when a picture does not come out in time', () => {
++        vi.useFakeTimers();
++        decoder.close();
++        decoder = new WebCodecsH264Decoder({ stallMs: 1000, now: () => clock });
++        decoder.decode(frame(0, true), done);
++        clock = 900;
++        vi.advanceTimersByTime(300);
++        expect(decoder.failed).toBeNull();
++        clock = 1100;
++        vi.advanceTimersByTime(300);
++        expect(decoder.failed).toMatch(/no picture from the decoder/);
++        expect(done).toHaveBeenCalledWith(0, null, decoder.failed);
++    });
++
++    it('fails when no key frame comes', () => {
++        vi.useFakeTimers();
++        decoder.close();
++        decoder = new WebCodecsH264Decoder({ stallMs: 1000, now: () => clock });
++        decoder.decode(frame(0, false), done);
++        clock = 1500;
++        vi.advanceTimersByTime(300);
++        expect(decoder.failed).toMatch(/no key frame/);
++    });
++
++    it('reads through a canvas where copyTo cannot convert to RGBA', async () => {
++        const drawn: unknown[] = [];
++        class FakeCanvas {
++            constructor(
++                readonly width: number,
++                readonly height: number,
++            ) {}
++            getContext() {
++                return {
++                    drawImage: (...args: unknown[]) => drawn.push(args.slice(1)),
++                    getImageData: (_x: number, _y: number, w: number, h: number) => ({
++                        data: new Uint8ClampedArray(w * h * 4).fill(7),
++                    }),
++                };
++            }
++        }
++        vi.stubGlobal('OffscreenCanvas', FakeCanvas);
++        decoder.decode(frame(0, true), done);
++        FakeDecoder.instances[0].emit(0, 64, 32, new DOMException('no RGBA', 'NotSupportedError'));
++        await flush();
++        expect(decoder.stats.readback).toBe('canvas');
++        expect(drawn).toEqual([[0, 0, 2, 1, 0, 0, 2, 1]]);
++        expect(Array.from(done.mock.calls[0][1] as Uint8Array)).toEqual([7, 7, 7, 7, 7, 7, 7, 7]);
++    });
++
++    it('keeps one decoder per surface', () => {
++        decoder.decode(frame(0, true), done);
++        decoder.decode({ ...frame(1, true), surfaceId: 2 }, done);
++        expect(FakeDecoder.instances.length).toBe(2);
++        decoder.close();
++        expect(FakeDecoder.instances.every((d) => d.state === 'closed')).toBe(true);
++    });
++});
++
++describe('h264Supported', () => {
++    afterEach(() => vi.unstubAllGlobals());
++
++    it('is false without WebCodecs', async () => {
++        vi.stubGlobal('VideoDecoder', undefined);
++        expect(await h264Supported()).toBe(false);
++    });
++
++    it('asks the browser', async () => {
++        const isConfigSupported = vi.fn(async (config: VideoDecoderConfig) => ({ supported: true, config }));
++        vi.stubGlobal('VideoDecoder', { isConfigSupported });
++        vi.stubGlobal('EncodedVideoChunk', FakeChunkClass);
++        expect(await h264Supported()).toBe(true);
++        expect(isConfigSupported.mock.calls[0][0].codec).toMatch(/^avc1\./);
++    });
++});
+diff --git a/web-client/iron-remote-desktop-rdp/src/H264Decoder.ts b/web-client/iron-remote-desktop-rdp/src/H264Decoder.ts
+new file mode 100644
+index 00000000..03ee19b6
+--- /dev/null
++++ b/web-client/iron-remote-desktop-rdp/src/H264Decoder.ts
+@@ -0,0 +1,401 @@
++/**
++ * H.264 (AVC420) for the graphics pipeline, decoded with the browser's WebCodecs `VideoDecoder` (hardware-accelerated
++ * where the platform offers it). Given to a session with the `h264Decoder` extension.
++ *
++ * The session hands each AVC420 frame to `decode(frame, done)` as soon as it arrives and applies the pixels `done`
++ * returns in the order the server sent the frames: surface commands after an H.264 frame, and the acknowledgement of
++ * its graphics frame (which paces the server), wait for it. So a frame that never comes out of the decoder would
++ * freeze the picture: after `stallMs` without output, or on any decoder error, the decoder fails, which ends the
++ * session with an error. Reconnecting without H.264 is the way out.
++ */
++
++export interface H264Rectangle {
++    left: number;
++    top: number;
++    /** Exclusive. */
++    right: number;
++    /** Exclusive. */
++    bottom: number;
++}
++
++/** An AVC420 frame, as the session hands it out. */
++export interface H264Frame {
++    /** One more than the previous frame's. */
++    id: number;
++    /** Each surface carries its own H.264 stream. */
++    surfaceId: number;
++    /** Holds an IDR picture, which a decoder can start from. */
++    keyFrame: boolean;
++    /** Annex B byte stream. */
++    data: Uint8Array;
++    /** The destination rectangle on the surface. */
++    destination: H264Rectangle;
++    /** The rectangles to take from the picture, in surface coordinates, within `destination`. */
++    regions: H264Rectangle[];
++}
++
++/**
++ * Completes a frame: the RGBA of each region in turn (row-major, tightly packed), `null` for a frame that was not
++ * decoded (its regions keep their pixels), or an `error` that ends the session.
++ */
++export type H264Done = (id: number, pixels: Uint8Array | null, error?: string) => void;
++
++export interface H264DecoderStats {
++    /** Frames decoded and handed back. */
++    frames: number;
++    keyFrames: number;
++    /** Frames passed over while waiting for a key frame. */
++    skipped: number;
++    /** Frames the decoder never output (completed without pixels). */
++    dropped: number;
++    /** Frames in the decoders now. */
++    pending: number;
++    /** Time from `decode` to the pixels being handed back, for the last frame and the slowest one. */
++    lastLatencyMs: number;
++    maxLatencyMs: number;
++    /** How pixels are read from decoded pictures: `VideoFrame.copyTo` or a canvas. */
++    readback: 'copyTo' | 'canvas';
++}
++
++export interface WebCodecsH264DecoderOptions {
++    /** A frame that has not come out of the decoder after this long fails the decoder (default 3000 ms). */
++    stallMs?: number;
++    /** Called once, when the decoder fails. */
++    onFailure?: (reason: string) => void;
++    /** Clock, in milliseconds (tests). */
++    now?: () => number;
++}
++
++/**
++ * High profile, level 5.1: pictures up to 4096x2304. GNOME Remote Desktop encodes constrained High; decoders take
++ * Main and Constrained Baseline streams too.
++ */
++const CODEC = 'avc1.640033';
++
++/**
++ * MS-RDPEGFX 3.3.8.3.1: AVC420 carries full-range BT.709 whatever the bitstream signals (Windows doesn't signal it),
++ * so it overrides what the stream says.
++ */
++function decoderConfig(): VideoDecoderConfig {
++    return {
++        codec: CODEC,
++        optimizeForLatency: true,
++        hardwareAcceleration: 'no-preference',
++        colorSpace: { primaries: 'bt709', transfer: 'bt709', matrix: 'bt709', fullRange: true },
++    };
++}
++
++/** Whether this browser can decode the H.264 the graphics pipeline carries. */
++export async function h264Supported(): Promise<boolean> {
++    if (typeof VideoDecoder === 'undefined' || typeof EncodedVideoChunk === 'undefined') {
++        return false;
++    }
++    try {
++        const support = await VideoDecoder.isConfigSupported(decoderConfig());
++        return support.supported === true;
++    } catch {
++        return false;
++    }
++}
++
++interface Pending {
++    frame: H264Frame;
++    done: H264Done;
++    since: number;
++}
++
++interface Surface {
++    decoder: VideoDecoder;
++    /** A new decoder starts at a key frame. */
++    needKey: boolean;
++    /** Since when frames were passed over waiting for a key frame (null: not waiting). */
++    waitingSince: number | null;
++    pending: Map<number, Pending>;
++}
++
++export class WebCodecsH264Decoder {
++    readonly stats: H264DecoderStats = {
++        frames: 0,
++        keyFrames: 0,
++        skipped: 0,
++        dropped: 0,
++        pending: 0,
++        lastLatencyMs: 0,
++        maxLatencyMs: 0,
++        readback: 'copyTo',
++    };
++    /** Why the decoder failed, once it has. */
++    failed: string | null = null;
++    /**
++     * The failure was the browser taking an idle decoder back (WebCodecs codec reclamation, in a hidden page with
++     * many decoders around), not a decoding problem: a new session can use H.264 again.
++     */
++    reclaimed = false;
++
++    private readonly surfaces = new Map<number, Surface>();
++    private readonly stallMs: number;
++    private readonly now: () => number;
++    private watchdog: ReturnType<typeof setInterval> | null = null;
++    private canvas: OffscreenCanvas | null = null;
++    private closed = false;
++
++    constructor(private readonly options: WebCodecsH264DecoderOptions = {}) {
++        this.stallMs = options.stallMs ?? 3000;
++        this.now = options.now ?? (() => performance.now());
++    }
++
++    decode(frame: H264Frame, done: H264Done): void {
++        if (this.failed !== null || this.closed) {
++            done(frame.id, null, this.failed ?? 'the H.264 decoder is closed');
++            return;
++        }
++        this.watchdog ??= setInterval(() => this.checkStalls(), Math.min(250, this.stallMs));
++        const surface = this.surfaces.get(frame.surfaceId) ?? this.open(frame.surfaceId);
++        if (surface.needKey && !frame.keyFrame) {
++            // Deltas mean nothing to a decoder that hasn't seen the picture they refer to.
++            this.stats.skipped++;
++            if (surface.waitingSince === null) {
++                surface.waitingSince = this.now();
++            }
++            done(frame.id, null);
++            return;
++        }
++        surface.needKey = false;
++        surface.waitingSince = null;
++        if (frame.keyFrame) {
++            this.stats.keyFrames++;
++        }
++        surface.pending.set(frame.id, { frame, done, since: this.now() });
++        this.stats.pending++;
++        try {
++            surface.decoder.decode(
++                new EncodedVideoChunk({
++                    type: frame.keyFrame ? 'key' : 'delta',
++                    timestamp: frame.id,
++                    data: frame.data,
++                }),
++            );
++        } catch (error) {
++            this.fail(`decode: ${describe(error)}`);
++        }
++    }
++
++    close(): void {
++        this.closed = true;
++        this.stopWatchdog();
++        for (const surface of this.surfaces.values()) {
++            closeDecoder(surface.decoder);
++        }
++        this.surfaces.clear();
++        this.stats.pending = 0;
++    }
++
++    private open(surfaceId: number): Surface {
++        const surface: Surface = {
++            decoder: new VideoDecoder({
++                output: (picture) => this.output(surface, picture),
++                error: (error) => {
++                    this.reclaimed = error.name === 'QuotaExceededError';
++                    this.fail(describe(error));
++                },
++            }),
++            needKey: true,
++            waitingSince: null,
++            pending: new Map(),
++        };
++        surface.decoder.configure(decoderConfig());
++        this.surfaces.set(surfaceId, surface);
++        return surface;
++    }
++
++    private output(surface: Surface, picture: VideoFrame): void {
++        const id = picture.timestamp;
++        const pending = surface.pending.get(id);
++        if (pending === undefined || this.failed !== null || this.closed) {
++            picture.close();
++            return;
++        }
++        // Pictures come out in decoding order: frames before this one that never came out won't.
++        for (const [earlier, dropped] of surface.pending) {
++            if (earlier >= id) {
++                break;
++            }
++            surface.pending.delete(earlier);
++            this.stats.pending--;
++            this.stats.dropped++;
++            dropped.done(earlier, null);
++        }
++        surface.pending.delete(id);
++        this.stats.pending--;
++        this.readRegions(picture, pending.frame).then(
++            (pixels) => {
++                picture.close();
++                if (this.failed !== null || this.closed) {
++                    return;
++                }
++                const latency = this.now() - pending.since;
++                this.stats.frames++;
++                this.stats.lastLatencyMs = latency;
++                this.stats.maxLatencyMs = Math.max(this.stats.maxLatencyMs, latency);
++                pending.done(id, pixels);
++            },
++            (error) => {
++                picture.close();
++                this.fail(`reading the picture: ${describe(error)}`);
++                pending.done(id, null, this.failed ?? undefined);
++            },
++        );
++    }
++
++    /** The RGBA of the frame's regions, in turn. */
++    private async readRegions(picture: VideoFrame, frame: H264Frame): Promise<Uint8Array> {
++        const visible = picture.visibleRect ?? { x: 0, y: 0, width: picture.codedWidth, height: picture.codedHeight };
++        // Servers send pictures that cover the surface from its origin, as FreeRDP assumes; a picture only the size
++        // of a destination elsewhere on the surface starts at the destination.
++        const d = frame.destination;
++        const [ox, oy] = visible.width >= d.right && visible.height >= d.bottom ? [0, 0] : [d.left, d.top];
++        const rects = frame.regions.map((r) => ({
++            x: r.left - ox,
++            y: r.top - oy,
++            width: r.right - r.left,
++            height: r.bottom - r.top,
++        }));
++        const total = rects.reduce((sum, r) => sum + r.width * r.height * 4, 0);
++        const out = new Uint8Array(total);
++        if (rects.length === 0) {
++            return out;
++        }
++        for (const r of rects) {
++            if (r.x < 0 || r.y < 0 || r.x + r.width > visible.width || r.y + r.height > visible.height) {
++                throw new Error(
++                    `region ${JSON.stringify(r)} is outside the ${visible.width}x${visible.height} picture`,
++                );
++            }
++        }
++        // One readback for all regions: their bounding box.
++        const left = Math.min(...rects.map((r) => r.x));
++        const top = Math.min(...rects.map((r) => r.y));
++        const box = {
++            x: left,
++            y: top,
++            width: Math.max(...rects.map((r) => r.x + r.width)) - left,
++            height: Math.max(...rects.map((r) => r.y + r.height)) - top,
++        };
++        const single = rects.length === 1;
++        const boxPixels = single ? out : new Uint8Array(box.width * box.height * 4);
++        await this.readBox(picture, visible, box, boxPixels);
++        if (!single) {
++            let offset = 0;
++            for (const r of rects) {
++                const row = r.width * 4;
++                for (let y = 0; y < r.height; y++) {
++                    const from = ((r.y - box.y + y) * box.width + (r.x - box.x)) * 4;
++                    out.set(boxPixels.subarray(from, from + row), offset);
++                    offset += row;
++                }
++            }
++        }
++        return out;
++    }
++
++    private async readBox(
++        picture: VideoFrame,
++        visible: { x: number; y: number },
++        box: { x: number; y: number; width: number; height: number },
++        into: Uint8Array,
++    ): Promise<void> {
++        if (this.stats.readback === 'copyTo') {
++            try {
++                await picture.copyTo(into, {
++                    rect: { x: visible.x + box.x, y: visible.y + box.y, width: box.width, height: box.height },
++                    format: 'RGBA',
++                    colorSpace: 'srgb',
++                });
++                return;
++            } catch (error) {
++                // Converting to RGBA in copyTo came late to browsers; a canvas does the same.
++                if (
++                    !(error instanceof DOMException && error.name === 'NotSupportedError') &&
++                    !(error instanceof TypeError)
++                ) {
++                    throw error;
++                }
++                this.stats.readback = 'canvas';
++            }
++        }
++        if (this.canvas === null || this.canvas.width < box.width || this.canvas.height < box.height) {
++            this.canvas = new OffscreenCanvas(
++                Math.max(box.width, this.canvas?.width ?? 0),
++                Math.max(box.height, this.canvas?.height ?? 0),
++            );
++        }
++        const context = this.canvas.getContext('2d', { willReadFrequently: true, colorSpace: 'srgb' });
++        if (context === null) {
++            throw new Error('no 2D canvas context');
++        }
++        context.drawImage(picture, box.x, box.y, box.width, box.height, 0, 0, box.width, box.height);
++        into.set(context.getImageData(0, 0, box.width, box.height).data);
++    }
++
++    private stopWatchdog(): void {
++        if (this.watchdog !== null) {
++            clearInterval(this.watchdog);
++            this.watchdog = null;
++        }
++    }
++
++    private checkStalls(): void {
++        if (this.failed !== null || this.closed) {
++            return;
++        }
++        const now = this.now();
++        for (const surface of this.surfaces.values()) {
++            if (surface.waitingSince !== null && now - surface.waitingSince > this.stallMs) {
++                this.fail(`no key frame for ${Math.round(now - surface.waitingSince)} ms`);
++                return;
++            }
++            for (const pending of surface.pending.values()) {
++                if (now - pending.since > this.stallMs) {
++                    this.fail(`no picture from the decoder for ${Math.round(now - pending.since)} ms`);
++                    return;
++                }
++            }
++        }
++    }
++
++    /** Fails for good: every frame in flight completes with the error, which ends the session. */
++    private fail(reason: string): void {
++        if (this.failed !== null || this.closed) {
++            return;
++        }
++        this.failed = reason;
++        this.stopWatchdog();
++        const pending = [...this.surfaces.values()].flatMap((surface) => [...surface.pending.values()]);
++        for (const surface of this.surfaces.values()) {
++            closeDecoder(surface.decoder);
++        }
++        this.surfaces.clear();
++        this.stats.pending = 0;
++        this.options.onFailure?.(reason);
++        for (const { frame, done } of pending) {
++            done(frame.id, null, reason);
++        }
++    }
++}
++
++function closeDecoder(decoder: VideoDecoder): void {
++    if (decoder.state !== 'closed') {
++        try {
++            decoder.close();
++        } catch {
++            // Already closing.
++        }
++    }
++}
++
++function describe(error: unknown): string {
++    if (error instanceof Error || error instanceof DOMException) {
++        return `${error.name}: ${error.message}`;
++    }
++    return String(error);
++}
+diff --git a/web-client/iron-remote-desktop-rdp/src/main.ts b/web-client/iron-remote-desktop-rdp/src/main.ts
+index bf0e2cdb..f7eb57ef 100644
+--- a/web-client/iron-remote-desktop-rdp/src/main.ts
++++ b/web-client/iron-remote-desktop-rdp/src/main.ts
+@@ -8,6 +8,7 @@ import wasm_init, {
+     Extension,
+     RdpFile,
+ } from '../../../crates/ironrdp-web/pkg/ironrdp_web';
++import type { H264Done, H264Frame } from './H264Decoder';
+ 
+ export async function init(log_level: string) {
+     await wasm_init();
+@@ -45,11 +46,25 @@ export function displayControl(enable: boolean): Extension {
+     return new Extension('display_control', enable);
+ }
+ 
+-/** Graphics pipeline (MS-RDPEGFX, CAPVERSION_8 without H.264). Required by GNOME Remote Desktop. */
++/**
++ * Graphics pipeline (MS-RDPEGFX). Required by GNOME Remote Desktop. Advertises CAPVERSION_8 only, unless an
++ * `h264Decoder` is given too.
++ */
+ export function graphicsPipeline(enable: boolean): Extension {
+     return new Extension('graphics_pipeline', enable);
+ }
+ 
++/**
++ * H.264 (AVC420) in the graphics pipeline, decoded by `decoder` (see `WebCodecsH264Decoder`, and `h264Supported`
++ * to find out first whether the browser can). Also advertises CAPVERSION_81 with AVC420. Needs `graphicsPipeline`.
++ */
++export function h264Decoder(decoder: { decode(frame: H264Frame, done: H264Done): void; close?(): void }): Extension {
++    return new Extension('h264_decoder', decoder);
++}
++
++export { WebCodecsH264Decoder, h264Supported } from './H264Decoder';
++export type { H264Frame, H264Done, H264Rectangle, H264DecoderStats, WebCodecsH264DecoderOptions } from './H264Decoder';
++
+ /**
+  * Plays the remote desktop's audio: `callback` receives `{ type: 'wave', sampleRate, channels, data }`
+  * (interleaved 16-bit little-endian PCM), `{ type: 'volume', left, right }` (0..1) and `{ type: 'close' }`.

@@ -94,9 +94,9 @@ xrdp needs two things from the proxy (`src/rdcleanpath.ts`):
   certificate, which the proxy accepts as it accepts any. A server that only offers RDP's standard security answers
   the negotiation without TLS; the proxy says so, with the setting to change, rather than failing in the handshake.
 
-Graphics use the bitmap path, as for Windows, which every xrdp version serves (the graphics pipeline is newer in
-xrdp, 0.10, and depends on how it was built). Resizing is display control, as for Windows: xrdp 0.10 answers it
-with a deactivation-reactivation at the new size; 0.9 ignores it.
+Graphics use the bitmap path, which every xrdp version serves (the graphics pipeline is newer in xrdp, 0.10, and
+its H.264 depends on how it was built), even with H.264 on, where Windows gets the pipeline. Resizing is display
+control, as for Windows: xrdp 0.10 answers it with a deactivation-reactivation at the new size; 0.9 ignores it.
 
 grd adds a virtual monitor per client and sizes it from the client's request, so a connection gets a monitor the size
 of its pane. (A second client on the same account would get a second, empty monitor; hence one desktop per account.)
@@ -120,7 +120,7 @@ assumes a POSIX shell, and Windows' default shell (cmd.exe or PowerShell) has no
 a `sh` on its PATH (Git, MSYS2, Cygwin) is caught by the script itself, from `uname`, before it looks for xrdp or
 GNOME. Linux hosts pay nothing for this. The setup then reports the own desktop as `windows`, the way it reports xrdp
 (`ownDesktops`), and it connects like a desktop behind a host: sign-in form with the SSH user filled in, keychain, its
-certificate trusted on first use, bitmaps rather than the graphics pipeline, Windows' Send keys, no GNOME scale script;
+certificate trusted on first use, bitmaps (the graphics pipeline with H.264), Windows' Send keys, no GNOME scale script;
 keyed by `user@host:port` like any own desktop. Later connects skip the setup there. The finding is kept in memory for
 as long as Tabby runs; after a restart, the first open finds out again (one failed setup and one `echo`).
 
@@ -136,8 +136,9 @@ which ends in the desktop's address (`user@host:port#address`). Editing a deskto
 keys rather than leaving them behind; editing its user name or domain drops the saved account instead, since it
 belonged to the old user. The edit form is the add form, filled in (`wake` included).
 
-- **Graphics:** Windows gets IronRDP's bitmap path. The graphics pipeline, which GNOME requires, stays off for it:
-  without an H.264 decoder only the basic EGFX capability set is advertised, and Windows does better with bitmaps.
+- **Graphics:** Windows with H.264 (see [Graphics](#graphics)) gets the graphics pipeline, as GNOME does. Without
+  H.264, and always for xrdp, IronRDP's bitmap path: with only the basic EGFX capability set advertised, Windows does
+  better with bitmaps than with the pipeline, and xrdp encodes H.264 only in some builds.
 - **TLS:** Windows' self-signed RDP certificate only allows key encipherment, and the TLS library in Electron
   (BoringSSL) enforces that, which rules out every ECDHE and TLS 1.3 handshake. When a handshake fails for that reason,
   the proxy repeats the X.224 exchange on a fresh tunnel and uses TLS 1.2 with RSA key exchange for that desktop. The
@@ -182,6 +183,30 @@ keyboard-interactive prompts, so the plugin doesn't open SSH connections of its 
 SSH profile's own tab, and once it is connected shows the desktop over it, which is the existing desktops-behind-a-host
 path; the RDP profile then counts among the desktops of tabs opened from that SSH profile (matched by profile id). A
 local terminal running `ssh` can't be matched to a profile, so those desktops aren't offered there.
+
+## Graphics
+
+GNOME Remote Desktop only speaks RDP's graphics pipeline (EGFX), which the patched web client decodes in
+WebAssembly: RemoteFX Progressive, ClearCodec, planar. With H.264 as well (setting `h264`, on by default), the
+client advertises EGFX 8.1 with AVC420 and H.264 is decoded by the browser's WebCodecs `VideoDecoder`, hardware-
+accelerated where the platform offers it (VideoToolbox on macOS, Direct3D 11 on Windows, VA-API or software on
+Linux). That is, where Tabby's WebCodecs says it decodes H.264 (`VideoDecoder.isConfigSupported`, asked once).
+
+- **Order:** the web client hands each H.264 frame to the decoder as it arrives, and applies the decoded pixels (the
+  frame's region rectangles, read back as RGBA) to the EGFX surface in the order the server sent them. Commands after
+  a frame wait for it, and so does its frame acknowledgement: the server paces what it sends by those, so the queue
+  stays short and the picture never runs ahead of what was drawn. Everything after decoding (surfaces, caches,
+  ResetGraphics on resize, device pixels for Retina) is the same path as for the other codecs.
+- **Latency:** without a VUI `bitstream_restriction` in the stream, conformant decoders (Chromium's among them) hold
+  every picture until their buffer is full, so the SPS is amended to declare no reordering, as WebRTC does. Colors
+  are decoded as full-range BT.709 whatever the stream signals, as MS-RDPEGFX specifies.
+- **Failures:** a decoder error, or a frame that doesn't come out of the decoder within 3 s, ends the connection, which
+  reconnects by itself without H.264 for that desktop (until Tabby restarts, or the setting is turned on again).
+- **GNOME** sends H.264 only with a hardware encoder (VA-API or NVENC on the remote); otherwise RemoteFX, as before.
+- **Windows** gets the graphics pipeline only with H.264. Windows decides what it sends as H.264 (with EGFX 8.1,
+  typically what changes a lot, such as video) and sends the rest with its other codecs.
+- **AVC444** (H.264 with full chroma, what Windows prefers for text with EGFX 10 and later) isn't advertised: it needs
+  two YUV420 pictures combined into 4:4:4, which the decoder doesn't do.
 
 ## Keyboard
 
@@ -238,8 +263,8 @@ shows and is connected, and ticks once a second:
 - **Round trip:** every 5 s, the time to open a session channel on Tabby's SSH connection (the server confirms it,
   and nothing runs until a command is requested; the channel is closed right away). Not measured for a local
   terminal running `ssh`, where each channel would be a new connection, nor while the window is hidden.
-- **Path:** the desktop, the SSH host it is reached through, the resolution, the graphics mode (graphics pipeline or
-  bitmaps) and the sharpness.
+- **Path:** the desktop, the SSH host it is reached through, the resolution, the graphics mode (graphics pipeline, with
+  H.264 where it decodes it, or bitmaps) and the sharpness.
 
 It doesn't take the pointer (clicks go to the remote), and fades while the pointer is near it.
 

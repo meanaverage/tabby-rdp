@@ -225,6 +225,7 @@ They are stored in Tabby's config under `remoteDesktop`:
 | Sharpness (`sharpness`) | Standard (`standard`) | Retina (`retina`): device pixels, with the remote's scale set to match. |
 | For *this desktop* only (`desktopSharpness`) | As above | In the menu of a tab with a desktop open: Standard or Retina for that desktop, whatever the default. Kept by desktop (`user@host`, `user@host#address` for one behind a host, or `rdp#address` for a remote desktop profile's own tab). |
 | Sound (`sound`) | On | Applies on the next connection. |
+| Video decoding (`h264`) | On | H.264 decoded by Tabby's browser engine (hardware-accelerated where available), for what the remote sends as video; applies on the next connection. |
 | Microphone (`microphone`) | Off | Send your microphone while an app on the remote desktop records. Applies on the next connection. |
 | Show connection status (`connectionStatus`) | Off | The indicator in the desktop's corner; fades when the pointer comes near. |
 | Mac shortcuts (`macShortcuts`) | On | macOS. Off: ⌘ is the Windows key. |
@@ -267,6 +268,7 @@ tabby-rdp ships IronRDP with a short series of patches ([ironrdp/](ironrdp)). Th
 | Echo the correct size in the sound channel's Training Confirm | [Devolutions/IronRDP#2019](https://github.com/Devolutions/IronRDP/pull/2019) |
 | The graphics pipeline in the web client, following its resets | Covered by [Devolutions/IronRDP#1977](https://github.com/Devolutions/IronRDP/pull/1977) (not ours; [tested with GNOME](https://github.com/Devolutions/IronRDP/pull/1977#issuecomment-5851624036)) |
 | Sound in the web client | [Devolutions/IronRDP#2020](https://github.com/Devolutions/IronRDP/pull/2020) |
+| H.264 in the web client, decoded by the browser (WebCodecs) | Not submitted yet |
 | Microphone in the web client | Not submitted yet |
 
 The aim is to make IronRDP's browser client work well with both Linux and Windows desktops, for everyone who embeds
