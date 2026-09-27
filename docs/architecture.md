@@ -86,6 +86,13 @@ wrong password brings the form back and drops the saved one.
   the proxy repeats the X.224 exchange on a fresh tunnel and uses TLS 1.2 with RSA key exchange for that desktop. The
   connection is still encrypted, without forward secrecy. A certificate with the digital-signature usage on the
   Windows side avoids the fallback.
+- **Starting it (`wake`, `src/wake.ts`):** before connecting, a short script on the SSH host checks that the RDP
+  server answers: an X.224 connection request must get a reply (with `python3`; else an open port will do, with `nc`
+  or bash), since a port can be open before the server behind it is, as with QEMU's user-mode port forwarding. If
+  it doesn't answer, the plugin runs `virsh` (`qemu:///system`, then `qemu:///session`) or sends a Wake-on-LAN packet
+  from the SSH host, then probes every 3 s for up to 3 minutes, and connects; a connection that still fails right
+  after gets three more tries, 5 s apart, with the same account. A connection that fails later, to a desktop that no
+  longer answers, starts it again, except during automatic reconnects. The waiting runs outside Angular's zone.
 
 ## Keyboard
 

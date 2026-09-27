@@ -13,6 +13,10 @@ import { DesktopSpec, desktopsFor, ExtraDesktopConfig, OWN_DESKTOP, sessionKey }
 import { prepareRemoteDesktop } from './remoteSetup'
 import { RDCleanPathProxy, startRDCleanPathProxy } from './rdcleanpath'
 import { askCredentials, Credentials, forgetCredentials, forgetCredentialsFor, loadCredentials, saveCredentials, STYLE as SIGNIN_STYLE } from './signin'
+import { rdpAnswers, waitForRdp, wakeDesktop } from './wake'
+
+/** How long a desktop that was started (`wake`) gets to answer. */
+const WAKE_TIMEOUT_MS = 3 * 60 * 1000
 
 // The vendored IronRDP bundles are ES modules. tsc turns import() into require(), and Node's import() is refused in
 // Tabby on Windows (no dynamic import callback), so they go through a module script: the page's own loader.
@@ -73,6 +77,9 @@ export interface DesktopSettings {
     /** A small indicator on the desktop: throughput, frames per second, SSH round trip, connection path. */
     connectionStatus: boolean
 }
+
+/** Where an RDP connection goes (as seen from the SSH host), and as whom. */
+type Endpoint = { host: string, port: number, credentials: Credentials, remember: boolean }
 
 interface RemoteSize {
     width: number
@@ -804,27 +811,62 @@ export class RemoteDesktopService {
     private async connect (pane: DesktopPane, target: RemoteTarget, spec: DesktopSpec, session: DesktopSession): Promise<void> {
         const alive = () => this.sessions.get(pane) === session
         let retryError: string | undefined
+        // Automatic reconnects never start a desktop (`wake`): it may have been shut down on purpose.
+        const automatic = this.reconnects.has(pane)
+        // A desktop that was just started can answer before it takes connections: a few more tries, same account.
+        let woken = false
+        let startupRetries = 0
+        let endpoint: Endpoint | null = null
         try {
+            if (spec.wake) {
+                const woke = await this.wakeIfDown(pane, target, spec, session, automatic)
+                if (woke === null) {
+                    return
+                }
+                woken = woke
+            }
             // Signing in to a desktop behind the host can take a few tries; the host's own one can't fail that way.
             for (let attempt = 0; ; attempt++) {
-                const [endpoint, rdp] = await Promise.all([this.endpointFor(target, spec, session, retryError), this.loadIronRDP()])
+                const [asked, rdp]: [Endpoint | null, any] = await Promise.all([endpoint ?? this.endpointFor(target, spec, session, retryError), this.loadIronRDP()])
                 if (!alive()) {
                     return
                 }
-                if (!endpoint) {
+                if (!asked) {
                     session.state = 'ended'
                     this.changed$.next()
                     this.cancelReconnect(pane)
                     session.status('Sign-in cancelled.', [{ label: 'Sign in', run: () => this.reopen(pane, spec) }])
                     return
                 }
+                endpoint = asked
                 session.remote = target
-                session.proxy ??= await startRDCleanPathProxy(() => target.openTcp(endpoint.host, endpoint.port), m => session.log.push(m))
-                const outcome = await this.run(pane, target, spec, session, rdp, endpoint)
+                session.proxy ??= await startRDCleanPathProxy(() => target.openTcp(asked.host, asked.port), m => session.log.push(m))
+                const outcome = await this.run(pane, target, spec, session, rdp, asked)
                 if (outcome.signInFailed && spec.id !== OWN_DESKTOP && attempt < 5 && alive()) {
                     await forgetCredentials(session.key)
                     retryError = outcome.signInFailed
+                    endpoint = null
                     continue
+                }
+                if (spec.wake && !outcome.connected && !outcome.signInFailed && alive()) {
+                    if (woken && startupRetries < 3) {
+                        startupRetries++
+                        session.log.push(`wake: not taking connections yet: ${outcome.error ?? outcome.reason ?? 'unknown error'}`)
+                        session.status(`${spec.name} is still starting…`)
+                        await this.zone.runOutsideAngular(() => new Promise(resolve => setTimeout(resolve, 5000)))
+                        continue
+                    }
+                    // It answered before, but not now: it may have been shut down since.
+                    if (!woken && !automatic) {
+                        const woke = await this.wakeIfDown(pane, target, spec, session, false)
+                        if (woke === null) {
+                            return
+                        }
+                        if (woke) {
+                            woken = true
+                            continue
+                        }
+                    }
                 }
                 if (alive()) {
                     this.afterEnd(pane, target, spec, session, outcome)
@@ -836,6 +878,50 @@ export class RemoteDesktopService {
                 this.afterEnd(pane, target, spec, session, { connected: false, error: e?.message ?? String(e) })
             }
         }
+    }
+
+    /**
+     * For a desktop with `wake`: when its RDP server doesn't answer (probed from the SSH host), starts it and waits
+     * until it does. True when it had to be started, false when it was up, null when the wait was cancelled (the layer
+     * says so). Throws when it couldn't be started, didn't come up in time, or is down during an automatic reconnect.
+     */
+    private async wakeIfDown (pane: DesktopPane, target: RemoteTarget, spec: DesktopSpec, session: DesktopSession, automatic: boolean): Promise<boolean | null> {
+        const alive = () => this.sessions.get(pane) === session
+        session.status(`Connecting to ${spec.name} via ${target.label}…`)
+        if (await rdpAnswers(target, spec.host, spec.port)) {
+            return false
+        }
+        if (!alive()) {
+            return null
+        }
+        if (automatic) {
+            throw new Error(`${spec.name} doesn't answer; it may have been shut down`)
+        }
+        session.status(`Starting ${spec.name}…`)
+        session.log.push(`wake: ${await wakeDesktop(target, spec.wake!)}`)
+        let cancelled = false
+        const cancel: StatusAction = {
+            label: 'Cancel',
+            run: () => {
+                cancelled = true
+                session.state = 'ended'
+                this.changed$.next()
+                this.cancelReconnect(pane)
+                session.status(`Stopped waiting for ${spec.name}.`, [{ label: 'Try again', run: () => this.reopen(pane, spec) }])
+            },
+        }
+        const started = Date.now()
+        const progress = () => session.status(`Starting ${spec.name}…\nWaiting for it to answer: ${Math.round((Date.now() - started) / 1000)} s`, [cancel])
+        progress()
+        const up = await this.zone.runOutsideAngular(() => waitForRdp(target, spec.host, spec.port, WAKE_TIMEOUT_MS, () => cancelled || !alive(), progress))
+        if (up) {
+            session.log.push(`wake: answered after ${Math.round((Date.now() - started) / 1000)} s`)
+            return true
+        }
+        if (cancelled || !alive()) {
+            return null
+        }
+        throw new Error(`${spec.name} didn't answer within ${WAKE_TIMEOUT_MS / 60000} minutes of starting it`)
     }
 
     /** One RDP connection attempt, until it ends. */

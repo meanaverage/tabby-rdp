@@ -71,6 +71,7 @@ system keychain doesn't answer (Linux without an unlocked keyring), the keychain
 | [reconnect](suites/reconnect.mjs) | A dropped SSH connection: "Reconnect SSH", automatic reconnect (also while hidden), Stop, Try again. |
 | [desktops](suites/desktops.mjs) | "Add a desktop behind…", its sign-in and keychain entry, "Remove a desktop" (using the host's own GNOME desktop as the extra one). |
 | [status](suites/status.mjs) | The connection-status indicator: off by default, the menu toggle and its config, throughput, fps, round trip and path, only while the desktop shows. |
+| [wake](suites/wake.mjs) | Starting a desktop behind a host (`wake`): the probe, a Wake-on-LAN packet to a stand-in machine on the test host, the wait, no waking on automatic reconnects, a missing VM, Cancel, the add form's field. |
 | [windows](suites/windows.mjs) | A Windows desktop behind an SSH host: sign-in, keychain, picture, resize, reconnect; with WinRM, typing, clipboard, sound and files, each checked inside Windows. |
 | [trd-pty](unit/trd-pty.py) | The shared-session helper on its own, on the test host. |
 

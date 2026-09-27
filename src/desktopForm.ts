@@ -1,4 +1,5 @@
 import { ExtraDesktopConfig } from './desktops'
+import { wakeFromText } from './wake'
 
 /**
  * "Add a desktop behind <host>": a form over the pane (plain DOM, like the sign-in form; uses its styles).
@@ -20,6 +21,7 @@ export function askNewDesktop (pane: HTMLElement, via: string, viaLabel: string)
                     <option value="gnome">GNOME Remote Desktop (needs the graphics pipeline)</option>
                 </select>
                 <input class="form-control" name="username" placeholder="User name (optional; asked when connecting)" spellcheck="false">
+                <input class="form-control" name="wake" placeholder="Start it when off (optional): libvirt VM name, or MAC address" title="A libvirt VM on the host, started with virsh; or a MAC address to wake over the network from the host" spellcheck="false">
                 <div class="trd-signin-buttons">
                     <button type="button" class="btn btn-secondary" name="cancel">Cancel</button>
                     <button type="submit" class="btn btn-primary">Add and open</button>
@@ -77,6 +79,7 @@ export function askNewDesktop (pane: HTMLElement, via: string, viaLabel: string)
                 return
             }
             const username = field('username').value.trim()
+            const wake = wakeFromText(field('wake').value)
             done({
                 name,
                 via,
@@ -84,6 +87,7 @@ export function askNewDesktop (pane: HTMLElement, via: string, viaLabel: string)
                 port,
                 kind: field<HTMLSelectElement>('kind').value === 'gnome' ? 'gnome' : 'windows',
                 ...username ? { username } : {},
+                ...wake ? { wake } : {},
             })
         })
         field('cancel').addEventListener('click', () => done(null))

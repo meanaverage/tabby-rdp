@@ -111,10 +111,26 @@ remoteDesktop:
       port: 3389
       kind: windows             # or gnome
       username: alice           # optional; DOMAIN\user works too
+      wake: { vm: win11 }       # optional: start it when it's off (see below)
 ```
 
 The connection runs through the same SSH connection; the Windows machine needs Remote Desktop turned on, and nothing
 else.
+
+### Starting a desktop that is off
+
+A VM on the SSH host, or a machine next to it, may be shut down when you want its desktop. With `wake`, the plugin
+checks from the SSH host whether the desktop answers, and if it doesn't, starts it, shows **Starting \<name\>…** with
+the time so far, and connects as soon as it answers (it gives up after 3 minutes):
+
+- `wake: { vm: win11 }` starts the libvirt VM `win11` on the SSH host with `virsh start`, as your SSH user: first in
+  `qemu:///system` (you need to be in the `libvirt` group, or allowed by polkit), then in your own `qemu:///session`.
+  A paused VM is resumed.
+- `wake: { mac: "aa:bb:cc:dd:ee:ff" }` sends a Wake-on-LAN packet from the SSH host (with `python3`, to the broadcast
+  address, UDP port 9). Add `broadcast: 192.168.1.255` for a particular network, or `port: 7`.
+
+In the add form, the last field takes a VM name or a MAC address. Automatic reconnects never start a desktop,
+since it may have been shut down on purpose; **Reconnect** does.
 
 ## desk: the console on the desktop
 
@@ -213,6 +229,7 @@ npm run build:ironrdp        # rebuild vendor/ from IronRDP and ironrdp/patches:
   loopback only. See [docs/architecture.md](docs/architecture.md#security-notes) to restrict it.
 - **Windows-key combinations** such as Win+R don't come through from macOS. Tapping ⌘ for the Windows key does.
 - **Desktops behind a host** can be added and removed from the menus, but not edited there.
+- **Waking a desktop** starts it but never shuts it down again; that is up to you (or the VM's own settings).
 
 ## License
 

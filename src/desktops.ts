@@ -1,4 +1,5 @@
 import { RemoteTarget } from './targets'
+import { parseWake, WakeSpec } from './wake'
 
 /**
  * What kind of RDP server a desktop is. 'gnome': the SSH host's own desktop, set up automatically (headless
@@ -19,6 +20,8 @@ export interface DesktopSpec {
     port: number
     username?: string
     domain?: string
+    /** How to start it when it doesn't answer (a VM on the SSH host, or Wake-on-LAN). */
+    wake?: WakeSpec
 }
 
 /**
@@ -32,6 +35,7 @@ export interface DesktopSpec {
  *           port: 3389
  *           kind: windows
  *           username: alice
+ *           wake: { vm: win11 }    # optional: start it when it's off; or { mac: "aa:bb:cc:dd:ee:ff" }
  */
 export interface ExtraDesktopConfig {
     name?: string
@@ -41,6 +45,7 @@ export interface ExtraDesktopConfig {
     kind?: string
     username?: string
     domain?: string
+    wake?: { vm?: string, mac?: string, broadcast?: string, port?: number }
 }
 
 export const OWN_DESKTOP = 'own'
@@ -75,6 +80,7 @@ export function desktopsFor (target: RemoteTarget, extras: ExtraDesktopConfig[] 
             port,
             username: extra.username ? String(extra.username) : undefined,
             domain: extra.domain ? String(extra.domain) : undefined,
+            wake: parseWake(extra.wake),
         })
     }
     return specs
