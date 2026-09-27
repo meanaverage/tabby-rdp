@@ -1,6 +1,7 @@
 import { Injectable, NgZone } from '@angular/core'
 import { AppService, HotkeysService } from 'tabby-core'
 import { RemoteDesktopService } from './desktop.service'
+import { DesktopKind } from './desktops'
 import { desktopPaneOf, DesktopPane } from './targets'
 
 /**
@@ -13,11 +14,48 @@ const MODIFIERS = /^(Shift|Control|Alt|Meta|OS)(Left|Right)$|^(CapsLock|Fn|FnLoc
 
 const TABBY_SHORTCUTS = new Set(['next-tab', 'previous-tab', 'next-mru-tab', 'previous-mru-tab', 'toggle-last-tab', 'toggle-fullscreen'])
 
+/** A key combination for "Send keys": KeyboardEvent codes, pressed in this order and released in reverse. */
+export interface KeyCombo {
+    label: string
+    codes: string[]
+}
+
+/**
+ * "Send keys", per kind of desktop: combinations the local system keeps for itself (Ctrl+Alt+Del, Win+L) or that
+ * are awkward to press from here. GNOME gets its own: Ctrl+Alt+Del only offers to log out there, and Super+L would
+ * lock a headless session, whose password the user may not even have (SSH keys).
+ */
+export const SEND_KEYS: Record<DesktopKind, KeyCombo[]> = {
+    windows: [
+        { label: 'Ctrl+Alt+Del', codes: ['ControlLeft', 'AltLeft', 'Delete'] },
+        { label: 'Windows key (Start)', codes: ['MetaLeft'] },
+        { label: 'Win+R (Run)', codes: ['MetaLeft', 'KeyR'] },
+        { label: 'Win+E (File Explorer)', codes: ['MetaLeft', 'KeyE'] },
+        { label: 'Win+D (show the desktop)', codes: ['MetaLeft', 'KeyD'] },
+        { label: 'Win+L (lock)', codes: ['MetaLeft', 'KeyL'] },
+        { label: 'Alt+Tab', codes: ['AltLeft', 'Tab'] },
+        { label: 'Alt+F4 (close the window)', codes: ['AltLeft', 'F4'] },
+        { label: 'Ctrl+Shift+Esc (Task Manager)', codes: ['ControlLeft', 'ShiftLeft', 'Escape'] },
+        { label: 'Print Screen', codes: ['PrintScreen'] },
+    ],
+    gnome: [
+        { label: 'Super (Activities)', codes: ['MetaLeft'] },
+        { label: 'Super+A (apps)', codes: ['MetaLeft', 'KeyA'] },
+        { label: 'Super+V (notifications)', codes: ['MetaLeft', 'KeyV'] },
+        { label: 'Alt+F2 (run a command)', codes: ['AltLeft', 'F2'] },
+        { label: 'Alt+Tab', codes: ['AltLeft', 'Tab'] },
+        { label: 'Alt+F4 (close the window)', codes: ['AltLeft', 'F4'] },
+        { label: 'Print Screen (screenshot)', codes: ['PrintScreen'] },
+    ],
+}
+
 /**
  * Routes the keyboard while a remote desktop has it:
  * - Tabby's hotkeys: only the desktop/console switch and TABBY_SHORTCUTS fire, and those don't reach the remote.
  * - Mac shortcuts (setting, on by default): ⌘ is sent as Ctrl, so ⌘C/⌘V/⌘Z/… do what they do on a Mac, and
- *   tapping ⌘ on its own is the Windows/Super key (Start, Activities). Off: ⌘ is the Windows/Super key.
+ *   tapping ⌘ on its own is the Windows/Super key (Start, Activities). ⌃⌘+key is the Windows key with that key
+ *   (Win+R, Win+E, …). Off: ⌘ is the Windows/Super key.
+ * - View only (per desktop): no keys reach the remote.
  * - macOS sends no keyup for a key pressed while ⌘ is down; the remote gets one right after the keydown, so
  *   the key doesn't stay pressed there.
  */
@@ -82,8 +120,35 @@ export class DesktopKeyboard {
             event.preventDefault()
             return
         }
+        if (this.desktop.isViewOnly(pane)) {
+            this.metaAlone = false
+            event.stopImmediatePropagation()
+            event.preventDefault()
+            return
+        }
         const isMeta = event.code === 'MetaLeft' || event.code === 'MetaRight'
         const macShortcuts = process.platform === 'darwin' && this.desktop.settings().macShortcuts
+        if (macShortcuts && event.metaKey && event.ctrlKey && !MODIFIERS.test(event.code)) {
+            // ⌃⌘+key: the Windows key with that key. With ⌘ sent as Ctrl, ⌃⌘ would only mean Ctrl again, so
+            // nothing is lost, and macOS keeps few ⌃⌘ shortcuts for itself.
+            event.stopImmediatePropagation()
+            event.preventDefault()
+            if (event.type === 'keydown') {
+                this.metaAlone = false
+                // Ctrl is down on the remote (⌃, and ⌘ sent as Ctrl): let go of it, or this would be Ctrl+Win+key.
+                // Releasing a key that isn't down sends nothing.
+                for (const code of ['ControlLeft', 'ControlRight']) {
+                    this.forward(event, { key: 'Control', code, plain: true }, 'keyup')
+                }
+                const win = { key: 'Meta', code: 'MetaLeft', plain: true }
+                this.forward(event, win, 'keydown')
+                this.forward(event, { plain: true }, 'keydown')
+                // The keyup macOS won't send while ⌘ is down; if one does come, it is dropped here.
+                this.forward(event, { plain: true }, 'keyup')
+                this.forward(event, win, 'keyup')
+            }
+            return
+        }
         if (macShortcuts && (isMeta || event.metaKey)) {
             // Replace the event for IronRDP: ⌘ becomes Ctrl.
             event.stopImmediatePropagation()
@@ -127,5 +192,22 @@ export class DesktopKeyboard {
         })
         this.copies.add(copy)
         window.dispatchEvent(copy)
+    }
+
+    /** "Send keys": presses a combination on the pane's desktop (showing it, if hidden). */
+    async send (pane: DesktopPane, combo: KeyCombo): Promise<void> {
+        // IronRDP only takes keys while it has focus, and they go through its window listeners like typed ones.
+        if (!await this.desktop.takeKeyboard(pane)) {
+            return
+        }
+        const press = (type: string, code: string) => {
+            // IronRDP sends the scancode for `code`; `key` only matters in its Unicode mode, which is off.
+            const copy = new KeyboardEvent(type, { key: code.replace(/^Key|(Left|Right)$/g, ''), code, cancelable: true })
+            this.copies.add(copy)
+            window.dispatchEvent(copy)
+        }
+        combo.codes.forEach(code => press('keydown', code))
+        ;[...combo.codes].reverse().forEach(code => press('keyup', code))
+        this.desktop.logOf(pane).push(`keys: sent ${combo.label}`)
     }
 }

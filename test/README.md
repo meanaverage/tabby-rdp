@@ -65,6 +65,7 @@ system keychain doesn't answer (Linux without an unlocked keyring), the keychain
 | [desk](suites/desk.mjs) | Logins in the shared session, `desk`, typing in the desktop terminal, RDP and SSH disconnects keeping the session, turning `desk` off and on. |
 | [resize](suites/resize.mjs) | Resize to fit, reconnect at the new size, keep the resolution, Retina with GNOME's scale. |
 | [keyboard](suites/keyboard.mjs) | Tabby shortcuts kept off the covered console, ⌘ as Ctrl, no stuck keys, the shortcuts that stay Tabby's. |
+| [actions](suites/actions.mjs) | Send keys (also from the console), ⌃⌘ with a key as Super with it, View only (label, mouse, keys, across a reconnect), screenshots to Downloads and the clipboard, actual size with a fixed resolution. |
 | [clipboard](suites/clipboard.mjs) | Text both ways, through the terminal `desk` opens. |
 | [files](suites/files.mjs) | Files both ways with Files (Nautilus): copy there and save here; drop here and paste there. |
 | [audio](suites/audio.mjs) | A tone played on the desktop arrives as sound; with sound off, none is set up. |

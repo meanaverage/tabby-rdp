@@ -5,6 +5,7 @@ import {
 } from 'tabby-core'
 import { BaseTerminalTabComponent, TerminalDecorator } from 'tabby-terminal'
 import { DesktopSettings, RemoteDesktopService } from './desktop.service'
+import { DesktopKeyboard, SEND_KEYS } from './keyboard'
 import { isSSHTab } from './ssh'
 import { DesktopPane, desktopPaneOf, RemoteTargets } from './targets'
 
@@ -35,6 +36,8 @@ export class RemoteDesktopConfig extends ConfigProvider {
             macShortcuts: true,
             // Play the remote desktop's sound (applies on the next connect).
             sound: true,
+            // With resize 'off': 'fit' (scaled to the pane) | 'actual' (1:1, scrolling).
+            zoom: 'fit',
             // More desktops behind SSH hosts (e.g. a Windows VM whose RDP port the host forwards); see desktops.ts.
             desktops: [],
             // Sharpness for particular desktops, overriding `sharpness`: [{ desktop: <session key>, sharpness }].
@@ -78,12 +81,35 @@ export function desktopChoices (desktop: RemoteDesktopService, pane: DesktopPane
     return items
 }
 
+/** What can be done with the pane's connected desktop: send keys, view only, a screenshot. Shared by the menus. */
+export function desktopActions (desktop: RemoteDesktopService, keyboard: DesktopKeyboard, pane: DesktopPane): MenuItemOptions[] {
+    const spec = desktop.desktopOf(pane)
+    if (!spec || !desktop.isConnected(pane)) {
+        return []
+    }
+    const viewOnly = desktop.isViewOnly(pane)
+    return [
+        {
+            label: 'Send keys',
+            enabled: !viewOnly,
+            submenu: SEND_KEYS[spec.kind].map(combo => ({ label: combo.label, click: () => keyboard.send(pane, combo) })),
+        },
+        {
+            type: 'checkbox',
+            label: 'View only (no keyboard or mouse input)',
+            checked: viewOnly,
+            click: () => desktop.setViewOnly(pane, !viewOnly),
+        },
+        { label: 'Save a screenshot (to Downloads and the clipboard)', click: () => desktop.saveScreenshot(pane) },
+    ]
+}
+
 /** Tab header menu (whole tab: its focused pane) and in-terminal menu (that pane). */
 @Injectable()
 export class RemoteDesktopContextMenu extends TabContextMenuItemProvider {
     override weight = 6
 
-    constructor (private desktop: RemoteDesktopService, private targets: RemoteTargets) {
+    constructor (private desktop: RemoteDesktopService, private targets: RemoteTargets, private keyboard: DesktopKeyboard) {
         super()
     }
 
@@ -103,6 +129,7 @@ export class RemoteDesktopContextMenu extends TabContextMenuItemProvider {
         }, ...desktopChoices(this.desktop, pane, this.targets.cached(pane)?.label)]
         if (this.desktop.isConnected(pane)) {
             items.push({ label: 'Send files to the remote desktop…', click: () => this.desktop.sendFiles(pane) })
+            items.push(...desktopActions(this.desktop, this.keyboard, pane))
         }
         if (this.desktop.has(pane)) {
             items.push({ label: 'Disconnect remote desktop', click: () => this.desktop.disconnect(pane) })
@@ -120,6 +147,13 @@ export function settingsMenu (desktop: RemoteDesktopService, pane?: DesktopPane 
         label,
         checked: current[key] === value,
         click: () => desktop.updateSettings({ [key]: value } as Partial<DesktopSettings>),
+    })
+    // A fixed resolution, scaled to fit the pane or shown at actual size.
+    const fixed = (zoom: DesktopSettings['zoom'], label: string): MenuItemOptions => ({
+        type: 'radio',
+        label,
+        checked: current.resize === 'off' && current.zoom === zoom,
+        click: () => desktop.updateSettings({ resize: 'off', zoom }),
     })
     // The desktop open in this pane can have its own sharpness (for example, Retina for Windows only).
     const spec = pane ? desktop.desktopOf(pane) : null
@@ -140,7 +174,8 @@ export function settingsMenu (desktop: RemoteDesktopService, pane?: DesktopPane 
         { label: 'When the pane is resized', enabled: false },
         radio('resize', 'live', 'Resize the remote desktop to fit'),
         radio('resize', 'reconnect', 'Reconnect at the new size'),
-        radio('resize', 'off', 'Keep the resolution (scale to fit)'),
+        fixed('fit', 'Keep the resolution (scale to fit)'),
+        fixed('actual', 'Keep the resolution (actual size, scroll)'),
         { type: 'separator' },
         { label: 'Sharpness', enabled: false },
         radio('sharpness', 'standard', 'Standard'),

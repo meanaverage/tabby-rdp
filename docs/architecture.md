@@ -65,6 +65,9 @@ The script prints one `RD_OK port=… user=… pass=…` or `RD_ERR <reason>` li
 grd adds a virtual monitor per client and sizes it from the client's request, so a connection gets a monitor the size
 of its pane. (A second client on the same account would get a second, empty monitor; hence one desktop per account.)
 
+With a fixed resolution (`resize: off`), the picture is scaled to fit the pane, or shown at actual size in a
+scrolling view (IronRDP's `Real` scale; `zoom: actual`).
+
 **Resizing** uses RDP display control: grd answers a new monitor layout with an EGFX ResetGraphics, which the patched
 web client follows. **Retina** (device pixels) also needs GNOME's scale set to match, which grd doesn't do from the
 RDP scale factor: the plugin sets it through Mutter's `DisplayConfig` (temporarily, like Display settings before
@@ -94,7 +97,13 @@ While a desktop covers the active pane (`src/keyboard.ts`):
 - **Tabby's shortcuts** are filtered: only the desktop/console switch, tab switching (⌘1–9, next, previous, last
   used) and full screen stay Tabby's, and those don't reach the remote. Everything else goes to the remote only.
   (Unfiltered, ⌘V would paste into the hidden terminal and ⌘W would close the tab.)
-- **Mac shortcuts** (macOS, on by default): ⌘ is sent as Ctrl, and a ⌘ tap on its own as the Windows key.
+- **Mac shortcuts** (macOS, on by default): ⌘ is sent as Ctrl, and a ⌘ tap on its own as the Windows key. ⌃⌘ with
+  a key is sent as the Windows key with that key (Ctrl is let go on the remote first): with ⌘ as Ctrl, ⌃⌘ would only
+  mean Ctrl again, so no combination is lost. Tabby's ⌃⌘F (full screen) stays Tabby's.
+- **View only** (per desktop, kept across reconnects): keys stop at the router, and a layer over the picture takes
+  the mouse (the wheel scrolls an actual-size picture instead). The layer carries the "View only" label.
+- **Send keys** (menus): the desktop is shown and focused, and the combination goes to IronRDP as key events with
+  their `code`, which it sends as scancodes, the way typed keys go.
 - **Stuck keys:** macOS sends no keyup for a key pressed while ⌘ is down, so the remote gets one right after the
   keydown.
 
@@ -107,6 +116,8 @@ IronRDP's.
 - **Files:** IronRDP's file transfer provider. Files dropped on the layer (or picked from the menu) are offered on the
   remote clipboard; pasting there pulls them. Files copied on the remote are offered for saving (to Downloads,
   keeping folder structure, never overwriting).
+- **Screenshots:** IronRDP draws into a 2D canvas at the remote resolution; it is saved as a PNG (to Downloads, never
+  overwriting) and put on the clipboard through Electron.
 - **Sound:** the patched web client hands 16-bit PCM to the plugin, which schedules it back to back on a Web Audio
   clock with a small lead, skipping ahead rather than letting delay grow, and follows the server's volume.
 

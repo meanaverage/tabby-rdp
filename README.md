@@ -82,9 +82,12 @@ connecting again.
 | **Clipboard** | Copy and paste text and images in both directions. |
 | **Files** | Drop files from Finder onto the desktop, or use **Send files to the remote desktop…**, then paste them in Files or Explorer. Files copied on the remote offer **Save to Downloads**. |
 | **Sound** | The remote desktop's sound plays locally. |
-| **Resize** | The remote resolution follows the pane as you resize the window or split it. Or reconnect at the new size, or keep a fixed resolution. |
+| **Resize** | The remote resolution follows the pane as you resize the window or split it. Or reconnect at the new size, or keep a fixed resolution, scaled to fit or at actual size with scroll bars. |
 | **Retina** | Optionally renders at device pixels, with the remote's UI scaled to match (GNOME and Windows alike), for sharp text. For all desktops, or only some. |
-| **Keyboard on macOS** | ⌘C, ⌘V, ⌘Z and the rest work as on a Mac; tapping ⌘ alone is the Windows key. Tabby's own shortcuts stay out of the way while a desktop is showing, except switching tabs and returning to the console. |
+| **Keyboard on macOS** | ⌘C, ⌘V, ⌘Z and the rest work as on a Mac; tapping ⌘ alone is the Windows key, and ⌃⌘ with a key is the Windows key with it (⌃⌘R for Win+R). Tabby's own shortcuts stay out of the way while a desktop is showing, except switching tabs and returning to the console. |
+| **Send keys** | In the desktop's menus: Ctrl+Alt+Del, Win+R, Win+L, Ctrl+Shift+Esc, Print Screen and more for Windows; Super, Super+A, Alt+F2 and more for GNOME. |
+| **View only** | In the desktop's menus: watch a desktop without touching it. No keys or clicks go to it while a "View only" label shows; the picture, clipboard and sound carry on. Kept across reconnects, until the desktop is closed. |
+| **Screenshots** | **Save a screenshot** in the desktop's menus saves the remote screen at its full resolution as a PNG in Downloads, and copies it to the clipboard. |
 | **Reconnecting** | After sleep or a network change, the desktop reconnects by itself once the connection is back. |
 | **Sign-in** | GNOME desktops need none: the plugin manages their credentials. Windows desktops ask for the account once and can remember it in the system keychain. |
 
@@ -137,7 +140,8 @@ They are stored in Tabby's config under `remoteDesktop`:
 
 | Setting | Default | |
 |---|---|---|
-| When the pane is resized (`resize`) | Resize the remote desktop to fit (`live`) | Or reconnect at the new size (`reconnect`), or keep the resolution, scaled to fit (`off`). |
+| When the pane is resized (`resize`) | Resize the remote desktop to fit (`live`) | Or reconnect at the new size (`reconnect`), or keep the resolution (`off`). |
+| Keep the resolution: scale to fit or actual size (`zoom`) | Scale to fit (`fit`) | With `resize: off`: `actual` shows one remote pixel per point, with scroll bars when the desktop is larger than the pane (a Retina-sized desktop shows at twice the size). |
 | Sharpness (`sharpness`) | Standard (`standard`) | Retina (`retina`): device pixels, with the remote's scale set to match. |
 | For *this desktop* only (`desktopSharpness`) | As above | In the menu of a tab with a desktop open: Standard or Retina for that desktop, whatever the default. Kept by desktop (`user@host`, or `user@host#address` for one behind a host). |
 | Sound (`sound`) | On | Applies on the next connection. |
@@ -209,7 +213,6 @@ npm run build:ironrdp        # rebuild vendor/ from IronRDP and ironrdp/patches:
   Tabby's own passwords. Without one, the plugin asks each time.
 - **GNOME Remote Desktop listens on all interfaces** (password-protected, TLS); it has no setting to listen on
   loopback only. See [docs/architecture.md](docs/architecture.md#security-notes) to restrict it.
-- **Windows-key combinations** such as Win+R don't come through from macOS. Tapping ⌘ for the Windows key does.
 - **Desktops behind a host** can be added and removed from the menus, but not edited there.
 
 ## License

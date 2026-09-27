@@ -1,13 +1,15 @@
 import { Injectable, NgZone } from '@angular/core'
 import { Subject } from 'rxjs'
 import { AppService, ConfigService, NotificationsService, SplitTabComponent } from 'tabby-core'
+import * as fs from 'fs'
+import * as os from 'os'
 import * as path from 'path'
 import { pathToFileURL } from 'url'
-import { DesktopPane, RemoteTarget, RemoteTargets } from './targets'
+import { DesktopPane, desktopPaneOf, RemoteTarget, RemoteTargets } from './targets'
 import { consoleScript, DeskRequest } from './deskScript'
 import { AudioPlayer } from './audio'
 import { askNewDesktop } from './desktopForm'
-import { FileTransfer, STYLE as FILES_STYLE } from './fileTransfer'
+import { FileTransfer, STYLE as FILES_STYLE, uniquePath } from './fileTransfer'
 import { DesktopSpec, desktopsFor, ExtraDesktopConfig, OWN_DESKTOP, sessionKey } from './desktops'
 import { prepareRemoteDesktop } from './remoteSetup'
 import { RDCleanPathProxy, startRDCleanPathProxy } from './rdcleanpath'
@@ -47,6 +49,10 @@ const STYLE = `
 .trd-status-actions { display: flex; gap: 8px; pointer-events: auto; }
 .trd-status-actions:empty { display: none; }
 .trd-overlay.trd-dim .trd-host { opacity: 0.2; }
+.trd-view-only { display: none; position: absolute; inset: 0; }
+.trd-overlay.trd-view-only-on .trd-view-only { display: block; }
+.trd-view-only::after { content: 'View only'; position: absolute; top: 8px; left: 8px; padding: 2px 8px; border-radius: 4px;
+    background: rgba(30, 30, 30, 0.85); color: #ddd; font-size: 11px; pointer-events: none; }
 `
 
 /** A button in the desktop layer's status (Reconnect, Stop, …). */
@@ -69,6 +75,8 @@ export interface DesktopSettings {
     macShortcuts: boolean
     /** Play the remote desktop's sound here (applies on the next connect). */
     sound: boolean
+    /** With resize 'off': 'fit' scales the picture to the pane, 'actual' shows it 1:1, scrolling when it's larger. */
+    zoom: 'fit' | 'actual'
 }
 
 interface RemoteSize {
@@ -144,6 +152,8 @@ class DesktopSession {
     audio: AudioPlayer | null = null
     /** Files through the clipboard (drop on the desktop, or copy on the remote). */
     files: FileTransfer | null = null
+    /** No keyboard or mouse input goes to the remote (keys: see keyboard.ts; the mouse: a layer over the picture). */
+    viewOnly = false
     /** Resolves when the session is disposed (ends a pending sign-in). */
     readonly disposed: Promise<void>
     private markDisposed!: () => void
@@ -155,6 +165,7 @@ class DesktopSession {
         this.overlay.className = 'trd-overlay'
         this.overlay.innerHTML = `
             <div class="trd-host"></div>
+            <div class="trd-view-only" title="View only: no keyboard or mouse input goes to the remote desktop"></div>
             <div class="trd-status"><div class="trd-status-text"></div><div class="trd-status-actions"></div></div>`
         this.host = this.overlay.querySelector('.trd-host')!
         this.statusEl = this.overlay.querySelector('.trd-status')!
@@ -169,6 +180,22 @@ class DesktopSession {
         this.container = container
         container.addEventListener('focusin', this.reclaimFocus, true)
         this.overlay.addEventListener('mousedown', () => this.focusDesktop())
+        // View only: the layer takes the mouse, so the wheel scrolls an actual-size picture instead of the remote.
+        this.overlay.querySelector('.trd-view-only')!.addEventListener('wheel', event => {
+            const wheel = event as WheelEvent
+            this.host.querySelector('iron-remote-desktop')?.shadowRoot?.querySelector('.screen-wrapper')?.scrollBy(wheel.deltaX, wheel.deltaY)
+        }, { passive: true })
+    }
+
+    setViewOnly (viewOnly: boolean): void {
+        this.viewOnly = viewOnly
+        this.overlay.classList.toggle('trd-view-only-on', viewOnly)
+        this.log.push(`view only: ${viewOnly ? 'on' : 'off'}`)
+    }
+
+    /** IronRDP's canvas: the remote frame, at the remote resolution. */
+    canvas (): HTMLCanvasElement | null {
+        return this.host.querySelector('iron-remote-desktop')?.shadowRoot?.querySelector('canvas') ?? null
     }
 
     private readonly container: HTMLElement
@@ -228,8 +255,7 @@ class DesktopSession {
             return
         }
         const host = this.host.querySelector('iron-remote-desktop')
-        const canvas = host?.shadowRoot?.querySelector('canvas') as HTMLElement | null
-        canvas?.focus()
+        this.canvas()?.focus()
         if (host && document.activeElement !== host && attempts > 1 && this.visible) {
             setTimeout(() => this.visible && this.focusDesktop(attempts - 1), 16)
         }
@@ -369,7 +395,7 @@ export class RemoteDesktopService {
      * Shows a desktop over the pane: `desktopId` (see desktopsOf), or the one it has open, or the default. A pane
      * holds one desktop at a time; choosing another one replaces it.
      */
-    async showDesktop (pane: DesktopPane, desktopId?: string, options: { background?: boolean } = {}): Promise<void> {
+    async showDesktop (pane: DesktopPane, desktopId?: string, options: { background?: boolean, viewOnly?: boolean } = {}): Promise<void> {
         this.prune()
         let session = this.sessions.get(pane)
         if (session?.state === 'ended' || session && desktopId && session.spec.id !== desktopId) {
@@ -401,6 +427,9 @@ export class RemoteDesktopService {
                 return this.showDesktop(existing)
             }
             const created = new DesktopSession(pane.element.nativeElement, key, spec)
+            if (options.viewOnly) {
+                created.setViewOnly(true)
+            }
             session = created
             this.sessions.set(pane, created)
             pane.destroyed$.subscribe(() => this.disconnect(pane))
@@ -545,7 +574,7 @@ export class RemoteDesktopService {
         const session = this.sessions.get(pane)
         const background = !!session && !session.visible
         this.drop(pane, false)
-        await this.zone.run(() => this.showDesktop(pane, spec.id, { background }))
+        await this.zone.run(() => this.showDesktop(pane, spec.id, { background, viewOnly: session?.viewOnly }))
     }
 
     /** After a desktop ended: reconnect by itself if it dropped, otherwise offer to. */
@@ -611,6 +640,7 @@ export class RemoteDesktopService {
             desk: store.desk === true,
             macShortcuts: store.macShortcuts !== false,
             sound: store.sound !== false,
+            zoom: store.zoom === 'actual' ? 'actual' : 'fit',
         }
     }
 
@@ -655,8 +685,19 @@ export class RemoteDesktopService {
         Object.assign(store, change)
         this.config.save()
         for (const [pane, session] of this.sessions) {
+            this.applyZoom(session)
             this.followPane(pane, session)
         }
+    }
+
+    /** IronRDP's ScreenScale for the picture: Real (1:1, scrolling) only with a fixed resolution and zoom 'actual'. */
+    private screenScale (): 1 | 3 {
+        const settings = this.settings()
+        return settings.resize === 'off' && settings.zoom === 'actual' ? 3 /* ScreenScale.Real */ : 1 /* ScreenScale.Fit */
+    }
+
+    private applyZoom (session: DesktopSession): void {
+        try { session.ui?.setScale(this.screenScale()) } catch { }
     }
 
     /** Follows the pane's size (debounced) while the desktop shows, per the resize setting. */
@@ -664,7 +705,7 @@ export class RemoteDesktopService {
         let timer: any
         const observer = new ResizeObserver(() => {
             // Refit the view right away (the component only refits on window resizes by itself) ...
-            try { session.ui?.setScale(1 /* ScreenScale.Fit */) } catch { }
+            this.applyZoom(session)
             // ... and change the remote resolution once the size settles.
             clearTimeout(timer)
             timer = setTimeout(() => this.followPane(pane, session), 300)
@@ -689,9 +730,10 @@ export class RemoteDesktopService {
         }
         if (settings.resize === 'reconnect') {
             session.log.push(`resize: reconnecting at ${wanted.width}x${wanted.height}`)
+            const viewOnly = session.viewOnly
             this.zone.run(() => {
                 this.disconnect(pane)
-                this.showDesktop(pane)
+                this.showDesktop(pane, undefined, { viewOnly })
             })
             return
         }
@@ -714,6 +756,92 @@ export class RemoteDesktopService {
             session.remote.exec(`python3 - ${size.width} ${size.height} ${size.scale / 100}`, SCALE_SCRIPT).then(out => {
                 session.log.push(`scale: ${/^RD_(OK|ERR) (.*)$/m.exec(out)?.[2] ?? out.trim().slice(-120)}`)
             }, e => session.log.push(`scale: ${e?.message ?? e}`))
+        }
+    }
+
+    isViewOnly (pane: DesktopPane): boolean {
+        return !!this.sessions.get(pane)?.viewOnly
+    }
+
+    /** View only: the pane's desktop gets no keyboard or mouse input (the picture, clipboard and sound go on). */
+    setViewOnly (pane: DesktopPane, viewOnly: boolean): void {
+        const session = this.sessions.get(pane)
+        if (session) {
+            session.setViewOnly(viewOnly)
+            this.changed$.next()
+        }
+    }
+
+    /**
+     * For keys sent from a menu: brings the pane's desktop forward and focuses it, since IronRDP only takes keys
+     * while it has focus. False when it can't take them (not connected, view only, or focus didn't stick).
+     */
+    async takeKeyboard (pane: DesktopPane): Promise<boolean> {
+        const session = this.sessions.get(pane)
+        if (!session || session.state !== 'connected' || session.viewOnly) {
+            return false
+        }
+        if (!session.visible) {
+            await this.showDesktop(pane)
+        }
+        if (desktopPaneOf(this.app.activeTab) !== pane) {
+            this.selectPane(pane)
+        }
+        // After a tab switch, the pane shows on Angular's next change detection.
+        for (let i = 0; i < 30; i++) {
+            session.focusDesktop(1)
+            const focused = document.activeElement
+            if (focused?.tagName === 'IRON-REMOTE-DESKTOP' && session.overlay.contains(focused)) {
+                return true
+            }
+            await new Promise(resolve => setTimeout(resolve, 16))
+        }
+        session.log.push('keys: the desktop did not take the keyboard')
+        return false
+    }
+
+    /**
+     * Saves the remote frame as a PNG in Downloads (never overwriting) and copies it to the clipboard. The canvas is
+     * at the remote resolution, so this is the full picture whatever the pane's size. Returns the file.
+     */
+    async saveScreenshot (pane: DesktopPane): Promise<string | null> {
+        const session = this.sessions.get(pane)
+        const canvas = session?.state === 'connected' ? session.canvas() : null
+        if (!session || !canvas) {
+            return null
+        }
+        try {
+            const blob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, 'image/png'))
+            if (!blob) {
+                throw new Error('the picture could not be encoded')
+            }
+            const png = Buffer.from(await blob.arrayBuffer())
+            const dir = path.join(os.homedir(), 'Downloads')
+            const now = new Date()
+            const two = (n: number) => String(n).padStart(2, '0')
+            const stamp = `${now.getFullYear()}-${two(now.getMonth() + 1)}-${two(now.getDate())} at ${two(now.getHours())}.${two(now.getMinutes())}.${two(now.getSeconds())}`
+            const name = `Screenshot ${session.spec.name} ${stamp}`.replace(/[\\/:*?"<>|]/g, '-')
+            await fs.promises.mkdir(dir, { recursive: true })
+            const file = uniquePath(path.join(dir, `${name}.png`))
+            await fs.promises.writeFile(file, png, { flag: 'wx' })
+            session.log.push(`screenshot: saved ${file}`)
+            let copied = true
+            try {
+                const { clipboard, nativeImage } = require('electron')
+                clipboard.writeImage(nativeImage.createFromBuffer(png))
+            } catch (e: any) {
+                copied = false
+                session.log.push(`screenshot: clipboard: ${e?.message ?? e}`)
+            }
+            session.files?.toast(`Screenshot saved to ${path.basename(dir)}${copied ? ' and copied to the clipboard' : ''}`, [{
+                label: process.platform === 'darwin' ? 'Show in Finder' : 'Show in folder',
+                run: () => require('electron').shell.showItemInFolder(file),
+            }])
+            return file
+        } catch (e: any) {
+            session.log.push(`screenshot: ${e?.message ?? e}`)
+            this.notifications.error(`Couldn't save the screenshot: ${e?.message ?? e}`)
+            return null
         }
     }
 
@@ -810,7 +938,7 @@ export class RemoteDesktopService {
         const alive = () => this.sessions.get(pane) === session
         const el = document.createElement('iron-remote-desktop') as any
         try {
-            el.setAttribute('scale', 'fit')
+            el.setAttribute('scale', this.screenScale() === 3 ? 'real' : 'fit')
             el.setAttribute('flexcenter', 'true')
             el.module = rdp.Backend
             const ready = new Promise<any>(resolve => el.addEventListener('ready', (e: CustomEvent) => resolve(e.detail.irgUserInteraction), { once: true }))
