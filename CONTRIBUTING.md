@@ -40,17 +40,16 @@ them; see [ironrdp/README.md](ironrdp/README.md). Fixes that belong upstream sho
 ## Releasing
 
 Pushing a tag `v<version>` (matching `version` in package.json) runs [`publish.yml`](.github/workflows/publish.yml),
-which builds and publishes to npm with provenance. It publishes `vendor/` as committed in the tagged commit (CI does
-not rebuild IronRDP), so run `npm run build:ironrdp` and commit its output before tagging if the patches changed.
+which builds the package and **stages** it on npm, with provenance. It goes live once a maintainer approves it: on
+npmjs.com, the package's **Staged Packages** tab › **Approve**, or `npm stage approve <stage-id>` (both need two-factor
+authentication). The workflow publishes `vendor/` as committed in the tagged commit (CI does not rebuild IronRDP), so
+run `npm run build:ironrdp` and commit its output before tagging if the patches changed.
 
 The workflow authenticates with npm trusted publishing (OIDC, no token to keep). One-time setup, by a maintainer of
 the package on npmjs.com: the package's **Settings › Trusted publishing**, choose **GitHub Actions**, and enter
-owner/user `meanaverage`, repository `tabby-rdp`, workflow filename `publish.yml` (no environment). After a first
-publish that way, **Settings › Publishing access** can be set to require two-factor authentication and disallow
-tokens.
-
-Fallback without trusted publishing: create an npm access token that can publish the package and add it to the
-repository's secrets as `NPM_TOKEN`; the workflow passes it to npm, which uses it when there is no trusted publisher.
+owner/user `meanaverage`, repository `tabby-rdp`, workflow filename `publish.yml` (no environment). Leave "publish
+directly" unchecked: the workflow only stages. After a first release that way, **Settings › Publishing access** can be
+set to require two-factor authentication and disallow tokens.
 
 ## Style
 
