@@ -94,8 +94,9 @@ connecting again.
 
 An SSH host can lead to other desktops it can reach, such as a Windows VM on the same machine. In that host's menu,
 choose **Add a desktop behind \<host\>…** and enter a name, the address as seen from the host, and optionally the
-user name. It opens right away, and from then on appears next to the host's own desktop in its menus. **Remote
-desktop settings › Remove a desktop** removes one, along with its saved password.
+user name and domain. It opens right away, and from then on appears next to the host's own desktop in its menus. **Remote
+desktop settings › Edit a desktop** changes one (its saved password and sharpness follow a new address; a new user
+name forgets the saved password), and **Remove a desktop** removes one, along with its saved password.
 
 <p align="center"><img src="docs/images/windows.png" width="760" alt="A Windows 11 desktop, reached through an SSH host, in a Tabby tab"></p>
 
@@ -110,6 +111,7 @@ remoteDesktop:
       port: 3389
       kind: windows             # or gnome
       username: alice           # optional; DOMAIN\user works too
+      domain: CORP              # optional
 ```
 
 The connection runs through the same SSH connection; the Windows machine needs Remote Desktop turned on, and nothing
@@ -210,7 +212,6 @@ npm run build:ironrdp        # rebuild vendor/ from IronRDP and ironrdp/patches:
 - **GNOME Remote Desktop listens on all interfaces** (password-protected, TLS); it has no setting to listen on
   loopback only. See [docs/architecture.md](docs/architecture.md#security-notes) to restrict it.
 - **Windows-key combinations** such as Win+R don't come through from macOS. Tapping ⌘ for the Windows key does.
-- **Desktops behind a host** can be added and removed from the menus, but not edited there.
 
 ## License
 

@@ -80,6 +80,11 @@ export function desktopsFor (target: RemoteTarget, extras: ExtraDesktopConfig[] 
     return specs
 }
 
+/** The id of a configured desktop (`host:port`), as its DesktopSpec and session keys have it. */
+export function desktopIdOf (extra: ExtraDesktopConfig): string {
+    return `${extra.host ?? '127.0.0.1'}:${extra.port ?? 3389}`
+}
+
 /** One desktop per key: the remote account for its own desktop, plus the RDP server for one behind it. */
 export function sessionKey (target: RemoteTarget, spec: DesktopSpec): string {
     return spec.id === OWN_DESKTOP ? target.key : `${target.key}#${spec.id}`

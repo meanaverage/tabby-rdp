@@ -70,6 +70,19 @@ export async function forgetCredentialsFor (desktopId: string): Promise<void> {
     } catch { }
 }
 
+/** A desktop's address changed: its saved accounts (session keys ending in `#<from>`) move to the new address. */
+export async function moveCredentialsFor (fromId: string, toId: string): Promise<void> {
+    try {
+        const k = keytar()
+        for (const { account, password } of await answered<{ account: string, password: string }[]>(k?.findCredentials(KEYCHAIN_SERVICE)) ?? []) {
+            if (account.endsWith(`#${fromId}`)) {
+                await answered(k.setPassword(KEYCHAIN_SERVICE, `${account.slice(0, -fromId.length)}${toId}`, password))
+                await answered(k.deletePassword(KEYCHAIN_SERVICE, account))
+            }
+        }
+    } catch { }
+}
+
 export const STYLE = `
 .trd-signin { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; z-index: 1; }
 .trd-signin form { display: flex; flex-direction: column; gap: 10px; width: 300px; max-width: calc(100% - 32px); color: #ccc; font-size: 13px; }

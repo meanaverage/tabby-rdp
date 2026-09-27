@@ -69,7 +69,7 @@ system keychain doesn't answer (Linux without an unlocked keyring), the keychain
 | [files](suites/files.mjs) | Files both ways with Files (Nautilus): copy there and save here; drop here and paste there. |
 | [audio](suites/audio.mjs) | A tone played on the desktop arrives as sound; with sound off, none is set up. |
 | [reconnect](suites/reconnect.mjs) | A dropped SSH connection: "Reconnect SSH", automatic reconnect (also while hidden), Stop, Try again. |
-| [desktops](suites/desktops.mjs) | "Add a desktop behind…", its sign-in and keychain entry, "Remove a desktop" (using the host's own GNOME desktop as the extra one). |
+| [desktops](suites/desktops.mjs) | "Add a desktop behind…", its sign-in and keychain entry, "Edit a desktop" (keychain entry and sharpness following a new address), "Remove a desktop" (using the host's own GNOME desktop as the extra one). |
 | [windows](suites/windows.mjs) | A Windows desktop behind an SSH host: sign-in, keychain, picture, resize, reconnect; with WinRM, typing, clipboard, sound and files, each checked inside Windows. |
 | [trd-pty](unit/trd-pty.py) | The shared-session helper on its own, on the test host. |
 

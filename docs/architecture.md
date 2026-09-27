@@ -79,6 +79,11 @@ SSH host; nothing runs on either machine. It signs in with its own account: a fo
 optionally the keychain (service `tabby-rdp`, through the `keytar` module Tabby itself uses for SSH passwords). A
 wrong password brings the form back and drops the saved one.
 
+What is kept per desktop (the keychain entry, `desktopSharpness`) is keyed by the session key, which ends in the
+desktop's address (`user@host:port#address`). Editing a desktop's address therefore renames those keys rather than
+leaving them behind; editing its user name or domain drops the saved account instead, since it belonged to the old
+user. The edit form is the add form, filled in.
+
 - **Graphics:** Windows gets IronRDP's bitmap path. The graphics pipeline, which GNOME requires, stays off for it:
   without an H.264 decoder only the basic EGFX capability set is advertised, and Windows does better with bitmaps.
 - **TLS:** Windows' self-signed RDP certificate only allows key encipherment, and the TLS library in Electron

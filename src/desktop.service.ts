@@ -6,12 +6,15 @@ import { pathToFileURL } from 'url'
 import { DesktopPane, RemoteTarget, RemoteTargets } from './targets'
 import { consoleScript, DeskRequest } from './deskScript'
 import { AudioPlayer } from './audio'
-import { askNewDesktop } from './desktopForm'
+import { askDesktop } from './desktopForm'
 import { FileTransfer, STYLE as FILES_STYLE } from './fileTransfer'
-import { DesktopSpec, desktopsFor, ExtraDesktopConfig, OWN_DESKTOP, sessionKey } from './desktops'
+import { desktopIdOf, DesktopSpec, desktopsFor, ExtraDesktopConfig, OWN_DESKTOP, sessionKey } from './desktops'
 import { prepareRemoteDesktop } from './remoteSetup'
 import { RDCleanPathProxy, startRDCleanPathProxy } from './rdcleanpath'
-import { askCredentials, Credentials, forgetCredentials, forgetCredentialsFor, loadCredentials, saveCredentials, STYLE as SIGNIN_STYLE } from './signin'
+import {
+    askCredentials, Credentials, forgetCredentials, forgetCredentialsFor, loadCredentials, moveCredentialsFor, saveCredentials,
+    STYLE as SIGNIN_STYLE,
+} from './signin'
 
 // The vendored IronRDP bundles are ES modules. tsc turns import() into require(), and Node's import() is refused in
 // Tabby on Windows (no dynamic import callback), so they go through a module script: the page's own loader.
@@ -341,7 +344,12 @@ export class RemoteDesktopService {
         }
         // The resolved hostname, so a profile tab and a plain `ssh` to that machine both offer it.
         const hostname = target.key.replace(/:\d+$/, '').replace(/^[^@]*@/, '')
-        const entry = await askNewDesktop(pane.element.nativeElement, hostname, target.label)
+        const entry = await askDesktop(pane.element.nativeElement, {
+            title: `Add a desktop reached through ${target.label}`,
+            action: 'Add and open',
+            entry: { via: hostname, host: '127.0.0.1', port: 3389 },
+            check: e => this.addressTaken(e, -1),
+        })
         if (!entry) {
             pane.frontend?.focus()
             return
@@ -349,7 +357,70 @@ export class RemoteDesktopService {
         this.config.store.remoteDesktop.desktops = [...this.configuredDesktops(), entry]
         this.config.save()
         this.changed$.next()
-        await this.showDesktop(pane, `${entry.host}:${entry.port}`)
+        await this.showDesktop(pane, desktopIdOf(entry))
+    }
+
+    /** Another entry for the same host already has this address (desktops are told apart by it). */
+    private addressTaken (entry: ExtraDesktopConfig, index: number): string | null {
+        const id = desktopIdOf(entry)
+        const via = (entry.via ?? '').trim().toLowerCase()
+        const taken = this.configuredDesktops().some((d, i) => i !== index && desktopIdOf(d) === id && (d.via ?? '').trim().toLowerCase() === via)
+        return taken ? `There is already a desktop at ${id} behind ${entry.via}.` : null
+    }
+
+    /**
+     * "Edit a desktop": the same form, over the pane, filled in. A new address takes the desktop's saved accounts and
+     * sharpness along; a new user name drops the saved account, which was for the old one. Open sessions keep running.
+     */
+    async editDesktop (pane: DesktopPane, index: number): Promise<void> {
+        const old = this.configuredDesktops()[index]
+        if (!old) {
+            return
+        }
+        if (this.isVisible(pane)) {
+            this.showConsole(pane)
+        }
+        const entry = await askDesktop(pane.element.nativeElement, {
+            title: `Edit ${old.name ?? desktopIdOf(old)} (behind ${old.via})`,
+            action: 'Save',
+            entry: old,
+            check: e => this.addressTaken(e, index),
+        })
+        pane.frontend?.focus()
+        // Compared with the entry as it is now: the config can change while the form shows.
+        const list = this.configuredDesktops()
+        if (!entry || list[index] !== old) {
+            return
+        }
+        list[index] = entry
+        this.config.store.remoteDesktop.desktops = list
+        this.config.save()
+        this.changed$.next()
+        const [from, to] = [desktopIdOf(old), desktopIdOf(entry)]
+        if ((old.username ?? '') !== (entry.username ?? '') || (old.domain ?? '') !== (entry.domain ?? '')) {
+            await forgetCredentialsFor(from)
+        } else if (from !== to) {
+            await moveCredentialsFor(from, to)
+        }
+        if (from !== to) {
+            this.moveDesktopKeys(from, to)
+        }
+    }
+
+    /** Keeps what is kept per desktop (its sharpness, the last-used choice) with a desktop whose address changed. */
+    private moveDesktopKeys (fromId: string, toId: string): void {
+        const store = this.config.store.remoteDesktop
+        if (Array.isArray(store.desktopSharpness)) {
+            store.desktopSharpness = store.desktopSharpness.map((e: any) => typeof e?.desktop === 'string' && e.desktop.endsWith(`#${fromId}`)
+                ? { ...e, desktop: `${e.desktop.slice(0, -fromId.length)}${toId}` }
+                : e)
+            this.config.save()
+        }
+        for (const [key, id] of this.lastUsed) {
+            if (id === fromId) {
+                this.lastUsed.set(key, toId)
+            }
+        }
     }
 
     /** Removes a configured desktop and its saved accounts. Open sessions to it keep running. */

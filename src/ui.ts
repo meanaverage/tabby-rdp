@@ -167,6 +167,15 @@ export function settingsMenu (desktop: RemoteDesktopService, pane?: DesktopPane 
         }] : [],
         { type: 'separator' },
         {
+            // The form shows over a pane.
+            label: 'Edit a desktop',
+            enabled: !!pane && desktop.configuredDesktops().length > 0,
+            submenu: desktop.configuredDesktops().map((d, i) => ({
+                label: `${d.name ?? `${d.host}:${d.port}`} (behind ${d.via})…`,
+                click: () => pane && desktop.editDesktop(pane, i),
+            })),
+        },
+        {
             label: 'Remove a desktop',
             enabled: desktop.configuredDesktops().length > 0,
             submenu: desktop.configuredDesktops().map((d, i) => ({
