@@ -15,7 +15,7 @@ Tabby window
  └─ direct-tcpip channel on the same SSH connection  (src/ssh.ts, src/sshChannelStream.ts)
                 │
                 ▼
-     remote: 127.0.0.1:3389 (GNOME Remote Desktop)  or  any host:port the SSH host can reach (Windows)
+     remote: 127.0.0.1:3389 (GNOME Remote Desktop), xrdp's port,  or  any host:port the SSH host can reach (Windows)
 ```
 
 Nothing is opened on the network. IronRDP's web client speaks RDCleanPath to a WebSocket proxy, as it would to
@@ -64,6 +64,37 @@ The script prints one `RD_OK port=… user=… pass=… cert=…` or `RD_ERR <re
 layer. `cert` is the SHA-256 fingerprint of the certificate from step 1, the only one the proxy then accepts on that
 port (see [Security notes](#security-notes)). A newly made certificate also restarts grd, which would otherwise keep
 serving the old one.
+
+## Linux desktops through xrdp
+
+Before anything else, the setup script looks for xrdp: `/etc/xrdp/xrdp.ini`'s `[Globals] port=` (default 3389),
+xrdp running (`systemctl is-active xrdp`, or its process) and something listening on that port. Then:
+
+- **No GNOME** (no `grdctl` or `gnome-shell`), **xrdp running:** the script prints `RD_XRDP port=… user=…` and stops;
+  nothing is set up, since xrdp starts a session when the user signs in. The host's own desktop becomes xrdp's, signed
+  in like a desktop behind a host (the form, the keychain), with the SSH user suggested.
+- **Both:** GNOME stays the host's own desktop, set up as before; the script adds an `RD_XRDP` line, and the host
+  then also offers xrdp as a desktop at `127.0.0.1:<port>` (unless it shares grd's port, where one of them can't
+  listen).
+- **Neither:** the error says what's missing, and how to start or install xrdp.
+
+What the setup found is kept per SSH account until Tabby restarts, so menus can offer the right desktops; it is
+refreshed on each connection to the host's own desktop.
+
+xrdp needs two things from the proxy (`src/rdcleanpath.ts`):
+
+- **Autologon:** xrdp signs in with the credentials in the Client Info PDU only when it carries `INFO_AUTOLOGON`, and
+  shows its own login window otherwise. IronRDP's web client doesn't set the flag, so for xrdp desktops the proxy,
+  which has the client's side in the clear, sets that one bit in that one PDU and passes everything else untouched.
+  Without NLA, a wrong password isn't refused by xrdp: its login window shows instead, and "Sign in again…" in the
+  menus replaces a remembered password.
+- **TLS:** xrdp's default (`security_layer=negotiate`) picks TLS, with its own (often the system's snakeoil)
+  certificate, which the proxy accepts as it accepts any. A server that only offers RDP's standard security answers
+  the negotiation without TLS; the proxy says so, with the setting to change, rather than failing in the handshake.
+
+Graphics use the bitmap path, as for Windows, which every xrdp version serves (the graphics pipeline is newer in
+xrdp, 0.10, and depends on how it was built). Resizing is display control, as for Windows: xrdp 0.10 answers it
+with a deactivation-reactivation at the new size; 0.9 ignores it.
 
 grd adds a virtual monitor per client and sizes it from the client's request, so a connection gets a monitor the size
 of its pane. (A second client on the same account would get a second, empty monitor; hence one desktop per account.)

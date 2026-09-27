@@ -17,6 +17,7 @@ export function askNewDesktop (pane: HTMLElement, via: string, viaLabel: string)
                 <input class="form-control" name="address" placeholder="Address as seen from the host, e.g. 127.0.0.1:3389" spellcheck="false">
                 <select class="form-control" name="kind">
                     <option value="windows">Windows (or another RDP server)</option>
+                    <option value="xrdp">xrdp (Linux: KDE, XFCE, MATE, …)</option>
                     <option value="gnome">GNOME Remote Desktop (needs the graphics pipeline)</option>
                 </select>
                 <input class="form-control" name="username" placeholder="User name (optional; asked when connecting)" spellcheck="false">
@@ -77,12 +78,13 @@ export function askNewDesktop (pane: HTMLElement, via: string, viaLabel: string)
                 return
             }
             const username = field('username').value.trim()
+            const kind = field<HTMLSelectElement>('kind').value
             done({
                 name,
                 via,
                 host,
                 port,
-                kind: field<HTMLSelectElement>('kind').value === 'gnome' ? 'gnome' : 'windows',
+                kind: kind === 'gnome' || kind === 'xrdp' ? kind : 'windows',
                 ...username ? { username } : {},
             })
         })

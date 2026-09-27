@@ -23,6 +23,7 @@ nothing is opened on the network, and nothing has to be installed on the remote 
 
 - **Linux desktops without a monitor or a login.** The plugin starts a headless GNOME session for your SSH user with
   GNOME Remote Desktop, on the fly, without root. A server in a rack works as well as a workstation.
+- **Other Linux desktops** (KDE, XFCE, MATE, Cinnamon, …) through xrdp, where it runs: the plugin finds it by itself.
 - **Windows desktops** behind any SSH host, such as a VM on your build server.
 - **A proper desktop experience:** clipboard and files both ways, sound, live resize to the pane, sharp Retina
   rendering, Mac keyboard shortcuts, and automatic reconnects after sleep.
@@ -69,6 +70,11 @@ The first connection to a machine takes a few seconds while it prepares GNOME Re
 ones take well under a second. The same shortcut switches between the desktop and the console, and the desktop keeps
 running in the background until you disconnect or close the tab.
 
+A machine without GNOME but with [xrdp](https://github.com/neutrinolabs/xrdp) running (the usual RDP server for KDE,
+XFCE, MATE and the rest) gets xrdp's desktop instead: sign in with your Linux password, which the plugin can remember
+in the system keychain. A machine with both keeps GNOME as the tab's desktop and, once that has been opened, also
+offers **Open \<host\> desktop (xrdp)** in its menus.
+
 It also works in a plain local terminal where you typed `ssh host` (macOS and Linux), as long as that host accepts
 your key without a password prompt.
 
@@ -89,8 +95,8 @@ connecting again.
 | **View only** | In the desktop's menus: watch a desktop without touching it. No keys or clicks go to it while a "View only" label shows; the picture, clipboard and sound carry on. Kept across reconnects, until the desktop is closed. |
 | **Screenshots** | **Save a screenshot** in the desktop's menus saves the remote screen at its full resolution as a PNG in Downloads, and copies it to the clipboard. |
 | **Reconnecting** | After sleep or a network change, the desktop reconnects by itself once the connection is back. |
-| **Sign-in** | GNOME desktops need none: the plugin manages their credentials. Windows desktops ask for the account once and can remember it in the system keychain. |
-| **Certificates** | GNOME desktops accept only the certificate the plugin made for them. Windows desktops remember theirs on first use and ask before accepting a different one. |
+| **Sign-in** | GNOME desktops need none: the plugin manages their credentials. Windows and xrdp desktops ask for the account once and can remember it in the system keychain; **Sign in again…** in the menu replaces it. |
+| **Certificates** | GNOME desktops accept only the certificate the plugin made for them. Windows and xrdp desktops remember theirs on first use and ask before accepting a different one. |
 
 <p align="center"><img src="docs/images/files.png" width="760" alt="A file copied on the remote desktop, offered for saving"></p>
 
@@ -112,7 +118,7 @@ remoteDesktop:
       via: buildhost            # the SSH host: alias, hostname, user@hostname or user@hostname:port
       host: 192.168.122.20      # the RDP server as seen from that host
       port: 3389
-      kind: windows             # or gnome
+      kind: windows             # or xrdp (a Linux desktop served by xrdp), or gnome
       username: alice           # optional; DOMAIN\user works too
 ```
 
@@ -164,6 +170,10 @@ They are stored in Tabby's config under `remoteDesktop`:
 - **Linux desktops:** GNOME Shell and GNOME Remote Desktop 46 or newer (Ubuntu 24.04, for example), a systemd user
   session, and SSH access with a key or agent. `desk` also needs `python3` and GNOME Terminal. No root, no display, no
   login screen.
+- **Other Linux desktops:** xrdp running on the machine, with a desktop for its sessions (on Debian and Ubuntu:
+  `sudo apt install xrdp xfce4`, or KDE, MATE, …), and an account with a password. xrdp's default settings work
+  (`security_layer=negotiate`, its own certificate); the port is read from `/etc/xrdp/xrdp.ini`. Sound needs
+  `pipewire-module-xrdp` or `pulseaudio-module-xrdp`.
 - **Windows desktops:** Windows 10 or 11 Pro, or Windows Server, with Remote Desktop turned on, reachable from an SSH
   host.
 
@@ -221,6 +231,15 @@ npm run build:ironrdp        # rebuild vendor/ from IronRDP and ironrdp/patches:
 - **GNOME Remote Desktop listens on all interfaces** (password-protected, TLS); it has no setting to listen on
   loopback only. See [docs/architecture.md](docs/architecture.md#security-notes) to restrict it.
 - **Desktops behind a host** can be added and removed from the menus, but not edited there.
+- **xrdp sessions are separate X sessions**, not the machine's screen, and use whatever `~/.xsession` or the system
+  default starts. Don't have them start GNOME for a user who also has a GNOME session (the plugin's headless one, or
+  a login at the machine): GNOME runs once per user.
+- **xrdp and a wrong password:** xrdp doesn't refuse the connection, it shows its own login window instead, where you
+  can sign in. A remembered password that no longer works leads there each time; **Sign in again…** replaces it.
+- **What works on xrdp** depends on its channels: the clipboard through `xrdp-chansrv` (text; images and files as
+  far as that xrdp version supports them), sound through the PipeWire or PulseAudio module. Live resize needs xrdp
+  0.10 or newer; with 0.9 (Ubuntu 24.04), the desktop keeps its size, scaled to fit, or choose **Reconnect at the new
+  size**. xrdp's standard RDP security without TLS (`security_layer=rdp`) isn't supported. `desk` needs GNOME.
 
 ## License
 

@@ -43,6 +43,12 @@ export function env () {
             /** Python with pywinrm on that host: the one provision.sh installs, if there, or python3. */
             winrmPython: e.TRD_TEST_WINRM_PYTHON || '"$(command -v /opt/tabby-rdp-test/winrm/bin/python || echo python3)"',
         },
+        xrdp: {
+            /** An account on the test host that signs in to xrdp with a password (testbed/linux/xrdp.sh). */
+            user: e.TRD_TEST_XRDP_USER || 'tabbyxrdp',
+            password: e.TRD_TEST_XRDP_PASSWORD || '',
+            port: Number(e.TRD_TEST_XRDP_PORT || 3390),
+        },
     }
 }
 

@@ -10,7 +10,7 @@ import { consoleScript, DeskRequest } from './deskScript'
 import { AudioPlayer } from './audio'
 import { askNewDesktop } from './desktopForm'
 import { FileTransfer, STYLE as FILES_STYLE, uniquePath } from './fileTransfer'
-import { DesktopSpec, desktopsFor, ExtraDesktopConfig, OWN_DESKTOP, sessionKey } from './desktops'
+import { DesktopSpec, desktopsFor, ExtraDesktopConfig, OWN_DESKTOP, OwnDesktopFound, sessionKey } from './desktops'
 import { prepareRemoteDesktop } from './remoteSetup'
 import { normalizeFingerprint, RDCleanPathProxy, startRDCleanPathProxy } from './rdcleanpath'
 import { askCredentials, Credentials, forgetCredentials, forgetCredentialsFor, loadCredentials, saveCredentials, STYLE as SIGNIN_STYLE } from './signin'
@@ -337,9 +337,35 @@ export class RemoteDesktopService {
         }
     }
 
+    /** What the setup last found on each SSH host (by target key): GNOME or xrdp, and xrdp's port. */
+    private ownDesktops = new Map<string, OwnDesktopFound>()
+
     /** The desktops this pane's SSH host offers: its own, then those configured behind it. */
     desktopsOf (target: RemoteTarget): DesktopSpec[] {
-        return desktopsFor(target, this.config.store.remoteDesktop?.desktops)
+        return desktopsFor(target, this.config.store.remoteDesktop?.desktops, this.ownDesktops.get(target.key))
+    }
+
+    /** Whether a desktop signs in with an account of its own: all but the host's own GNOME desktop. */
+    private signsIn (spec: DesktopSpec): boolean {
+        return spec.id !== OWN_DESKTOP || spec.kind !== 'gnome'
+    }
+
+    /** Whether the pane's desktop signed in with an account (which "Sign in again…" can replace). */
+    canSignInAgain (pane: DesktopPane): boolean {
+        const spec = this.sessions.get(pane)?.spec
+        return !!spec && this.signsIn(spec)
+    }
+
+    /**
+     * Forgets the saved account of the pane's desktop and connects again, with the sign-in form. For xrdp above all:
+     * with a wrong password it shows its own login window rather than refusing, so the form never comes back.
+     */
+    async signInAgain (pane: DesktopPane): Promise<void> {
+        const session = this.sessions.get(pane)
+        if (session && this.signsIn(session.spec)) {
+            await forgetCredentials(session.key)
+            await this.reopen(pane, session.spec)
+        }
     }
 
     /** The desktop a plain toggle (hotkey, header, toolbar) opens for this target: the last one used there. */
@@ -500,6 +526,11 @@ export class RemoteDesktopService {
             await new Promise(r => setTimeout(r, 250))
         }
         if (session?.state !== 'connected') {
+            return
+        }
+        if (session.spec.kind !== 'gnome') {
+            // The terminal it opens is GNOME's, on the headless GNOME session.
+            this.notifications.error('desk: needs a GNOME desktop; this one is served by xrdp')
             return
         }
         try {
@@ -772,15 +803,16 @@ export class RemoteDesktopService {
         session.log.push(`resize: ${size.width}x${size.height} @${size.scale}%`)
         const before = session.remoteSize
         session.remoteSize = size
-        if (session.spec.kind === 'windows') {
+        if (session.spec.kind !== 'gnome') {
             // Windows takes the scale from the monitor layout only when it also has the monitor's physical size (mm).
+            // xrdp gets it too; it can take its session's DPI from it.
             const mm = (px: number) => Math.round(px / (size.scale / 100) / 96 * 25.4)
             session.ui.resize(size.width, size.height, size.scale, mm(size.width), mm(size.height))
         } else {
             session.ui.resize(size.width, size.height, size.scale)
         }
         // grd ignores the scale in the monitor layout: it's set through Mutter (also back to 100%).
-        if ((size.scale !== 100 || (before?.scale ?? 100) !== 100) && session.remote && session.spec.id === OWN_DESKTOP) {
+        if ((size.scale !== 100 || (before?.scale ?? 100) !== 100) && session.remote && session.spec.id === OWN_DESKTOP && session.spec.kind === 'gnome') {
             session.remote.exec(`python3 - ${size.width} ${size.height} ${size.scale / 100}`, SCALE_SCRIPT).then(out => {
                 session.log.push(`scale: ${/^RD_(OK|ERR) (.*)$/m.exec(out)?.[2] ?? out.trim().slice(-120)}`)
             }, e => session.log.push(`scale: ${e?.message ?? e}`))
@@ -893,20 +925,23 @@ export class RemoteDesktopService {
     }
 
     /**
-     * Where to connect and as whom. The host's own desktop: the setup script (grd, generated credentials).
-     * Others: the saved account, or the sign-in form (retry=true after a failed sign-in).
+     * Where to connect and as whom. The host's own desktop: the setup script (grd, generated credentials), or, where
+     * it finds xrdp instead of GNOME, as below. Others: the saved account, or the sign-in form (retryError: after a
+     * failed sign-in).
      */
     private async endpointFor (target: RemoteTarget, spec: DesktopSpec, session: DesktopSession, retryError?: string): Promise<Endpoint | null> {
-        if (spec.id === OWN_DESKTOP) {
+        if (spec.id === OWN_DESKTOP && !retryError) {
             session.status(`Preparing the remote desktop on ${target.label}…`)
             const endpoint = await prepareRemoteDesktop(target, this.settings().desk, this.config.store.remoteDesktop?.sessionBackend)
-            return {
-                host: '127.0.0.1',
-                port: endpoint.port,
-                credentials: { username: endpoint.username, password: endpoint.password },
-                remember: false,
-                certificate: endpoint.certificate,
+            this.ownDesktops.set(target.key, { kind: endpoint.kind, xrdpPort: endpoint.xrdpPort, xrdpUser: endpoint.xrdpUser })
+            // Only the setup knows which desktop the host has; the session follows it (graphics, sign-in, resizing).
+            spec.kind = endpoint.kind
+            if (endpoint.kind === 'gnome') {
+                return { host: '127.0.0.1', port: endpoint.port, credentials: { username: endpoint.username, password: endpoint.password }, remember: false, certificate: endpoint.certificate }
             }
+            spec.host = '127.0.0.1'
+            spec.port = endpoint.port
+            spec.username ??= endpoint.username
         }
         const saved = retryError ? null : await loadCredentials(session.key)
         if (saved) {
@@ -914,7 +949,8 @@ export class RemoteDesktopService {
         }
         session.status('')
         const asked = askCredentials(session.overlay, {
-            title: `Sign in to ${spec.name} (via ${target.label})`,
+            // The host's own desktops (its own, or its xrdp besides GNOME) need no "via".
+            title: spec.id === OWN_DESKTOP || spec.kind === 'xrdp' && spec.host === '127.0.0.1' ? `Sign in to ${spec.name}` : `Sign in to ${spec.name} (via ${target.label})`,
             username: spec.username,
             error: retryError,
             canRemember: true,
@@ -951,7 +987,8 @@ export class RemoteDesktopService {
                 session.proxy ??= await startRDCleanPathProxy(
                     () => target.openTcp(endpoint.host, endpoint.port),
                     fingerprint => this.checkCertificate(session, fingerprint),
-                    m => session.log.push(m))
+                    m => session.log.push(m),
+                    { autologon: spec.kind === 'xrdp' })
                 const outcome = await this.run(pane, target, spec, session, rdp, endpoint)
                 if (outcome.certificate && alive()) {
                     if (await this.refusedCertificate(pane, target, spec, session, endpoint, outcome.certificate)) {
@@ -960,7 +997,7 @@ export class RemoteDesktopService {
                     }
                     return
                 }
-                if (outcome.signInFailed && spec.id !== OWN_DESKTOP && attempt < 5 && alive()) {
+                if (outcome.signInFailed && this.signsIn(spec) && attempt < 5 && alive()) {
                     await forgetCredentials(session.key)
                     retryError = outcome.signInFailed
                     continue
@@ -985,7 +1022,8 @@ export class RemoteDesktopService {
      */
     private checkCertificate (session: DesktopSession, fingerprint: string): void {
         session.certificateProblem = null
-        if (session.spec.id === OWN_DESKTOP) {
+        // The host's own GNOME desktop; its own xrdp makes its certificate itself, so that one is trusted on first use.
+        if (session.spec.id === OWN_DESKTOP && session.spec.kind === 'gnome') {
             const expected = session.pinnedCertificate ?? ''
             if (fingerprint !== expected) {
                 session.certificateProblem = { expected, actual: fingerprint, pinned: true }
@@ -1145,7 +1183,7 @@ export class RemoteDesktopService {
                     session.log.push(`sign-in failed: ${detail.split('\n')[0]}`)
                     return { connected: false, signInFailed: kind === 1 ? 'Wrong user name or password.' : 'The sign-in was refused.' }
                 }
-                throw new Error(detail)
+                throw new Error(session.proxy?.failure ?? detail)
             }
             if (!alive()) {
                 return { connected: false }

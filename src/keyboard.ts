@@ -47,6 +47,15 @@ export const SEND_KEYS: Record<DesktopKind, KeyCombo[]> = {
         { label: 'Alt+F4 (close the window)', codes: ['AltLeft', 'F4'] },
         { label: 'Print Screen (screenshot)', codes: ['PrintScreen'] },
     ],
+    // xrdp: whichever desktop the host runs (XFCE, KDE, MATE, …); these mean much the same in all of them.
+    xrdp: [
+        { label: 'Super (menu)', codes: ['MetaLeft'] },
+        { label: 'Alt+F2 (run a command)', codes: ['AltLeft', 'F2'] },
+        { label: 'Alt+Tab', codes: ['AltLeft', 'Tab'] },
+        { label: 'Alt+F4 (close the window)', codes: ['AltLeft', 'F4'] },
+        { label: 'Ctrl+Alt+Del', codes: ['ControlLeft', 'AltLeft', 'Delete'] },
+        { label: 'Print Screen', codes: ['PrintScreen'] },
+    ],
 }
 
 /**

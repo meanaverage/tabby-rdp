@@ -133,6 +133,9 @@ export class RemoteDesktopContextMenu extends TabContextMenuItemProvider {
             items.push({ label: 'Send files to the remote desktop…', click: () => this.desktop.sendFiles(pane) })
             items.push(...desktopActions(this.desktop, this.keyboard, pane))
         }
+        if (this.desktop.canSignInAgain(pane)) {
+            items.push({ label: 'Sign in again…', click: () => this.desktop.signInAgain(pane) })
+        }
         if (this.desktop.has(pane)) {
             items.push({ label: 'Disconnect remote desktop', click: () => this.desktop.disconnect(pane) })
         }

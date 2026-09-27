@@ -9,6 +9,7 @@ npm test                          # the Linux-desktop suites
 npm test -- keyboard files        # some suites
 npm test -- trd-pty               # trd-pty's own tests, on the test host
 npm test -- windows               # the Windows suite (TRD_TEST_WIN_*)
+npm test -- xrdp                  # the xrdp suite (TRD_TEST_XRDP_*)
 npm test -- --packed e2e          # with the plugin installed as npm would install it (npm pack)
 npm test -- --keep e2e            # leave the test Tabby open afterwards
 npm test -- --port 9334 e2e       # use a Tabby already running with --remote-debugging-port=9334
@@ -38,6 +39,8 @@ automatically in the test profile.
 | `TRD_TEST_WIN_USER`, `TRD_TEST_WIN_PASSWORD` | windows | The Windows test account. |
 | `TRD_TEST_WIN_WINRM` | windows | Its WinRM address as seen from that host, e.g. `192.168.122.20:5985`. Enables the checks inside Windows. |
 | `TRD_TEST_WINRM_PYTHON` | windows | Python with `pywinrm` on that host (default: the one `provision.sh` installs, else `python3`). |
+| `TRD_TEST_XRDP_USER`, `TRD_TEST_XRDP_PASSWORD` | xrdp | The account on the test host that signs in to xrdp (default user `tabbyxrdp`; see `testbed/linux/xrdp.sh`). The suite is skipped without the password. |
+| `TRD_TEST_XRDP_PORT` | xrdp | xrdp's port on the test host (default 3390). |
 | `TRD_TEST_DUMP` | all | A folder to save pictures of the remote screen at checkpoints. |
 
 ## Tabby on another machine
@@ -73,6 +76,7 @@ system keychain doesn't answer (Linux without an unlocked keyring), the keychain
 | [desktops](suites/desktops.mjs) | "Add a desktop behind…", its sign-in and keychain entry, "Remove a desktop" (using the host's own GNOME desktop as the extra one). |
 | [certificates](suites/certificates.mjs) | The own desktop's certificate checked against the setup's; a desktop behind the host remembered on first use, a changed certificate stopped before sign-in (Cancel, "Trust the new certificate", also on an automatic reconnect), forgotten on removal. |
 | [windows](suites/windows.mjs) | A Windows desktop behind an SSH host: sign-in, keychain, picture, resize, reconnect, its certificate remembered and a changed one stopped; with WinRM, typing, clipboard, sound and files, each checked inside Windows. |
+| [xrdp](suites/xrdp.mjs) | xrdp next to GNOME (a second desktop) and without GNOME (the host's own desktop): sign-in and xrdp's autologon, picture, typing, clipboard, keychain, "Sign in again…", live resize (xrdp 0.10+), and the error when neither runs. |
 | [trd-pty](unit/trd-pty.py) | The shared-session helper on its own, on the test host. |
 
 Checks print `PASS`, `FAIL` or `SKIP`; some suites also print `TIME` lines (connection and reconnection times, for
