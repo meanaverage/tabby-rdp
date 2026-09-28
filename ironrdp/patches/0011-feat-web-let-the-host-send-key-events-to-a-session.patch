@@ -1,0 +1,86 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: meanaverage <18336095+meanaverage@users.noreply.github.com>
+Date: Sun, 27 Sep 2026 14:39:07 -0700
+Subject: [PATCH] feat(web): let the host send key events to a session
+
+`sendKeyboardEvent` is the canvas's own key path (`KeyboardEvent.code`
+as scancodes, modifier state kept in sync), exposed on the public API.
+A session only takes keys while its canvas has the focus; a host that
+routes the keyboard itself, such as one sending the same keys to
+several sessions at once, can now hand a session its keys directly.
+Nothing changes for hosts that don't call it.
+---
+ .../src/interfaces/UserInteraction.ts         |  3 +++
+ .../src/services/PublicAPI.ts                 |  7 ++++++
+ .../src/services/sendKeyboardEvent.test.ts    | 23 +++++++++++++++++++
+ 3 files changed, 33 insertions(+)
+ create mode 100644 web-client/iron-remote-desktop/src/services/sendKeyboardEvent.test.ts
+
+diff --git a/web-client/iron-remote-desktop/src/interfaces/UserInteraction.ts b/web-client/iron-remote-desktop/src/interfaces/UserInteraction.ts
+index 9d496d9c..afaed1b7 100644
+--- a/web-client/iron-remote-desktop/src/interfaces/UserInteraction.ts
++++ b/web-client/iron-remote-desktop/src/interfaces/UserInteraction.ts
+@@ -25,6 +25,9 @@ export interface UserInteraction {
+ 
+     ctrlV(): void;
+ 
++    /** A key event for this session, whether or not its canvas has the focus. */
++    sendKeyboardEvent(evt: KeyboardEvent): void;
++
+     shutdown(): void;
+ 
+     setCursorStyleOverride(style: string | null): void;
+diff --git a/web-client/iron-remote-desktop/src/services/PublicAPI.ts b/web-client/iron-remote-desktop/src/services/PublicAPI.ts
+index 640fb1f7..02231b15 100644
+--- a/web-client/iron-remote-desktop/src/services/PublicAPI.ts
++++ b/web-client/iron-remote-desktop/src/services/PublicAPI.ts
+@@ -44,6 +44,12 @@ export class PublicAPI {
+         this.remoteDesktopService.sendSpecialCombination(SpecialCombination.CTRL_V);
+     }
+ 
++    // Keys for this session whether or not its canvas has the focus, for a host that routes the keyboard itself (the
++    // same keys to several sessions, for one). Handled as the canvas's own: codes as scancodes, modifiers kept in sync.
++    private sendKeyboardEvent(evt: KeyboardEvent) {
++        this.remoteDesktopService.sendKeyboardEvent(evt);
++    }
++
+     private setVisibility(state: boolean) {
+         loggingService.info(`Change component visibility to: ${state}`);
+         this.remoteDesktopService.setVisibility(state);
+@@ -125,6 +131,7 @@ export class PublicAPI {
+             metaKey: this.metaKey.bind(this),
+             ctrlC: this.ctrlC.bind(this),
+             ctrlV: this.ctrlV.bind(this),
++            sendKeyboardEvent: this.sendKeyboardEvent.bind(this),
+             shutdown: this.shutdown.bind(this),
+             setKeyboardUnicodeMode: this.setKeyboardUnicodeMode.bind(this),
+             setCursorStyleOverride: this.setCursorStyleOverride.bind(this),
+diff --git a/web-client/iron-remote-desktop/src/services/sendKeyboardEvent.test.ts b/web-client/iron-remote-desktop/src/services/sendKeyboardEvent.test.ts
+new file mode 100644
+index 00000000..988dc74b
+--- /dev/null
++++ b/web-client/iron-remote-desktop/src/services/sendKeyboardEvent.test.ts
+@@ -0,0 +1,23 @@
++import { describe, it, expect, vi } from 'vitest';
++import { PublicAPI } from './PublicAPI';
++import type { RemoteDesktopService } from './remote-desktop.service';
++import type { ClipboardService } from './clipboard.service';
++
++/**
++ * `sendKeyboardEvent` on the public API hands a key event to the session's own key path, the one the canvas uses
++ * while it has the focus, so a host can send keys to a session that doesn't have it.
++ */
++describe('PublicAPI.sendKeyboardEvent', () => {
++    it('passes the event to the session as the canvas would', () => {
++        const service = { sendKeyboardEvent: vi.fn() } as unknown as RemoteDesktopService;
++        const api = new PublicAPI(service, {} as ClipboardService).getExposedFunctions();
++        const down = new KeyboardEvent('keydown', { code: 'KeyA', key: 'a' });
++        const up = new KeyboardEvent('keyup', { code: 'KeyA', key: 'a' });
++
++        api.sendKeyboardEvent(down);
++        api.sendKeyboardEvent(up);
++
++        expect(service.sendKeyboardEvent).toHaveBeenNthCalledWith(1, down);
++        expect(service.sendKeyboardEvent).toHaveBeenNthCalledWith(2, up);
++    });
++});
