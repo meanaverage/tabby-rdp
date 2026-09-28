@@ -1,9 +1,11 @@
 import { Injectable, NgZone } from '@angular/core'
 import { AppService, MenuItemOptions, PlatformService } from 'tabby-core'
 import { RemoteDesktopService } from './desktop.service'
+import { RemoteDesktopHelp } from './help'
+import { DesktopKeyboard } from './keyboard'
 import { isSSHTab } from './ssh'
 import { desktopPaneOf, RemoteTargets } from './targets'
-import { desktopChoices, settingsMenu, toggleLabel } from './ui'
+import { desktopActions, desktopChoices, settingsMenu, toggleLabel } from './ui'
 
 // Font Awesome Free 6.7.2 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free
 // (Icons: CC BY 4.0) Copyright 2024 Fonticons, Inc.
@@ -28,7 +30,9 @@ export class HeaderControls {
         private desktop: RemoteDesktopService,
         private targets: RemoteTargets,
         private platform: PlatformService,
+        private keyboard: DesktopKeyboard,
         private zone: NgZone,
+        private help: RemoteDesktopHelp,
     ) { }
 
     // All watching and DOM syncing runs outside Angular's zone: inside it, every observer callback and
@@ -59,7 +63,11 @@ export class HeaderControls {
         if (!pane) {
             return
         }
-        await this.targets.targetOf(pane)
+        const target = await this.targets.targetOf(pane)
+        // Look for VMs on the host ahead of the menus (at most once a minute).
+        if (target) {
+            this.desktop.discoverVMs(target).catch(() => null)
+        }
         this.schedule()
     }
 
@@ -117,9 +125,12 @@ export class HeaderControls {
             event.preventDefault()
             this.zone.run(() => {
                 const pane = desktopPaneOf(this.app.activeTab)
-                const choices = pane ? desktopChoices(this.desktop, pane, this.targets.cached(pane)?.label) : []
-                const settings: MenuItemOptions = { label: 'Remote desktop settings', submenu: settingsMenu(this.desktop, pane) }
-                this.platform.popupContextMenu(choices.length ? [...choices, { type: 'separator' }, settings] : settingsMenu(this.desktop, pane), event)
+                const choices = pane ? [
+                    ...desktopChoices(this.desktop, pane, this.targets.cached(pane)?.label),
+                    ...desktopActions(this.desktop, this.keyboard, pane),
+                ] : []
+                const settings: MenuItemOptions = { label: 'Settings', submenu: settingsMenu(this.desktop, pane, this.help) }
+                this.platform.popupContextMenu(choices.length ? [...choices, { type: 'separator' }, settings] : settingsMenu(this.desktop, pane, this.help), event)
             })
         })
         this.disconnectButton.title = 'Disconnect remote desktop'
@@ -143,8 +154,10 @@ export class HeaderControls {
             return
         }
         const visible = this.desktop.isVisible(pane)
+        // None while a remote desktop tab shows its desktop: there is no console to switch to.
         const title = toggleLabel(this.desktop, pane)
-        if (this.toggleButton.title !== title) {
+        this.toggleButton.style.display = title ? '' : 'none'
+        if (title && this.toggleButton.title !== title) {
             this.toggleButton.title = title
             this.toggleButton.innerHTML = visible ? ICON_TERMINAL : ICON_DESKTOP
         }

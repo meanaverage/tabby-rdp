@@ -1,22 +1,70 @@
 import * as fs from 'fs'
 import * as path from 'path'
 import { RemoteTarget } from './targets'
+import { normalizeFingerprint } from './rdcleanpath'
 
 export interface RemoteDesktopEndpoint {
+    /**
+     * 'gnome': grd, with the generated account. 'xrdp': no GNOME there, but xrdp, which signs in with the Linux account.
+     * 'windows': the host runs Windows; its RDP server signs in with the Windows account.
+     */
+    kind: 'gnome' | 'xrdp' | 'windows'
     port: number
     username: string
+    /** Empty for xrdp and Windows: the user signs in. */
     password: string
+    /** SHA-256 fingerprint of grd's TLS certificate (made by this script): the only one to accept on the port. */
+    certificate: string
+    /** xrdp's port, when it also runs besides GNOME (on a port of its own). */
+    xrdpPort?: number
+    /** The account to suggest for xrdp: the SSH user. */
+    xrdpUser?: string
 }
 
-// Runs as the SSH user; needs no root. Prints exactly one `RD_OK port=N user=U pass=P` or `RD_ERR <reason>` line.
+// Runs as the SSH user; needs no root. Prints exactly one `RD_OK port=N user=U pass=P cert=SHA256`,
+// `RD_XRDP port=N user=U` (no GNOME, but xrdp), `RD_WINDOWS` (a Windows host's POSIX sh) or `RD_ERR <reason>` line;
+// with RD_OK, also an RD_XRDP line when xrdp runs besides GNOME.
 // The RDP password is generated once per remote user and kept in a 0600 file; grd reads credentials only
 // at startup, so grd is restarted only when its configuration actually changes (that drops live sessions).
 // (grdctl takes the credentials as arguments, so they are briefly visible in the remote's process list.)
 const SETUP_SCRIPT = String.raw`
 say () { printf '%s\n' "$*"; }
 fail () { say "RD_ERR $*"; exit 0; }
-command -v grdctl >/dev/null 2>&1 || fail "GNOME Remote Desktop (grdctl) is not installed"
-command -v gnome-shell >/dev/null 2>&1 || fail "gnome-shell is not installed"
+# A Windows host whose PATH has a POSIX sh (Git, MSYS2, Cygwin): its desktop is Windows' own RDP server.
+case "$(uname -s 2>/dev/null)" in CYGWIN*|MINGW*|MSYS*) say "RD_WINDOWS"; exit 0 ;; esac
+# xrdp serves the Linux desktops other than GNOME (KDE, XFCE, MATE, …). Its port is [Globals] port= in xrdp.ini
+# (default 3389): a number, or a listener such as tcp://:3390 (the first one, when there are several). Only used when
+# it runs and listens, so the host's own desktop isn't one that can't answer.
+XRDP_PORT= XRDP_WHY=
+if [ -f /etc/xrdp/xrdp.ini ]; then
+    P=$(sed -n '/^\[Globals\]/,/^\[/s/^[[:space:]]*port[[:space:]]*=[[:space:]]*//p' /etc/xrdp/xrdp.ini 2>/dev/null | tr -d '\r' | head -1)
+    P=${"$"}{P%%[[:space:]]*}
+    case $P in
+        '') P=3389 ;;
+        vsock://*) P= ;;
+        *:*) P=${"$"}{P##*:} ;;
+    esac
+    case $P in *[!0-9]*) P= ;; esac
+    if ! systemctl is-active -q xrdp 2>/dev/null && ! pgrep -x xrdp >/dev/null 2>&1; then
+        XRDP_WHY="xrdp is installed but not running (start it: sudo systemctl enable --now xrdp)"
+    elif [ -z "$P" ]; then
+        XRDP_WHY="xrdp does not listen on a TCP port (see port= in /etc/xrdp/xrdp.ini)"
+    elif command -v ss >/dev/null 2>&1 && ! ss -ltnH "sport = :$P" 2>/dev/null | grep -q .; then
+        XRDP_WHY="xrdp runs, but nothing listens on its port $P"
+    else
+        XRDP_PORT=$P
+    fi
+fi
+NO_GNOME=
+command -v grdctl >/dev/null 2>&1 || NO_GNOME="GNOME Remote Desktop (grdctl) is not installed"
+[ -n "$NO_GNOME" ] || command -v gnome-shell >/dev/null 2>&1 || NO_GNOME="gnome-shell is not installed"
+if [ -n "$NO_GNOME" ]; then
+    # No GNOME: the host's own desktop is xrdp's, if it runs. Nothing to set up for it: xrdp starts a session
+    # when the user signs in.
+    [ -z "$XRDP_PORT" ] || { say "RD_XRDP port=$XRDP_PORT user=$(id -un)"; exit 0; }
+    [ -z "$XRDP_WHY" ] || fail "$NO_GNOME, and $XRDP_WHY"
+    fail "$NO_GNOME. For other Linux desktops, install xrdp and a desktop (Debian, Ubuntu: sudo apt install xrdp xfce4)"
+fi
 if systemctl --user is-active -q gnome-remote-desktop.service; then
     fail "a desktop-session GNOME Remote Desktop is already running for this user"
 fi
@@ -33,10 +81,15 @@ for rc in "$HOME/.bashrc" "$HOME/.zshrc"; do
     fi
 done
 mkdir -p "$D" && chmod 700 "$D" || fail "could not create $D"
+NEW_CERT=0
 if [ ! -s "$D/tls.key" ]; then
     openssl req -new -newkey rsa:3072 -days 3650 -nodes -x509 -subj "/CN=$(hostname)" \
         -keyout "$D/tls.key" -out "$D/tls.crt" >/dev/null 2>&1 || fail "could not create a TLS certificate"
+    NEW_CERT=1
 fi
+# The plugin accepts only this certificate on grd's port.
+CERT=$(openssl x509 -in "$D/tls.crt" -noout -fingerprint -sha256 2>/dev/null | sed 's/^[^=]*=//')
+[ -n "$CERT" ] || fail "could not read the TLS certificate $D/tls.crt (openssl x509)"
 # 'desk' support (setting, off by default): interactive SSH logins start inside a shareable session (trd-pty,
 # or tmux), so 'desk' can attach this exact console to a terminal on the desktop. Rewritten on every connect;
 # opt out per login with TABBY_NO_SESSION=1. When the setting is off, the hook and helpers are removed.
@@ -88,7 +141,10 @@ elif [ -n "$TMUX" ]; then
     SOCKET=$(tmux display-message -p '#{socket_path}' 2>/dev/null)
     tmux set-option -p allow-passthrough on 2>/dev/null
 fi
-SEQ=$(printf '\033]7777;desk;%s;%s;%s;%s\007' "$(b64 "$SESSION")" "$(b64 "$SOCKET")" "$(b64 "$PWD")" "$(b64 "$KIND")")
+# Which machine this is: a shared home folder puts this script on others too, and the tab may be connected to another
+# machine than the one this runs on (ssh typed in its console).
+MACHINE=$(cat /etc/machine-id 2>/dev/null || hostname)
+SEQ=$(printf '\033]7777;desk;%s;%s;%s;%s;%s;%s\007' "$(b64 "$SESSION")" "$(b64 "$SOCKET")" "$(b64 "$PWD")" "$(b64 "$KIND")" "$(b64 "$MACHINE")" "$(b64 "$(hostname)")")
 if [ "$KIND" = tmux ]; then
     printf '\033Ptmux;\033%s\033\\' "$SEQ"   # tmux only lets it through as passthrough
 else
@@ -127,7 +183,9 @@ STATUS=$(grdctl --headless status --show-credentials 2>/dev/null)
 has () { printf '%s\n' "$STATUS" | grep -qxF "$(printf '\t%s' "$1")"; }
 g () { grdctl --headless rdp "$@" >/dev/null 2>&1; }
 RESTART=0
-if ! has "TLS key: $D/tls.key" || ! has "TLS certificate: $D/tls.crt"; then
+# grd reads the certificate at startup: a new one at the same path needs a restart too, or grd would keep serving
+# the old one, which the plugin would then refuse.
+if [ $NEW_CERT = 1 ] || ! has "TLS key: $D/tls.key" || ! has "TLS certificate: $D/tls.crt"; then
     g set-tls-key "$D/tls.key" && g set-tls-cert "$D/tls.crt" || fail "grdctl could not set the TLS certificate"
     RESTART=1
 fi
@@ -199,7 +257,9 @@ PORT=$(grdctl --headless status 2>/dev/null | awk '/Port:/ { print $2; exit }')
 PORT=${"$"}{PORT:-3389}
 i=0; while [ $i -lt 40 ] && ! ss -ltnH "sport = :$PORT" 2>/dev/null | grep -q .; do sleep 0.25; i=$((i+1)); done
 ss -ltnH "sport = :$PORT" 2>/dev/null | grep -q . || fail "nothing is listening on port $PORT"
-say "RD_OK port=$PORT user=$RD_USER pass=$RD_PASS"
+# xrdp besides GNOME (on a port of its own; on grd's, one of them couldn't listen): offered as another desktop.
+[ -z "$XRDP_PORT" ] || [ "$XRDP_PORT" = "$PORT" ] || say "RD_XRDP port=$XRDP_PORT user=$(id -un)"
+say "RD_OK port=$PORT user=$RD_USER pass=$RD_PASS cert=$CERT"
 `
 
 /** Which shareable session SSH logins get (for 'desk'): our own trd-pty, or the earlier tmux setup. */
@@ -211,18 +271,49 @@ function trdPty (): string {
     return trdPtySource
 }
 
-/** Makes sure the remote user has a headless GNOME session served by grd, with fresh credentials. */
+/**
+ * Whether the SSH host is Windows, i.e. its shell is cmd.exe or PowerShell. One command each of the three shells answers
+ * differently: cmd expands %OS%, PowerShell $env:OS (both to Windows_NT), sh neither.
+ */
+async function isWindows (target: RemoteTarget): Promise<boolean> {
+    try {
+        return /Windows_NT/.test(await target.exec('echo %OS% $env:OS', ''))
+    } catch {
+        return false
+    }
+}
+
+/**
+ * Makes sure the remote user has a headless GNOME session served by grd, with fresh credentials. Without GNOME,
+ * reports xrdp's port instead, when xrdp runs there; on a Windows host (OpenSSH Server on Windows), Windows' own RDP
+ * server, which signs in with the Windows account (the SSH user, to start with).
+ */
 export async function prepareRemoteDesktop (target: RemoteTarget, desk: boolean, backend: SessionBackend = 'native'): Promise<RemoteDesktopEndpoint> {
     const script = `TRD_DESK=${desk ? 1 : 0}\nTRD_BACKEND=${backend === 'tmux' ? 'tmux' : 'native'}\n` +
         SETUP_SCRIPT.replace('@@TRD_PTY_PY@@', trdPty().trimEnd())
     const out = await target.exec('sh -s', script)
+    // Without a sh, Windows prints its complaint on stderr, which exec() doesn't return: nothing came back. Only then is
+    // it worth asking, so a Linux host costs nothing extra.
+    if (/^RD_WINDOWS$/m.test(out) || !/^RD_(OK|XRDP|ERR) /m.test(out) && await isWindows(target)) {
+        // Its RDP server makes its own certificate: trusted on first use, like a desktop behind the host.
+        return { kind: 'windows', port: 3389, username: target.key.replace(/@[^@]*$/, ''), password: '', certificate: '' }
+    }
     const err = /^RD_ERR (.*)$/m.exec(out)
     if (err) {
         throw new Error(err[1])
     }
-    const ok = /^RD_OK port=(\d+) user=(\S+) pass=(\S+)$/m.exec(out)
-    if (!ok) {
-        throw new Error('Remote setup gave no result')
+    const ok = /^RD_OK port=(\d+) user=(\S+) pass=(\S+) cert=(\S+)$/m.exec(out)
+    const xrdp = /^RD_XRDP port=(\d+) user=(\S*)$/m.exec(out)
+    if (ok) {
+        const certificate = normalizeFingerprint(ok[4])
+        if (!certificate) {
+            throw new Error(`Remote setup reported no usable certificate fingerprint (${ok[4]})`)
+        }
+        return { kind: 'gnome', port: Number(ok[1]), username: ok[2], password: ok[3], certificate, xrdpPort: xrdp ? Number(xrdp[1]) : undefined, xrdpUser: xrdp?.[2] }
     }
-    return { port: Number(ok[1]), username: ok[2], password: ok[3] }
+    if (xrdp) {
+        // xrdp makes its own certificate: trusted on first use, like a desktop behind the host.
+        return { kind: 'xrdp', port: Number(xrdp[1]), username: xrdp[2], password: '', certificate: '', xrdpPort: Number(xrdp[1]), xrdpUser: xrdp[2] }
+    }
+    throw new Error('Remote setup gave no result')
 }

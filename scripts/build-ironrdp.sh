@@ -1,6 +1,6 @@
 #!/bin/sh
-# Rebuilds vendor/iron-remote-desktop*.js: IronRDP at ironrdp/BASE_COMMIT with ironrdp/patches/*.patch applied in
-# order (see ironrdp/README.md).
+# Rebuilds vendor/iron-remote-desktop*.js and vendor/ironrdp_web_bg.wasm: IronRDP at ironrdp/BASE_COMMIT with
+# ironrdp/patches/*.patch applied in order (see ironrdp/README.md).
 #
 # Needs git, rustup and Node.js (npm). The Rust toolchain IronRDP pins and the wasm32 target are installed by rustup
 # on first use; wasm-pack is installed with cargo if missing.
@@ -41,11 +41,28 @@ command -v wasm-pack >/dev/null || cargo install --locked wasm-pack --version "$
 (cd web-client/iron-remote-desktop-rdp && npm ci --no-audit --no-fund && npm run build-alone)
 
 cp web-client/iron-remote-desktop/dist/iron-remote-desktop.js "$ROOT/vendor/"
-cp web-client/iron-remote-desktop-rdp/dist/iron-remote-desktop-rdp.js "$ROOT/vendor/"
+# Vite's library build inlines the WebAssembly as one ~7 MB base64 data URL, which package scanners flag as
+# obfuscated code. Ship it as vendor/ironrdp_web_bg.wasm instead, with the bundle's default pointing next to itself
+# (the plugin reads the file and hands init() the bytes; see loadIronRDP). The data URL is checked to be exactly
+# wasm-pack's output, so nothing else is lost with it.
+node - web-client/iron-remote-desktop-rdp/dist/iron-remote-desktop-rdp.js crates/ironrdp-web/pkg/ironrdp_web_bg.wasm "$ROOT/vendor" <<'EOF'
+const fs = require('fs')
+const path = require('path')
+const [bundle, wasm, vendor] = process.argv.slice(2)
+const js = fs.readFileSync(bundle, 'utf8')
+const inlined = [...js.matchAll(/new URL\("data:application\/wasm;base64,([A-Za-z0-9+/=]+)"(, import\.meta\.url)?\)/g)]
+if (inlined.length !== 1) throw new Error(`${bundle}: expected one inlined WebAssembly module, found ${inlined.length}`)
+const bytes = fs.readFileSync(wasm)
+if (!Buffer.from(inlined[0][1], 'base64').equals(bytes)) throw new Error(`${bundle}: the inlined module is not ${wasm}`)
+const out = js.replace(inlined[0][0], () => 'new URL("ironrdp_web_bg.wasm", import.meta.url)')
+if (out.includes(';base64,')) throw new Error(`${bundle}: another inlined asset is left`)
+fs.writeFileSync(path.join(vendor, 'iron-remote-desktop-rdp.js'), out)
+fs.writeFileSync(path.join(vendor, 'ironrdp_web_bg.wasm'), bytes)
+EOF
 {
-    echo "vendor/iron-remote-desktop*.js are built from IronRDP (https://github.com/Devolutions/IronRDP) at commit"
-    echo "$COMMIT with the patches in ironrdp/patches applied. IronRDP is dual-licensed under MIT or Apache-2.0;"
-    echo "its MIT license follows."
+    echo "vendor/iron-remote-desktop*.js and vendor/ironrdp_web_bg.wasm are built from IronRDP"
+    echo "(https://github.com/Devolutions/IronRDP) at commit $COMMIT with the patches in"
+    echo "ironrdp/patches applied. IronRDP is dual-licensed under MIT or Apache-2.0; its MIT license follows."
     echo
     cat LICENSE-MIT
 } > "$ROOT/vendor/IRONRDP-LICENSE"

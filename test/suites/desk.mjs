@@ -63,6 +63,21 @@ await suite('desk', async t => {
     check('desk leaves no escape sequence on screen', !(await ev('return H.screen(H.b)')).includes('7777'))
     check('desk logged', await ev('return RD.desktop.logOf(H.b).some(l => /desk: opened/.test(l))'), await ev('return RD.desktop.logOf(H.b)'))
 
+    // 3b. `desk` from another machine (ssh typed in this console, and the script there through a shared home folder):
+    //     refused with a message, instead of opening a terminal on this machine's desktop.
+    const note = pane => `return H.topOf(${pane}) && ${pane}.element.nativeElement.querySelector('.trd-note')?.innerText || null`
+    const logBefore = await ev('return RD.desktop.logOf(H.b).filter(l => /^desk: /.test(l)).length')
+    const foreign = `printf '\\033]7777;desk;;;%s;;%s;%s\\007' "$(printf /tmp | base64)" "$(printf 0000beef | base64)" "$(printf other-host | base64)"\r`
+    await ev(`H.b.sendInput(${JSON.stringify(foreign)})`)
+    const refused = await t.waitFor(note('H.b'), 5)
+    check('desk from another machine: refused in a note over the terminal, naming both machines', /desk ran on other-host, but this tab is connected to /.test(refused ?? ''), refused)
+    await sleep(8000)
+    check('the note stays until closed', !!(await ev(note('H.b'))))
+    await ev(`H.inZone(() => H.b.element.nativeElement.querySelector('.trd-note [data-ok]').click())`)
+    check('× closes it', !(await ev(note('H.b'))))
+    await sleep(1000)
+    check('desk from another machine: nothing opened', await ev(`return RD.desktop.logOf(H.b).filter(l => /^desk: /.test(l)).length === ${logBefore}`))
+
     // 4. Typing in the desktop terminal reaches the same shell, once, and both views show it.
     await sleep(1000)
     await t.clickDesktop('H.b')
@@ -129,4 +144,16 @@ await suite('desk', async t => {
     check('desk on again: hook (once) and desk are back', await hookState() === '1\ndesk', await hookState())
     const sizeAfter = await rcSize()
     check('off and on again leaves ~/.bashrc as it was', sizeAfter === sizeBefore, { sizeBefore, sizeAfter })
+
+    // 8. The same account's desktop from the pane next to it: says so (one desktop per account), focus moves there.
+    await ev(`const top = H.topOf(H.a); H.c = await H.inZone(() => top.splitTab(H.a, 'r')); H.opened.push(H.c)`)
+    const split = await t.waitFor('return H.c?.sshSession?.open ? true : null', 30)
+    check('split pane connected', !!split)
+    await ev('await H.inZone(() => RD.desktop.showDesktop(H.c))')
+    const explained = await t.waitFor(note('H.c'), 5)
+    check('Desktop in the pane next to it: explained in a note over that pane', /desktop is already open in the other pane/.test(explained ?? ''), explained)
+    await ev(`H.inZone(() => H.c.element.nativeElement.querySelector('.trd-note [data-more]').click())`)
+    check('Help opens the troubleshooting entry', !!(await t.waitFor('const { SettingsTabComponent } = require("tabby-settings"); return document.querySelector(".trd-settings details[data-entry=nested-ssh]")?.open === true', 5)))
+    await ev('const { SettingsTabComponent } = require("tabby-settings"); const s = RD.app.tabs.find(x => x instanceof SettingsTabComponent); if (s) await H.inZone(() => RD.app.closeTab(s, false))')
+    check('... and no second desktop', await ev('return !RD.desktop.has(H.c) && RD.desktop.isVisible(H.a)'))
 })

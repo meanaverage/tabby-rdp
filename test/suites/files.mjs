@@ -1,7 +1,11 @@
 // Files through the clipboard, on a Linux desktop host (TRD_TEST_HOST) with Files (Nautilus):
 // - remote → here: a file selected and copied in Files is offered; saving writes it (into a temporary folder here);
 // - here → remote: a file dropped on the desktop is offered on the remote clipboard; Ctrl+V in Files copies it
-//   there, content intact, and nothing lands in the console under the desktop.
+//   there, content intact, and nothing lands in the console under the desktop;
+// - copied here (Finder, macOS): ⌘V in Files pastes a file and a folder with what's in it.
+import { spawn } from 'child_process'
+import * as fs from 'fs'
+import * as path from 'path'
 import { suite } from '../lib/harness.mjs'
 
 await suite('files', async t => {
@@ -53,4 +57,36 @@ await suite('files', async t => {
     }
     t.time('paste → file on the remote', Date.now() - t1)
     check('here → remote: pasted in Files, same content', arrived === content, arrived)
+
+    // 3. Copied here, pasted there: files on this Mac's clipboard (as Finder puts them), ⌘V on the desktop.
+    if (t.platform !== 'darwin' || process.platform !== 'darwin' || t.remoteTabby) {
+        t.skip('copied here, pasted there', 'puts files on the clipboard as Finder does: macOS, with Tabby on this machine')
+        return
+    }
+    await t.clipboard('before the files')  // put back afterwards
+    const local = path.join(here, 'copied')
+    fs.mkdirSync(path.join(local, 'folder'), { recursive: true })
+    const one = `copied here ${Date.now()}\n`
+    fs.writeFileSync(path.join(local, 'copied-here.txt'), one)
+    fs.writeFileSync(path.join(local, 'folder', 'inner.txt'), 'inside the folder\n')
+    const urls = ['copied-here.txt', 'folder'].map(f => `$.NSURL.fileURLWithPath(${JSON.stringify(path.join(local, f))})`).join(', ')
+    // The writer stays running while the paste reads the clipboard, as Finder does: macOS fills in some of its
+    // formats (the list of all the names) from the writer on demand, and loses them when it has gone.
+    const writer = spawn('osascript', ['-l', 'JavaScript', '-e', `ObjC.import('AppKit'); var pb = $.NSPasteboard.generalPasteboard; pb.clearContents; pb.writeObjects($([${urls}])); delay(60); ''`], { stdio: 'ignore' })
+    t.onCleanup(() => writer.kill())
+    await sleep(700)
+    await t.clickDesktop('H.pane', 600, 400)  // the Files window, off any icon
+    await sleep(300)
+    const t2 = Date.now()
+    await t.press('v', ['Meta'])
+    const offeredLine = await t.waitFor('return RD.desktop.logOf(H.pane).findLast(l => /copied here, pasted there/.test(l)) ?? null', 5)
+    check('⌘V with files copied here: offered for that paste (the file, and the folder with its file)', /offered 2 /.test(offeredLine ?? ''), { offeredLine, log: await ev('return RD.desktop.logOf(H.pane).slice(-6)') })
+    let both = ''
+    for (let i = 0; i < 30 && both !== `${one}inside the folder\n`; i++) {
+        await sleep(500)
+        both = await t.remote('H.pane', `cat ${DIR}/copied-here.txt ${DIR}/folder/inner.txt 2>/dev/null`)
+    }
+    t.time('⌘V → copied files on the remote', Date.now() - t2)
+    check('copied here, pasted there: the file and the folder with its file, same content', both === `${one}inside the folder\n`, both)
+    check('the ⌘V pasted once (no stray "v" or old clipboard text there)', !(await t.remote('H.pane', `ls ${DIR}`)).includes('before the files'))
 })

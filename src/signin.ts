@@ -1,4 +1,5 @@
 /** Sign-in for desktops that use their own accounts (Windows): a form in the desktop layer, and the keychain. */
+import { DIRECT_KEY } from './desktops'
 
 export interface Credentials {
     username: string
@@ -58,12 +59,30 @@ export async function forgetCredentials (key: string): Promise<void> {
     } catch { }
 }
 
+/** Whether a saved account is for a desktop at this address behind some SSH host (not a direct one: `rdp#<id>`). */
+function isBehindHost (account: string, desktopId: string): boolean {
+    return account.endsWith(`#${desktopId}`) && !account.startsWith(`${DIRECT_KEY}#`)
+}
+
 /** Forgets saved accounts for a desktop on any SSH host (session keys ending in `#<id>`). */
 export async function forgetCredentialsFor (desktopId: string): Promise<void> {
     try {
         const k = keytar()
         for (const { account } of await answered<{ account: string }[]>(k?.findCredentials(KEYCHAIN_SERVICE)) ?? []) {
-            if (account.endsWith(`#${desktopId}`)) {
+            if (isBehindHost(account, desktopId)) {
+                await answered(k.deletePassword(KEYCHAIN_SERVICE, account))
+            }
+        }
+    } catch { }
+}
+
+/** A desktop's address changed: its saved accounts (session keys ending in `#<from>`) move to the new address. */
+export async function moveCredentialsFor (fromId: string, toId: string): Promise<void> {
+    try {
+        const k = keytar()
+        for (const { account, password } of await answered<{ account: string, password: string }[]>(k?.findCredentials(KEYCHAIN_SERVICE)) ?? []) {
+            if (isBehindHost(account, fromId)) {
+                await answered(k.setPassword(KEYCHAIN_SERVICE, `${account.slice(0, -fromId.length)}${toId}`, password))
                 await answered(k.deletePassword(KEYCHAIN_SERVICE, account))
             }
         }

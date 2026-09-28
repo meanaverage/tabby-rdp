@@ -1,0 +1,47 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: meanaverage <18336095+meanaverage@users.noreply.github.com>
+Date: Sun, 27 Sep 2026 02:35:45 -0700
+Subject: [PATCH 09/10] feat(web): let the host hand `init` the WebAssembly
+ module
+
+`init(logLevel)` always loaded the module from its default location:
+`ironrdp_web_bg.wasm` next to the script, which a library build inlines
+into the bundle as a base64 data URL. A host that ships the .wasm as its
+own file can't always have it fetched from there; `fetch()` of a
+`file://` URL, for one, depends on the embedding browser.
+
+`init` takes an optional second argument, passed to wasm-bindgen's init
+as `module_or_path`: a URL, a `Response`, the bytes or a compiled
+`WebAssembly.Module`. Without it, nothing changes.
+---
+ web-client/iron-remote-desktop-rdp/src/main.ts | 12 ++++++++++--
+ 1 file changed, 10 insertions(+), 2 deletions(-)
+
+diff --git a/web-client/iron-remote-desktop-rdp/src/main.ts b/web-client/iron-remote-desktop-rdp/src/main.ts
+index 87cf1063..5712762c 100644
+--- a/web-client/iron-remote-desktop-rdp/src/main.ts
++++ b/web-client/iron-remote-desktop-rdp/src/main.ts
+@@ -1,4 +1,5 @@
+ import wasm_init, {
++    type InitInput,
+     setup,
+     DesktopSize,
+     DeviceEvent,
+@@ -10,8 +11,15 @@ import wasm_init, {
+ } from '../../../crates/ironrdp-web/pkg/ironrdp_web';
+ import type { H264Done, H264Frame } from './H264Decoder';
+ 
+-export async function init(log_level: string) {
+-    await wasm_init();
++/**
++ * Loads the WebAssembly module and sets up logging.
++ *
++ * `wasm` is where the module comes from: a URL, a `Response`, the bytes or a compiled `WebAssembly.Module`. By
++ * default, `ironrdp_web_bg.wasm` next to this script (or the copy the bundler inlined). Hosts that can't fetch
++ * that URL, such as pages loaded from `file://`, read the file themselves and pass the bytes.
++ */
++export async function init(log_level: string, wasm?: InitInput): Promise<void> {
++    await wasm_init(wasm === undefined ? undefined : { module_or_path: wasm });
+     setup(log_level);
+ }
+ 

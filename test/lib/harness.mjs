@@ -43,6 +43,12 @@ export function env () {
             /** Python with pywinrm on that host: the one provision.sh installs, if there, or python3. */
             winrmPython: e.TRD_TEST_WINRM_PYTHON || '"$(command -v /opt/tabby-rdp-test/winrm/bin/python || echo python3)"',
         },
+        xrdp: {
+            /** An account on the test host that signs in to xrdp with a password (testbed/linux/xrdp.sh). */
+            user: e.TRD_TEST_XRDP_USER || 'tabbyxrdp',
+            password: e.TRD_TEST_XRDP_PASSWORD || '',
+            port: Number(e.TRD_TEST_XRDP_PORT || 3390),
+        },
     }
 }
 
@@ -126,12 +132,19 @@ const PAGE_HELPERS = config => `(() => {
         },
         clickStatus (p, label) { [...(this.overlay(p)?.querySelectorAll('.trd-status button') ?? [])].find(b => b.textContent === label)?.click() },
         toast (p) { return this.overlay(p)?.querySelector('.trd-toast .trd-toast-text')?.textContent ?? '' },
-        /** Whether the pane's desktop connected (its status line was cleared). */
-        connected (p) { return RD.desktop.logOf(p).some(l => /Z $/.test(l)) },
+        /** Whether the pane's desktop connected (not just its status cleared: the sign-in form does that too). */
+        connected (p) { return RD.desktop.logOf(p).some(l => /^connected: /.test(l)) },
         session (p) { return RD.desktop.sessions.get(p) },
-        async menu (p) {
+        /** This plugin's items in a pane's menu (tab header: the tab's menu). */
+        async menu (p, header = false) {
             const { TabContextMenuItemProvider } = require('tabby-core')
-            return (await Promise.all(RD.injector.get(TabContextMenuItemProvider).map(x => x.getItems(p, false)))).flat()
+            const ours = RD.injector.get(TabContextMenuItemProvider).find(x => x.constructor.name === 'RemoteDesktopContextMenu')
+            return ours.getItems(header ? this.topOf(p) : p, header)
+        },
+        /** The same, with the "Desktops" submenu's items in line. */
+        async menuItems (p) {
+            const items = await this.menu(p)
+            return [...items, ...items.find(i => i.label === 'Desktops')?.submenu ?? []]
         },
         /** Closes what the suite opened. */
         async closeAll () {

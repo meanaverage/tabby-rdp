@@ -1,9 +1,68 @@
 # Changelog
 
+## 0.3.0
+
+**New**
+- **Settings › Remote Desktop:** getting started, every setting with a line on what it does, keys and tips, the
+  desktops and certificates the plugin keeps, troubleshooting, and each open desktop's log to copy for a bug report.
+  A tip the first time a desktop connects, and **What does this mean?** under a message that ends a connection.
+- **Several desktops in one tab:** **Paste to all desktops in this tab** (text, pictures, or files copied here),
+  **Type into all desktops in this tab** (a label on each says so while it's on), and **Make panes even**. As you
+  click into a desktop, its name shows in its corner for a moment; when, and its font, size, place and color, are in
+  the settings, with a preview.
+- **Files copied in Finder** (Explorer, Files) paste on the desktop with ⌘V (Ctrl+V), and the paste waits until the
+  remote has taken them in.
+- **VMs on a host:** the libvirt VMs with a desktop on an SSH host (RDP answering, or Windows and shut off) show up in
+  its menu, ready to open, or to start and open. **Find virtual machines on SSH hosts** turns it off.
+- **`ssh` typed in an SSH tab:** **Desktop** and `desk` there open the machine it went to, through the tab's host, and
+  Reconnect stays with it.
+- **Remote desktop (RDP) profiles:** desktops as Tabby profiles, in their own tab: connect directly to an RDP server
+  this machine reaches (LAN, VPN), or through an SSH profile. They show up in the profile list, quick connect
+  (`user@host:port`), recent profiles and tab recovery. **Import an .rdp file…** turns a saved Remote Desktop
+  connection into one.
+- **Linux desktops through xrdp** (KDE, XFCE, MATE, …): the SSH host's own desktop is xrdp's when GNOME isn't there,
+  and offered next to GNOME when both are; `kind: xrdp` for desktops behind a host. Signs in with the Linux account.
+- **Windows as the SSH host:** an SSH host that is itself Windows (OpenSSH server) opens its own RDP desktop.
+- **H.264 video decoding** (setting **Video decoding**, on by default), hardware-accelerated where Tabby's engine can:
+  Windows desktops now use the graphics pipeline with H.264 for what changes like video, instead of bitmaps; GNOME
+  uses it when its machine has a hardware encoder.
+- **Microphone** (off by default): an app on the remote desktop that records gets your microphone, only while it
+  records, with an indicator.
+- **Send keys:** Ctrl+Alt+Del, Win+R, Win+L, Task Manager and more for Windows; Super, the app grid, Alt+F2 for GNOME.
+  From a Mac, ⌃⌘ with a key is the Windows key with it (⌃⌘R for Win+R).
+- **View only**, **Save a screenshot** (to Downloads and the clipboard), and **actual size** with scroll bars for a
+  fixed resolution.
+- **Certificates:** GNOME desktops accept only the certificate the plugin made for them; other desktops remember theirs
+  on first use and stop to ask, before signing in, if it changes.
+- **Edit a desktop** behind a host from the menus (name, address, account, kind).
+- **Wake before connecting:** `wake: { vm }` starts a libvirt VM on the SSH host, `wake: { mac }` sends Wake-on-LAN,
+  when the desktop doesn't answer.
+- **Connection status** (off by default): throughput, frames per second, SSH round trip and how it's connected, in the
+  desktop's corner.
+
+**Fixed**
+- `desk` run on another machine than the tab's (after `ssh` there, or with a shared home folder) opened a terminal on
+  the wrong desktop; it's refused now, with a note that says why.
+- Windows over the graphics pipeline: IronRDP's RemoteFX Progressive decoder rejected Windows' refinement passes and
+  ended the session (patch 0010, for upstream).
+
+**Package**
+- IronRDP's WebAssembly ships as its own file instead of a 6.6 MB base64 string inside the JavaScript: the package is
+  about 2 MB instead of 2.7 MB.
+- Releases are built and staged on npm by GitHub Actions, with provenance.
+
+**Changed**
+- Hosts are called by their SSH profile's name (not its address) in messages and the on-screen name.
+- **Remove a desktop** asks first.
+- **Menus:** the plugin's items in a terminal's or tab's menu start with a **Remote Desktop** heading (naming the
+  desktop while one is connected), so they read as the plugin's rather than Tabby's. Under it the items are shorter:
+  **Send files…**, **Disconnect** and **Settings**, and the host's other desktops (and VMs found there) and
+  **Add a desktop behind \<host\>…** are under **Desktops**.
+
 ## 0.2.7
 
-(0.2.6 was never released: its staged publish on npm didn't go through, and npm doesn't reuse a version
-number. 0.2.7 is the same change.)
+(0.2.6 carries the same change: its staged publish on npm looked like it had failed and only appeared later, so the
+change was released again as 0.2.7.)
 
 **Security**
 - Files copied on the remote desktop are saved inside the folder you save them to (Downloads). Their names come from

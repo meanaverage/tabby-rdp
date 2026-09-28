@@ -34,6 +34,41 @@ Desktop, PipeWire's tools, Python's GObject bindings, `pywinrm`, tmux and OpenSS
 mode (the plugin runs its own headless GNOME session); and lets the test user's systemd run without a login. Give the
 VM 2 CPUs, 4 GB of memory and 20 GB of disk. No GPU is needed.
 
+### xrdp, for the xrdp suite (optional)
+
+On the same host, after `provision.sh`:
+
+```sh
+scp testbed/linux/xrdp.sh user@host: && ssh -t user@host "sudo TEST_PASSWORD='<a password>' sh xrdp.sh"
+```
+
+[`xrdp.sh`](linux/xrdp.sh) installs xrdp with XFCE (and `pipewire-module-xrdp` for sound, where the release has it),
+sets xrdp's port to 3390 so that it doesn't clash with GNOME Remote Desktop on 3389, and creates an account,
+`tabbyxrdp`, with that password, XFCE as its session and the test user's SSH keys. It leaves xrdp stopped: the xrdp
+suite starts it for its run with the test user's `sudo` (passwordless on Ubuntu's cloud images) and stops it
+afterwards, so that for the other suites the host has GNOME only. Then:
+
+```sh
+export TRD_TEST_XRDP_PASSWORD='<the password>'   # TRD_TEST_XRDP_USER=tabbyxrdp and TRD_TEST_XRDP_PORT=3390 are the defaults
+npm test -- xrdp
+```
+
+The suite checks both ways a host offers xrdp: next to GNOME, as a second desktop (with the test user), and as the
+host's own desktop where GNOME isn't installed (with `tabbyxrdp`, running the plugin's setup with a `PATH` that has no
+`grdctl` or `gnome-shell`).
+
+### A second account to ssh on to, for the nested suite (optional)
+
+After `xrdp.sh`, as the test user on the host:
+
+```sh
+scp testbed/linux/nested.sh user@host: && ssh user@host sh nested.sh
+```
+
+[`nested.sh`](linux/nested.sh) lets the test user `ssh trdhop` to the `tabbyxrdp` account without a password (a key
+made for it), the way you would ssh on from one machine to the next, and moves that account's GNOME Remote Desktop to
+port 3391 (the test user's has 3389). Then `TRD_TEST_NESTED=trdhop npm test -- nested`.
+
 ## Windows machine
 
 Windows 10 or 11 Pro (or Windows Server), for example a VM on the same virtual network as the Linux test host.

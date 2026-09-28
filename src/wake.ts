@@ -1,0 +1,134 @@
+import { shq } from './deskScript'
+import { RemoteTarget } from './targets'
+
+/**
+ * `wake` of a desktop behind a host: how to start it when it is off. `vm`: a libvirt domain on the SSH host,
+ * started with `virsh` as the SSH user. `mac`: a Wake-on-LAN magic packet, sent from the SSH host (UDP broadcast,
+ * by default to 255.255.255.255 port 9).
+ */
+export type WakeSpec = { vm: string } | { mac: string, broadcast?: string, port?: number }
+
+const MAC = /^[0-9a-f]{2}([:-]?)[0-9a-f]{2}(\1[0-9a-f]{2}){4}$/i
+const IPV4 = /^\d{1,3}(\.\d{1,3}){3}$/
+
+/** A `wake` config value, checked; undefined when absent or unusable. */
+export function parseWake (raw: any): WakeSpec | undefined {
+    if (typeof raw?.vm === 'string' && raw.vm.trim()) {
+        return { vm: raw.vm.trim() }
+    }
+    const mac = typeof raw?.mac === 'string' ? raw.mac.trim() : ''
+    if (MAC.test(mac)) {
+        const port = Number(raw.port ?? 9)
+        return {
+            mac,
+            ...typeof raw.broadcast === 'string' && IPV4.test(raw.broadcast.trim()) ? { broadcast: raw.broadcast.trim() } : {},
+            ...Number.isInteger(port) && port > 0 && port < 65536 && port !== 9 ? { port } : {},
+        }
+    }
+    return undefined
+}
+
+/** The add-desktop form's wake field: a MAC address means Wake-on-LAN, anything else names a libvirt VM. */
+export function wakeFromText (text: string): WakeSpec | undefined {
+    const value = text.trim()
+    return !value ? undefined : MAC.test(value) ? { mac: value } : { vm: value }
+}
+
+// Whether an RDP server answers at $H:$P, as seen from the SSH host: an X.224 connection request must get a TPKT
+// reply, since a port can accept connections before the server behind it does (QEMU's user-mode port forwarding,
+// for one). Without python3, an open TCP port will do.
+const PROBE_SCRIPT = String.raw`
+if command -v python3 >/dev/null 2>&1; then
+    python3 -c '
+import socket, sys
+try:
+    s = socket.create_connection((sys.argv[1], int(sys.argv[2])), 3)
+    s.settimeout(3)
+    s.sendall(bytes.fromhex("030000130ee000000000000100080003000000"))
+    print("RD_OPEN" if s.recv(2) == b"\x03\x00" else "RD_CLOSED")
+except Exception:
+    print("RD_CLOSED")
+' "$H" "$P"
+elif command -v nc >/dev/null 2>&1; then
+    nc -z -w 3 "$H" "$P" >/dev/null 2>&1 && echo RD_OPEN || echo RD_CLOSED
+else
+    timeout 3 bash -c 'exec 3<>"/dev/tcp/$0/$1"' "$H" "$P" >/dev/null 2>&1 && echo RD_OPEN || echo RD_CLOSED
+fi
+`
+
+// Starts (or resumes) the libvirt domain $VM as the SSH user: the system instance first, where VMs usually are
+// (needs the libvirt group or polkit), then the user's own session instance.
+const VM_SCRIPT = String.raw`
+command -v virsh >/dev/null 2>&1 || { echo "RD_ERR virsh is not installed on the SSH host"; exit 0; }
+errors=""
+for uri in qemu:///system qemu:///session; do
+    if ! state=$(virsh -c "$uri" domstate "$VM" 2>&1); then
+        errors="$errors${"$"}{errors:+; }$uri: $(printf '%s' "$state" | tr '\n' ' ' | sed 's/^error: //' | cut -c1-160)"
+        continue
+    fi
+    case $(printf '%s\n' "$state" | head -n 1) in
+        running) echo "RD_OK $VM is already running ($uri)"; exit 0 ;;
+        paused) how=resumed; out=$(virsh -c "$uri" resume "$VM" 2>&1) ;;
+        pmsuspended) how="woken up"; out=$(virsh -c "$uri" dompmwakeup "$VM" 2>&1) ;;
+        *) how=started; out=$(virsh -c "$uri" start "$VM" 2>&1) ;;
+    esac && { echo "RD_OK $VM $how ($uri)"; exit 0; }
+    echo "RD_ERR virsh: $(printf '%s' "$out" | tr '\n' ' ' | sed 's/^error: //' | cut -c1-240)"
+    exit 0
+done
+echo "RD_ERR no libvirt VM named $VM for this user ($errors)"
+`
+
+// A Wake-on-LAN magic packet ($MAC 16 times after 6 bytes of 0xff) to $BCAST:$PORT, with the standard library.
+const WOL_SCRIPT = String.raw`
+command -v python3 >/dev/null 2>&1 || { echo "RD_ERR sending Wake-on-LAN needs python3 on the SSH host"; exit 0; }
+python3 -c '
+import socket, sys
+mac = bytes.fromhex(sys.argv[1].replace(":", "").replace("-", ""))
+s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+s.sendto(b"\xff" * 6 + mac * 16, (sys.argv[2], int(sys.argv[3])))
+print("RD_OK Wake-on-LAN sent to %s via %s:%s" % tuple(sys.argv[1:4]))
+' "$MAC" "$BCAST" "$PORT" 2>&1 || echo "RD_ERR could not send the Wake-on-LAN packet"
+`
+
+/** Whether the RDP server at host:port answers, as seen from the SSH host. */
+export async function rdpAnswers (target: RemoteTarget, host: string, port: number): Promise<boolean> {
+    const out = await target.exec('sh -s', `H=${shq(host)}\nP=${port}\n${PROBE_SCRIPT}`)
+    return /^RD_OPEN$/m.test(out)
+}
+
+/** Starts the desktop as `wake` says. Resolves with what was done; throws with the reason when it couldn't. */
+export async function wakeDesktop (target: RemoteTarget, wake: WakeSpec): Promise<string> {
+    const script = 'vm' in wake
+        ? `VM=${shq(wake.vm)}\n${VM_SCRIPT}`
+        : `MAC=${shq(wake.mac)}\nBCAST=${shq(wake.broadcast ?? '255.255.255.255')}\nPORT=${wake.port ?? 9}\n${WOL_SCRIPT}`
+    const out = await target.exec('sh -s', script)
+    const err = /^RD_ERR (.*)$/m.exec(out)
+    if (err) {
+        throw new Error(err[1].trim())
+    }
+    return /^RD_OK (.*)$/m.exec(out)?.[1] ?? 'no result'
+}
+
+/**
+ * Probes until the RDP server answers (true), the time is up or `stopped()` (false). At most one probe every
+ * 3 s; `progress` is called every 5 s.
+ */
+export async function waitForRdp (
+    target: RemoteTarget, host: string, port: number, timeoutMs: number, stopped: () => boolean, progress: () => void,
+): Promise<boolean> {
+    const deadline = Date.now() + timeoutMs
+    const ticker = setInterval(() => stopped() || progress(), 5000)
+    try {
+        while (Date.now() < deadline && !stopped()) {
+            const started = Date.now()
+            if (await rdpAnswers(target, host, port).catch(() => false)) {
+                return !stopped()
+            }
+            await new Promise(resolve => setTimeout(resolve, Math.max(0, 3000 - (Date.now() - started))))
+        }
+        return false
+    } finally {
+        clearInterval(ticker)
+    }
+}

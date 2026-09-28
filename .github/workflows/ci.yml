@@ -2,7 +2,6 @@ name: CI
 
 on:
   push:
-    branches: [main]
   pull_request:
 
 permissions:
@@ -27,8 +26,12 @@ jobs:
           npm pack --dry-run 2>&1 | tee pack.txt
           grep -q 'dist/index.js' pack.txt
           grep -q 'vendor/iron-remote-desktop-rdp.js' pack.txt
+          grep -q 'vendor/ironrdp_web_bg.wasm' pack.txt
           grep -q 'remote/trd-pty.py' pack.txt
           ! grep -qE ' (src|test|testbed|docs|ironrdp)/' pack.txt
+      - name: No inlined assets in vendor/
+        # The WebAssembly ships as its own file (scripts/build-ironrdp.sh), not as a base64 data URL in the bundle.
+        run: "! grep -l ';base64,' vendor/*.js"
 
   trd-pty:
     name: trd-pty
@@ -52,3 +55,32 @@ jobs:
             echo "applying $(basename "$patch")"
             git apply --whitespace=nowarn "$patch"
           done
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: The web component's tests, patches included
+        working-directory: ironrdp-src/web-client/iron-remote-desktop
+        run: |
+          npm ci --no-audit --no-fund
+          npx vitest run
+
+  names:
+    name: No internal names
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # The maintainers' private host and domain names, one extended regex per line, in the repository secret
+      # INTERNAL_NAMES (not in the repository, where they would be what it keeps out). Skipped without it, as for
+      # pull requests from forks, which don't get secrets.
+      - name: Check
+        env:
+          INTERNAL_NAMES: ${{ secrets.INTERNAL_NAMES }}
+        run: |
+          if [ -z "$INTERNAL_NAMES" ]; then echo "INTERNAL_NAMES is not set: skipped"; exit 0; fi
+          printf '%s\n' "$INTERNAL_NAMES" | sed '/^[[:space:]]*$/d' > "$RUNNER_TEMP/names"
+          # vendor/ is IronRDP's build: its base64 data matches short names by chance.
+          if git ls-files -z | grep -zv '^vendor/' | xargs -0 grep -n -I -i -E -f "$RUNNER_TEMP/names" > "$RUNNER_TEMP/hits"; then
+            echo "Internal names found (the matching lines are not shown here):"
+            cut -d: -f1,2 "$RUNNER_TEMP/hits"
+            exit 1
+          fi

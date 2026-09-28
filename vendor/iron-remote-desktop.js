@@ -10,7 +10,7 @@ var __privateAdd = (obj, member, value) => member.has(obj) ? __typeError("Cannot
 var __privateSet = (obj, member, value, setter) => (__accessCheck(obj, member, "write to private field"), setter ? setter.call(obj, value) : member.set(obj, value), value);
 var _t2, _e2, _a, _b;
 typeof window < "u" && (window.__svelte || (window.__svelte = { v: /* @__PURE__ */ new Set() })).v.add("5");
-const dr = 2, fr = "[", hr = "]", Je = {}, V = Symbol(), si = false, Z = 2, gi = 4, St = 8, Yt = 16, ye = 32, Ie = 64, pt = 128, G = 256, vt = 512, j = 1024, Ce = 2048, We = 4096, wt = 8192, Dt = 16384, br = 32768, pr = 65536, vr = 1 << 19, _i = 1 << 20, ct = Symbol("$state"), wr = Symbol("legacy props");
+const dr = 2, fr = "[", hr = "]", Je = {}, W = Symbol(), si = false, Z = 2, gi = 4, St = 8, Yt = 16, ye = 32, Ie = 64, pt = 128, G = 256, vt = 512, j = 1024, Ce = 2048, Ke = 4096, wt = 8192, Dt = 16384, br = 32768, pr = 65536, vr = 1 << 19, _i = 1 << 20, ct = Symbol("$state"), wr = Symbol("legacy props");
 var xi = Array.isArray, mr = Array.prototype.indexOf, gr = Array.from, mt = Object.keys, gt = Object.defineProperty, ze = Object.getOwnPropertyDescriptor, _r = Object.getOwnPropertyDescriptors, xr = Object.prototype, yr = Array.prototype, yi = Object.getPrototypeOf;
 const dt = () => {
 };
@@ -110,7 +110,7 @@ function Ti(t, e) {
       (c & Ce) === 0 && (ue(o, e), (c & (j | G)) !== 0 && ((c & Z) !== 0 ? Ti(
         /** @type {Derived} */
         o,
-        We
+        Ke
       ) : ei(
         /** @type {Effect} */
         o
@@ -173,7 +173,7 @@ function Ur(t) {
   return e;
 }
 function Ai(t) {
-  var e = Ur(t), i = (me || (t.f & G) !== 0) && t.deps !== null ? We : j;
+  var e = Ur(t), i = (me || (t.f & G) !== 0) && t.deps !== null ? Ke : j;
   ue(t, i), t.equals(e) || (t.v = e, t.wv = Ui());
 }
 function Zt(t) {
@@ -226,7 +226,7 @@ function Se(t, e = null, i) {
       deleteProperty(h, d) {
         var p = n.get(d);
         if (p === void 0)
-          d in h && n.set(d, re(V));
+          d in h && n.set(d, re(W));
         else {
           if (o && typeof d == "string") {
             var w = (
@@ -235,7 +235,7 @@ function Se(t, e = null, i) {
             ), s = Number(d);
             Number.isInteger(s) && s < w.v && H(w, s);
           }
-          H(p, V), ai(c);
+          H(p, W), ai(c);
         }
         return true;
       },
@@ -244,9 +244,9 @@ function Se(t, e = null, i) {
         if (d === ct)
           return t;
         var w = n.get(d), s = d in h;
-        if (w === void 0 && (!s || ((_a2 = ze(h, d)) == null ? void 0 : _a2.writable)) && (w = re(Se(s ? h[d] : V, f)), n.set(d, w)), w !== void 0) {
+        if (w === void 0 && (!s || ((_a2 = ze(h, d)) == null ? void 0 : _a2.writable)) && (w = re(Se(s ? h[d] : W, f)), n.set(d, w)), w !== void 0) {
           var a = P(w);
-          return a === V ? void 0 : a;
+          return a === W ? void 0 : a;
         }
         return Reflect.get(h, d, p);
       },
@@ -257,7 +257,7 @@ function Se(t, e = null, i) {
           w && (p.value = P(w));
         } else if (p === void 0) {
           var s = n.get(d), a = s == null ? void 0 : s.v;
-          if (s !== void 0 && a !== V)
+          if (s !== void 0 && a !== W)
             return {
               enumerable: true,
               configurable: true,
@@ -271,11 +271,11 @@ function Se(t, e = null, i) {
         var _a2;
         if (d === ct)
           return true;
-        var p = n.get(d), w = p !== void 0 && p.v !== V || Reflect.has(h, d);
+        var p = n.get(d), w = p !== void 0 && p.v !== W || Reflect.has(h, d);
         if (p !== void 0 || D !== null && (!w || ((_a2 = ze(h, d)) == null ? void 0 : _a2.writable))) {
-          p === void 0 && (p = re(w ? Se(h[d], f) : V), n.set(d, p));
+          p === void 0 && (p = re(w ? Se(h[d], f) : W), n.set(d, p));
           var s = P(p);
-          if (s === V)
+          if (s === W)
             return false;
         }
         return w;
@@ -287,9 +287,9 @@ function Se(t, e = null, i) {
           for (var l = p; l < /** @type {Source<number>} */
           s.v; l += 1) {
             var u = n.get(l + "");
-            u !== void 0 ? H(u, V) : l in h && (u = re(V), n.set(l + "", u));
+            u !== void 0 ? H(u, W) : l in h && (u = re(W), n.set(l + "", u));
           }
-        s === void 0 ? (!a || ((_a2 = ze(h, d)) == null ? void 0 : _a2.writable)) && (s = re(void 0), H(s, Se(p, f)), n.set(d, s)) : (a = s.v !== V, H(s, Se(p, f)));
+        s === void 0 ? (!a || ((_a2 = ze(h, d)) == null ? void 0 : _a2.writable)) && (s = re(void 0), H(s, Se(p, f)), n.set(d, s)) : (a = s.v !== W, H(s, Se(p, f)));
         var b = Reflect.getOwnPropertyDescriptor(h, d);
         if ((b == null ? void 0 : b.set) && b.set.call(w, p), !a) {
           if (o && typeof d == "string") {
@@ -307,10 +307,10 @@ function Se(t, e = null, i) {
         P(c);
         var d = Reflect.ownKeys(h).filter((s) => {
           var a = n.get(s);
-          return a === void 0 || a.v !== V;
+          return a === void 0 || a.v !== W;
         });
         for (var [p, w] of n)
-          w.v !== V && !(p in h) && d.push(p);
+          w.v !== W && !(p in h) && d.push(p);
         return d;
       },
       setPrototypeOf() {
@@ -323,7 +323,7 @@ function ai(t, e = 1) {
   H(t, t.v + e);
 }
 var li, Li, Mi, Fi;
-function Wt() {
+function Kt() {
   if (li === void 0) {
     li = window, Li = /Firefox/.test(navigator.userAgent);
     var t = Element.prototype, e = Node.prototype;
@@ -383,7 +383,7 @@ function Rt(t) {
   var e = t.f;
   if ((e & Ce) !== 0)
     return true;
-  if ((e & We) !== 0) {
+  if ((e & Ke) !== 0) {
     var i = t.deps, r = (e & G) !== 0;
     if (i !== null) {
       var n, o, c = (e & vt) !== 0, f = r && D !== null && !me, h = i.length;
@@ -410,7 +410,7 @@ function Rt(t) {
   }
   return false;
 }
-function Wr(t, e) {
+function Kr(t, e) {
   for (var i = e; i !== null; ) {
     if ((i.f & pt) !== 0)
       try {
@@ -423,18 +423,18 @@ function Wr(t, e) {
   }
   throw ft = false, t;
 }
-function Vr(t) {
+function Wr(t) {
   return (t.f & Dt) === 0 && (t.parent === null || (t.parent.f & pt) === 0);
 }
 function $t(t, e, i, r) {
   if (ft) {
-    if (i === null && (ft = false), Vr(e))
+    if (i === null && (ft = false), Wr(e))
       throw t;
     return;
   }
   i !== null && (ft = true);
   {
-    Wr(t, e);
+    Kr(t, e);
     return;
   }
 }
@@ -448,7 +448,7 @@ function Bi(t, e, i = true) {
         o,
         e,
         false
-      ) : e === o && (i ? ue(o, Ce) : (o.f & j) !== 0 && ue(o, We), ei(
+      ) : e === o && (i ? ue(o, Ce) : (o.f & j) !== 0 && ue(o, Ke), ei(
         /** @type {Effect} */
         o
       ));
@@ -475,7 +475,7 @@ function zi(t) {
         for (s = q; s < w.length; s++)
           ((_a2 = w[s]).reactions ?? (_a2.reactions = [])).push(t);
     } else w !== null && q < w.length && (kt(t, q), w.length = q);
-    if (Xi() && ae !== null && !X && w !== null && (t.f & (Z | We | Ce)) === 0)
+    if (Xi() && ae !== null && !X && w !== null && (t.f & (Z | Ke | Ce)) === 0)
       for (s = 0; s < /** @type {Source[]} */
       ae.length; s++)
         Bi(
@@ -488,7 +488,7 @@ function zi(t) {
     N = e, q = i, ae = r, k = n, me = o, ne = c, ci(f), X = h;
   }
 }
-function Kr(t, e) {
+function Vr(t, e) {
   let i = e.reactions;
   if (i !== null) {
     var r = mr.call(i, t);
@@ -500,7 +500,7 @@ function Kr(t, e) {
   i === null && (e.f & Z) !== 0 && // Destroying a child effect while updating a parent effect can cause a dependency to appear
   // to be unused, when in fact it is used by the currently-updating parent. Checking `new_deps`
   // allows us to skip the expensive work of disconnecting and immediately reconnecting it
-  (N === null || !N.includes(e)) && (ue(e, We), (e.f & (G | vt)) === 0 && (e.f ^= vt), $i(
+  (N === null || !N.includes(e)) && (ue(e, Ke), (e.f & (G | vt)) === 0 && (e.f ^= vt), $i(
     /** @type {Derived} **/
     e
   ), kt(
@@ -513,7 +513,7 @@ function kt(t, e) {
   var i = t.deps;
   if (i !== null)
     for (var r = e; r < i.length; r++)
-      Kr(t, i[r]);
+      Vr(t, i[r]);
 }
 function Jt(t) {
   var e = t.f;
@@ -522,7 +522,7 @@ function Jt(t) {
     var i = D, r = U, n = ht;
     D = t, ht = true;
     try {
-      (e & Yt) !== 0 ? sn(t) : Ki(t), Vi(t);
+      (e & Yt) !== 0 ? sn(t) : Vi(t), Wi(t);
       var o = zi(t);
       t.teardown = typeof o == "function" ? o : null, t.wv = Pi;
       var c = t.deps, f;
@@ -735,7 +735,7 @@ function en(t) {
 function ti(t) {
   return De(gi, t, false);
 }
-function Wi(t) {
+function Ki(t) {
   return De(St, t, true);
 }
 function tn(t, e = [], i = Ri) {
@@ -748,7 +748,7 @@ function rn(t, e = 0) {
 function nn(t, e = true) {
   return De(St | ye, t, true, e);
 }
-function Vi(t) {
+function Wi(t) {
   var e = t.teardown;
   if (e !== null) {
     const i = Qt, r = k;
@@ -760,7 +760,7 @@ function Vi(t) {
     }
   }
 }
-function Ki(t, e = false) {
+function Vi(t, e = false) {
   var i = t.first;
   for (t.first = t.last = null; i !== null; ) {
     var r = i.next;
@@ -785,12 +785,12 @@ function xe(t, e = true) {
     }
     i = true;
   }
-  Ki(t, e && !i), kt(t, 0), ue(t, Dt);
+  Vi(t, e && !i), kt(t, 0), ue(t, Dt);
   var c = t.transitions;
   if (c !== null)
     for (const h of c)
       h.stop();
-  Vi(t);
+  Wi(t);
   var f = t.parent;
   f !== null && f.first !== null && qi(t), t.next = t.prev = t.teardown = t.ctx = t.deps = t.fn = t.nodes_start = t.nodes_end = null;
 }
@@ -880,7 +880,7 @@ function cn(t) {
     ge(e), _e(i);
   }
 }
-const Zi = /* @__PURE__ */ new Set(), Vt = /* @__PURE__ */ new Set();
+const Zi = /* @__PURE__ */ new Set(), Wt = /* @__PURE__ */ new Set();
 function dn(t, e, i, r = {}) {
   function n(o) {
     if (r.capture || Xe.call(e, o), !o.cancelBubble)
@@ -899,7 +899,7 @@ function lt(t, e, i, r, n) {
 function fn(t) {
   for (var e = 0; e < t.length; e++)
     Zi.add(t[e]);
-  for (var i of Vt)
+  for (var i of Wt)
     i(t);
 }
 function Xe(t) {
@@ -971,7 +971,7 @@ function hn(t) {
   var e = document.createElement("template");
   return e.innerHTML = t, e.content;
 }
-function Kt(t, e) {
+function Vt(t, e) {
   var i = (
     /** @type {Effect} */
     D
@@ -983,14 +983,14 @@ function bn(t, e) {
   var i = (e & dr) !== 0, r, n = !t.startsWith("<!>");
   return () => {
     if (Q)
-      return Kt(z, null), z;
+      return Vt(z, null), z;
     r === void 0 && (r = hn(n ? t : "<!>" + t), r = /** @type {Node} */
     /* @__PURE__ */ xt(r));
     var o = (
       /** @type {TemplateNode} */
       i || Li ? document.importNode(r, true) : r.cloneNode(true)
     );
-    return Kt(o, o), o;
+    return Vt(o, o), o;
   };
 }
 function Qi(t, e) {
@@ -1007,7 +1007,7 @@ function Ji(t, e) {
   return er(t, e);
 }
 function pn(t, e) {
-  Wt(), e.intro = e.intro ?? false;
+  Kt(), e.intro = e.intro ?? false;
   const i = e.target, r = Q, n = z;
   try {
     for (var o = (
@@ -1031,7 +1031,7 @@ function pn(t, e) {
     c;
   } catch (c) {
     if (c === Je)
-      return e.recover === false && Rr(), Wt(), Br(i), at(false), Ji(t, e);
+      return e.recover === false && Rr(), Kt(), Br(i), at(false), Ji(t, e);
     throw c;
   } finally {
     at(r), _t(n);
@@ -1039,7 +1039,7 @@ function pn(t, e) {
 }
 const Ne = /* @__PURE__ */ new Map();
 function er(t, { target: e, anchor: i, props: r = {}, events: n, context: o, intro: c = true }) {
-  Wt();
+  Kt();
   var f = /* @__PURE__ */ new Set(), h = (w) => {
     for (var s = 0; s < w.length; s++) {
       var a = w[s];
@@ -1052,7 +1052,7 @@ function er(t, { target: e, anchor: i, props: r = {}, events: n, context: o, int
       }
     }
   };
-  h(gr(Zi)), Vt.add(h);
+  h(gr(Zi)), Wt.add(h);
   var d = void 0, p = en(() => {
     var w = i ?? e.appendChild(Ni());
     return nn(() => {
@@ -1064,7 +1064,7 @@ function er(t, { target: e, anchor: i, props: r = {}, events: n, context: o, int
         );
         s.c = o;
       }
-      n && (r.$$events = n), Q && Kt(
+      n && (r.$$events = n), Q && Vt(
         /** @type {TemplateNode} */
         w,
         null
@@ -1079,7 +1079,7 @@ function er(t, { target: e, anchor: i, props: r = {}, events: n, context: o, int
         );
         --a === 0 ? (document.removeEventListener(s, Xe), Ne.delete(s)) : Ne.set(s, a);
       }
-      Vt.delete(h), w !== i && ((_a2 = w.parentNode) == null ? void 0 : _a2.removeChild(w));
+      Wt.delete(h), w !== i && ((_a2 = w.parentNode) == null ? void 0 : _a2.removeChild(w));
     };
   });
   return qt.set(d, p), d;
@@ -1159,7 +1159,7 @@ function bi(t, e) {
 function Ut(t = {}, e, i, r) {
   return ti(() => {
     var n, o;
-    return Wi(() => {
+    return Ki(() => {
       n = o, o = [], it(() => {
         t !== i(...o) && (e(t, ...o), n && bi(i(...n), t) && e(null, ...n));
       });
@@ -1425,7 +1425,7 @@ typeof HTMLElement == "function" && (nr = class extends HTMLElement {
           $$host: this
         }
       }), this.$$me = Jr(() => {
-        Wi(() => {
+        Ki(() => {
           var _a2;
           this.$$r = true;
           for (const r of mt(this.$$c)) {
@@ -1570,7 +1570,7 @@ var Ze = { exports: {} }, Rn = Ze.exports, pi;
 function $n() {
   return pi || (pi = 1, (function(t, e) {
     (function(i, r) {
-      var n = "1.0.41", o = "", c = "?", f = "function", h = "undefined", d = "object", p = "string", w = "major", s = "model", a = "name", l = "type", u = "vendor", b = "version", $ = "architecture", M = "console", _ = "mobile", m = "tablet", A = "smarttv", O = "wearable", ce = "embedded", Ve = 500, Te = "Amazon", de = "Apple", fe = "ASUS", rt = "BlackBerry", Re = "Browser", $e = "Chrome", At = "Edge", Ee = "Firefox", Ae = "Google", nt = "Honor", st = "Huawei", Ot = "Lenovo", Oe = "LG", Le = "Microsoft", Ke = "Motorola", qe = "Nvidia", He = "OnePlus", he = "Opera", Me = "OPPO", J = "Samsung", be = "Sharp", pe = "Sony", ke = "Xiaomi", I = "Zebra", v = "Facebook", T = "Chromium OS", F = "Mac OS", R = " Browser", W = function(y, C) {
+      var n = "1.0.41", o = "", c = "?", f = "function", h = "undefined", d = "object", p = "string", w = "major", s = "model", a = "name", l = "type", u = "vendor", b = "version", $ = "architecture", M = "console", _ = "mobile", m = "tablet", A = "smarttv", O = "wearable", ce = "embedded", We = 500, Te = "Amazon", de = "Apple", fe = "ASUS", rt = "BlackBerry", Re = "Browser", $e = "Chrome", At = "Edge", Ee = "Firefox", Ae = "Google", nt = "Honor", st = "Huawei", Ot = "Lenovo", Oe = "LG", Le = "Microsoft", Ve = "Motorola", qe = "Nvidia", He = "OnePlus", he = "Opera", Me = "OPPO", J = "Samsung", be = "Sharp", pe = "Sony", ke = "Xiaomi", I = "Zebra", v = "Facebook", T = "Chromium OS", F = "Mac OS", R = " Browser", K = function(y, C) {
         var x = {};
         for (var S in y)
           C[S] && C[S].length % 2 === 0 ? x[S] = C[S].concat(y[S]) : x[S] = y[S];
@@ -1587,7 +1587,7 @@ function $n() {
         return typeof y === p ? y.replace(/[^\d\.]/g, o).split(".")[0] : r;
       }, Lt = function(y, C) {
         if (typeof y === p)
-          return y = y.replace(/^\s\s*/, o), typeof C === h ? y : y.substring(0, Ve);
+          return y = y.replace(/^\s\s*/, o), typeof C === h ? y : y.substring(0, We);
       }, je = function(y, C) {
         for (var x = 0, S, oe, ee, E, g, te; x < C.length && !g; ) {
           var Mt = C[x], ni = C[x + 1];
@@ -2098,11 +2098,11 @@ function $n() {
             /\bmot(?:orola)?[- ](\w*)/i,
             /((?:moto(?! 360)[\w\(\) ]+|xt\d{3,4}|nexus 6)(?= bui|\)))/i
           ],
-          [s, [u, Ke], [l, _]],
+          [s, [u, Ve], [l, _]],
           [
             /\b(mz60\d|xoom[2 ]{0,2}) build\//i
           ],
-          [s, [u, Ke], [l, m]],
+          [s, [u, Ve], [l, m]],
           [
             // LG
             /((?=lg)?[vl]k\-?\d{3}) bui| 3\.[-\w; ]{10}lg?-([06cv9]{3,4})/i
@@ -2582,7 +2582,7 @@ function $n() {
             /(moto 360)/i
             // Motorola 360
           ],
-          [s, [u, Ke], [l, O]],
+          [s, [u, Ve], [l, O]],
           [
             /(smartwatch 3)/i
             // Sony SmartWatch
@@ -2845,7 +2845,7 @@ function $n() {
       }, Y = function(y, C) {
         if (typeof y === d && (C = y, y = r), !(this instanceof Y))
           return new Y(y, C).getResult();
-        var x = typeof i !== h && i.navigator ? i.navigator : r, S = y || (x && x.userAgent ? x.userAgent : o), oe = x && x.userAgentData ? x.userAgentData : r, ee = C ? W(ri, C) : ri, E = x && x.userAgent == S;
+        var x = typeof i !== h && i.navigator ? i.navigator : r, S = y || (x && x.userAgent ? x.userAgent : o), oe = x && x.userAgentData ? x.userAgentData : r, ee = C ? K(ri, C) : ri, E = x && x.userAgent == S;
         return this.getBrowser = function() {
           var g = {};
           return g[a] = r, g[b] = r, je.call(g, S, ee.browser), g[w] = ur(g[b]), E && x && x.brave && typeof x.brave.isBrave == f && (g[a] = "Brave"), g;
@@ -2873,7 +2873,7 @@ function $n() {
         }, this.getUA = function() {
           return S;
         }, this.setUA = function(g) {
-          return S = typeof g === p && g.length > Ve ? Lt(g, Ve) : g, this;
+          return S = typeof g === p && g.length > We ? Lt(g, We) : g, this;
         }, this.setUA(S), this;
       };
       Y.VERSION = n, Y.BROWSER = B([a, b, w]), Y.CPU = B([$]), Y.DEVICE = B([s, u, l, M, _, A, m, O, ce]), Y.ENGINE = Y.OS = B([a, b]), t.exports && (e = t.exports = Y), e.UAParser = Y;
@@ -3572,6 +3572,11 @@ class zn {
   ctrlV() {
     this.remoteDesktopService.sendSpecialCombination(le.CTRL_V);
   }
+  // Keys for this session whether or not its canvas has the focus, for a host that routes the keyboard itself (the
+  // same keys to several sessions, for one). Handled as the canvas's own: codes as scancodes, modifiers kept in sync.
+  sendKeyboardEvent(e) {
+    this.remoteDesktopService.sendKeyboardEvent(e);
+  }
   setVisibility(e) {
     L.info(`Change component visibility to: ${e}`), this.remoteDesktopService.setVisibility(e);
   }
@@ -3631,6 +3636,7 @@ class zn {
       metaKey: this.metaKey.bind(this),
       ctrlC: this.ctrlC.bind(this),
       ctrlV: this.ctrlV.bind(this),
+      sendKeyboardEvent: this.sendKeyboardEvent.bind(this),
       shutdown: this.shutdown.bind(this),
       setKeyboardUnicodeMode: this.setKeyboardUnicodeMode.bind(this),
       setCursorStyleOverride: this.setCursorStyleOverride.bind(this),
@@ -3662,19 +3668,19 @@ function In() {
   };
 }
 const Gt = In();
-var K = /* @__PURE__ */ ((t) => (t[t.Full = 0] = "Full", t[t.TextOnly = 1] = "TextOnly", t[t.TextOnlyServerOnly = 2] = "TextOnlyServerOnly", t[t.None = 3] = "None", t))(K || {}), or = /* @__PURE__ */ ((t) => (t[t.General = 0] = "General", t[t.WrongPassword = 1] = "WrongPassword", t[t.LogonFailure = 2] = "LogonFailure", t[t.AccessDenied = 3] = "AccessDenied", t[t.RDCleanPath = 4] = "RDCleanPath", t[t.ProxyConnect = 5] = "ProxyConnect", t[t.NegotiationFailure = 6] = "NegotiationFailure", t))(or || {});
-const Wn = 100;
+var V = /* @__PURE__ */ ((t) => (t[t.Full = 0] = "Full", t[t.TextOnly = 1] = "TextOnly", t[t.TextOnlyServerOnly = 2] = "TextOnlyServerOnly", t[t.None = 3] = "None", t))(V || {}), or = /* @__PURE__ */ ((t) => (t[t.General = 0] = "General", t[t.WrongPassword = 1] = "WrongPassword", t[t.LogonFailure = 2] = "LogonFailure", t[t.AccessDenied = 3] = "AccessDenied", t[t.RDCleanPath = 4] = "RDCleanPath", t[t.ProxyConnect = 5] = "ProxyConnect", t[t.NegotiationFailure = 6] = "NegotiationFailure", t))(or || {});
+const Kn = 100;
 function ie(t) {
   throw {
     kind: () => or.General,
     backtrace: () => t
   };
 }
-class Vn {
+class Wn {
   constructor(e, i) {
     __publicField(this, "remoteDesktopService");
     __publicField(this, "module");
-    __publicField(this, "ClipboardApiSupported", K.None);
+    __publicField(this, "ClipboardApiSupported", V.None);
     __publicField(this, "lastClientClipboardItems", {});
     __publicField(this, "lastReceivedClipboardData", {});
     __publicField(this, "lastSentClipboardData", null);
@@ -3712,29 +3718,29 @@ class Vn {
       this.remoteDesktopService.emitWarningEvent("Clipboard is available only in secure contexts (HTTPS).");
       return;
     }
-    if (navigator.clipboard != null && (navigator.clipboard.read != null && navigator.clipboard.write != null ? this.ClipboardApiSupported = K.Full : navigator.clipboard.readText != null ? (this.ClipboardApiSupported = K.TextOnly, this.remoteDesktopService.emitWarningEvent(
+    if (navigator.clipboard != null && (navigator.clipboard.read != null && navigator.clipboard.write != null ? this.ClipboardApiSupported = V.Full : navigator.clipboard.readText != null ? (this.ClipboardApiSupported = V.TextOnly, this.remoteDesktopService.emitWarningEvent(
       "Clipboard is limited to text-only data types due to an outdated browser version!"
-    )) : navigator.clipboard.writeText != null && (this.ClipboardApiSupported = K.TextOnlyServerOnly, this.remoteDesktopService.emitWarningEvent(
+    )) : navigator.clipboard.writeText != null && (this.ClipboardApiSupported = V.TextOnlyServerOnly, this.remoteDesktopService.emitWarningEvent(
       "Clipboard reading is not supported and writing is limited to text-only data types due to an outdated browser version!"
-    ))), this.ClipboardApiSupported === K.Full)
+    ))), this.ClipboardApiSupported === V.Full)
       try {
         (await navigator.permissions.query({
           name: "clipboard-read"
-        })).state === "denied" && (this.ClipboardApiSupported = K.TextOnly);
+        })).state === "denied" && (this.ClipboardApiSupported = V.TextOnly);
       } catch {
         try {
           await navigator.clipboard.read();
         } catch {
-          this.ClipboardApiSupported = K.TextOnly;
+          this.ClipboardApiSupported = V.TextOnly;
         }
       }
-    if (this.ClipboardApiSupported === K.None) {
+    if (this.ClipboardApiSupported === V.None) {
       this.remoteDesktopService.emitWarningEvent(
         "Clipboard is not supported due to an outdated browser version!"
       );
       return;
     }
-    this.remoteDesktopService.setOnForceClipboardUpdate(this.onForceClipboardUpdate.bind(this)), this.ClipboardApiSupported === K.Full ? this.remoteDesktopService.autoClipboard ? (this.remoteDesktopService.setOnRemoteClipboardChanged(this.onRemoteClipboardChangedAutoMode.bind(this)), this.remoteDesktopService.sessionStartedObservable.subscribe((e) => {
+    this.remoteDesktopService.setOnForceClipboardUpdate(this.onForceClipboardUpdate.bind(this)), this.ClipboardApiSupported === V.Full ? this.remoteDesktopService.autoClipboard ? (this.remoteDesktopService.setOnRemoteClipboardChanged(this.onRemoteClipboardChangedAutoMode.bind(this)), this.remoteDesktopService.sessionStartedObservable.subscribe((e) => {
       this.scheduleOnMonitorClipboardUpdate();
     })) : this.remoteDesktopService.setOnRemoteClipboardChanged(
       this.onRemoteClipboardChangedManualMode.bind(this)
@@ -3743,7 +3749,7 @@ class Vn {
   // Copies clipboard content received from the server to the local clipboard.
   // Returns the result of the operation. On failure, it additionally raises an error session event.
   async saveRemoteClipboardData() {
-    if (this.ClipboardApiSupported !== K.Full)
+    if (this.ClipboardApiSupported !== V.Full)
       return await this.ffSaveRemoteClipboardData();
     this.clipboardDataToSave == null && ie("The server did not send the clipboard data.");
     try {
@@ -3756,7 +3762,7 @@ class Vn {
   // Sends local clipboard's content to the server.
   // Returns the result of the operation. On failure, it additionally raises an error session event.
   async sendClipboardData() {
-    if (this.ClipboardApiSupported !== K.Full)
+    if (this.ClipboardApiSupported !== V.Full)
       return await this.ffSendClipboardData();
     const e = await navigator.clipboard.read().catch((n) => {
       ie("Failed to read from the clipboard: " + n);
@@ -3772,7 +3778,7 @@ class Vn {
     r.isEmpty() || (this.lastSentClipboardData = r, await this.remoteDesktopService.onClipboardChanged(r));
   }
   scheduleOnMonitorClipboardUpdate() {
-    setTimeout(this.onMonitorClipboard.bind(this), Wn);
+    setTimeout(this.onMonitorClipboard.bind(this), Kn);
   }
   runWhenWindowFocused(e) {
     document.hasFocus() ? e() : Gt.enqueue(e);
@@ -3891,7 +3897,7 @@ class Vn {
   // Sends local clipboard's content to the server.
   // Returns the result of the operation. On failure, it additionally raises an error session event.
   async ffSendClipboardData() {
-    this.ClipboardApiSupported !== K.TextOnly && ie("The browser does not support clipboard read.");
+    this.ClipboardApiSupported !== V.TextOnly && ie("The browser does not support clipboard read.");
     const e = await navigator.clipboard.readText().catch((r) => {
       ie("Failed to read from the clipboard: " + r);
     });
@@ -3907,7 +3913,7 @@ function ar(t = window) {
     y: t.innerHeight ?? e.clientHeight ?? i.clientHeight
   };
 }
-function Kn(t, e = window) {
+function Vn(t, e = window) {
   if (t) {
     const i = t.getBoundingClientRect();
     if (i.width > 0 && i.height > 0)
@@ -3928,12 +3934,12 @@ function lr(t, e) {
             capturingInputs: ${document.activeElement === p}
             current active element: ${document.activeElement}
         `), ((_b2 = (_a2 = document.activeElement) == null ? void 0 : _a2.shadowRoot) == null ? void 0 : _b2.firstElementChild) === h;
-  }, h, d, p, w = Ft(""), s = Ft(""), a = new Bn(o()), l = new Vn(a, o()), u = new zn(a, l), b = we.Fit;
+  }, h, d, p, w = Ft(""), s = Ft(""), a = new Bn(o()), l = new Wn(a, o()), u = new zn(a, l), b = we.Fit;
   function $(v) {
     f() && Ot(v);
   }
   function M() {
-    Ve(), Te(), window.addEventListener("keydown", $, false), window.addEventListener("keyup", $, false), window.addEventListener("focus", He), window.addEventListener("blur", he), document.addEventListener("visibilitychange", Me);
+    We(), Te(), window.addEventListener("keydown", $, false), window.addEventListener("keyup", $, false), window.addEventListener("focus", He), window.addEventListener("blur", he), document.addEventListener("visibilitychange", Me);
   }
   function _() {
     n() === "true" && (h.style.flexGrow = "", h.style.display = "", h.style.justifyContent = "", h.style.alignItems = "");
@@ -3951,7 +3957,7 @@ function lr(t, e) {
   const ce = (v) => {
     fe(i());
   };
-  function Ve() {
+  function We() {
     a.resizeObservable.subscribe((v) => {
       L.info(`Resize canvas to: ${v.desktopSize.width}x${v.desktopSize.height}`), p.width = v.desktopSize.width, p.height = v.desktopSize.height, fe(i());
     });
@@ -3987,15 +3993,15 @@ function lr(t, e) {
   }
   function rt() {
     const v = Oe(), T = v.x, F = v.y;
-    let R = p.width, W = p.height;
+    let R = p.width, K = p.height;
     const B = Math.min(T / p.width, F / p.height);
-    R = R * B, W = W * B, O(`${F}px`, `${T}px`, "hidden"), R = R > 0 ? R : 0, W = W > 0 ? W : 0, A(`${W}px`, `${R}px`);
+    R = R * B, K = K * B, O(`${F}px`, `${T}px`, "hidden"), R = R > 0 ? R : 0, K = K > 0 ? K : 0, A(`${K}px`, `${R}px`);
   }
   function Re(v = false) {
-    const T = Le(), F = d.getBoundingClientRect(), R = T.x - F.x, W = T.y - F.y;
+    const T = Le(), F = d.getBoundingClientRect(), R = T.x - F.x, K = T.y - F.y;
     let B = p.width, se = p.height;
-    if (!v || R < p.width || W < p.height) {
-      const ve = Math.min(R / p.width, W / p.height);
+    if (!v || R < p.width || K < p.height) {
+      const ve = Math.min(R / p.width, K / p.height);
       B = B * ve, se = se * ve;
     }
     B = B > 0 ? B : 0, se = se > 0 ? se : 0, O("initial", "initial", "hidden"), A(`${se}px`, `${B}px`), m();
@@ -4005,11 +4011,11 @@ function lr(t, e) {
     F < p.width || R < p.height ? O(`${Math.min(R, p.height)}px`, `${Math.min(F, p.width)}px`, "auto") : O("initial", "initial", "initial"), A(`${p.height}px`, `${p.width}px`), m();
   }
   function At(v) {
-    const T = p == null ? void 0 : p.getBoundingClientRect(), F = (p == null ? void 0 : p.width) / T.width, R = (p == null ? void 0 : p.height) / T.height, W = {
+    const T = p == null ? void 0 : p.getBoundingClientRect(), F = (p == null ? void 0 : p.width) / T.width, R = (p == null ? void 0 : p.height) / T.height, K = {
       x: Math.round((v.clientX - T.left) * F),
       y: Math.round((v.clientY - T.top) * R)
     };
-    a.updateMousePosition(W);
+    a.updateMousePosition(K);
   }
   function Ee(v, T) {
     a.mouseButtonState(v, T, true);
@@ -4030,9 +4036,9 @@ function lr(t, e) {
     return ar();
   }
   function Le() {
-    return Kn(e.$$host);
+    return Vn(e.$$host);
   }
-  async function Ke() {
+  async function Ve() {
     L.info("Start canvas initialization..."), p.width = 800, p.height = 600, a.setCanvas(p), a.setOnCanvasResized(de), M();
   }
   function qe() {
@@ -4061,7 +4067,7 @@ function lr(t, e) {
     document.visibilityState === "hidden" && a.focusLost();
   }
   tr(async () => {
-    jt.set(false), L.verbose = r() === "true", L.info("Dom ready"), await Ke();
+    jt.set(false), L.verbose = r() === "true", L.info("Dom ready"), await Ve();
     try {
       await l.initClipboard();
     } catch (v) {

@@ -2,6 +2,95 @@ import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
 
+/** Limits for a copied folder, as for a dropped one in IronRDP. */
+const MAX_ENTRIES = 10000
+const MAX_DEPTH = 20
+
+/**
+ * Files copied in Finder (Explorer, Files): their paths, from the local clipboard. Empty when it holds no files.
+ */
+export function clipboardPaths (): string[] {
+    const { clipboard } = require('electron')
+    const read = (format: string): string => {
+        try {
+            return clipboard.read(format) ?? ''
+        } catch {
+            return ''
+        }
+    }
+    if (process.platform === 'darwin') {
+        const plist = read('NSFilenamesPboardType')
+        const paths = [...plist.matchAll(/<string>([^<]*)<\/string>/g)].map(m => m[1]
+            .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&amp;/g, '&'))
+        if (paths.length) {
+            return paths
+        }
+        const url = read('public.file-url')
+        return url.startsWith('file://') ? [decodeURIComponent(new URL(url).pathname)] : []
+    }
+    if (process.platform === 'win32') {
+        try {
+            const name = clipboard.readBuffer('FileNameW').toString('ucs2').replace(/\0+$/, '')
+            return name ? [name] : []
+        } catch {
+            return []
+        }
+    }
+    const list = read('x-special/gnome-copied-files') || read('text/uri-list')
+    return list.split(/\r?\n/).filter(l => l.startsWith('file://')).map(l => decodeURIComponent(new URL(l).pathname))
+}
+
+/**
+ * A file on disk, for IronRDP's upload: it reads `slice(start, end)` of a file as the remote asks for each range, so
+ * only that range is read, not the whole file up front.
+ */
+class DiskFile {
+    readonly type = ''
+    constructor (private file: string, readonly name: string, readonly size: number, readonly lastModified: number) { }
+
+    slice (start = 0, end = this.size): Blob {
+        const length = Math.max(0, Math.min(end, this.size) - start)
+        const buffer = Buffer.alloc(length)
+        const fd = fs.openSync(this.file, 'r')
+        try {
+            let done = 0
+            while (done < length) {
+                const n = fs.readSync(fd, buffer, done, length - done, start + done)
+                if (!n) {
+                    break
+                }
+                done += n
+            }
+            return new Blob([buffer.subarray(0, done)])
+        } finally {
+            fs.closeSync(fd)
+        }
+    }
+}
+
+/** IronRDP's DroppedFile entries for paths on disk: files, and folders with everything in them (`path`: the folder, `\`-separated). */
+function entriesFor (paths: string[]): any[] {
+    const entries: any[] = []
+    const walk = (file: string, parent: string | undefined, depth: number) => {
+        if (entries.length >= MAX_ENTRIES || depth > MAX_DEPTH) {
+            return
+        }
+        const stat = fs.statSync(file, { throwIfNoEntry: false })
+        const name = path.basename(file)
+        if (stat?.isFile()) {
+            entries.push({ file: new DiskFile(file, name, stat.size, stat.mtimeMs), name, size: stat.size, lastModified: stat.mtimeMs, path: parent })
+        } else if (stat?.isDirectory()) {
+            entries.push({ file: null, name, size: 0, lastModified: 0, path: parent, isDirectory: true })
+            const inner = parent !== undefined ? `${parent}\\${name}` : name
+            for (const child of fs.readdirSync(file).sort()) {
+                walk(path.join(file, child), inner, depth + 1)
+            }
+        }
+    }
+    paths.forEach(p => walk(p, undefined, 0))
+    return entries
+}
+
 /** A file the remote offers (IronRDP's FileInfo). */
 interface RemoteFile {
     name: string
@@ -36,6 +125,10 @@ export class FileTransfer {
     offered: RemoteFile[] = []
     /** Where the last save went (for tests and "Show in Finder"). */
     lastSaved: string[] = []
+    /** The copied files offered for a paste and not pasted yet (see pasteClipboardFiles). */
+    private pendingPaste: string | null = null
+    /** Resolves when the remote has taken in the files last offered (its Format List Response): true if it accepted them. */
+    private offerTaken: Promise<boolean> | null = null
 
     constructor (rdp: any, private overlay: HTMLElement, private log: (msg: string) => void) {
         this.provider = new rdp.RdpFileTransferProvider({ storageBackend: 'blob' })
@@ -71,22 +164,70 @@ export class FileTransfer {
     }
 
     /** Mac → remote: offers the files on the remote clipboard; the remote copies them when they're pasted. */
-    send (files: any[]): void {
+    send (files: any[], pasting = false): Promise<void> | null {
         const count = files.filter(f => !f.isDirectory).length
         if (!count) {
-            return
+            return null
         }
         try {
+            // The remote answers the new clipboard before it can paste it; a paste sent sooner gets what it had.
+            this.offerTaken = new Promise<boolean>(resolve => {
+                const answered = (ok: boolean) => {
+                    this.provider.off('format-list-response', answered)
+                    resolve(!!ok)
+                }
+                this.provider.on('format-list-response', answered)
+            })
             const upload = this.provider.uploadFiles(files)
-            this.log(`files: offered ${count} to the remote`)
-            this.toast(`${plural(count, 'file')} ready: paste on the remote desktop (⌘V) to copy ${count === 1 ? 'it' : 'them'} there`, [], 0)
-            upload.completion.then(
+            this.log(`files: offered ${count} to the remote${pasting ? ' (copied here, pasted there)' : ''}`)
+            this.toast(pasting ? `Pasting ${plural(count, 'file')}…` : `${plural(count, 'file')} ready: paste on the remote desktop (⌘V) to copy ${count === 1 ? 'it' : 'them'} there`, [], 0)
+            return upload.completion.then(
                 () => { this.log('files: pasted on the remote'); this.toast(`Copied ${plural(count, 'file')} to the remote desktop`) },
                 (e: any) => { this.log(`files: upload: ${e?.message ?? e}`); this.toast(`Copying to the remote desktop failed: ${e?.message ?? e}`) },
             )
         } catch (e: any) {
             this.toast(`Couldn't offer the files: ${e?.message ?? e}`)
+            return null
         }
+    }
+
+    /**
+     * Resolves once the remote has taken in the files just offered (true), or said no (false), or after `timeoutMs`
+     * without an answer (true: paste anyway), so that a paste sent then gets them.
+     */
+    offerAnswered (timeoutMs = 3000): Promise<boolean> {
+        const taken = this.offerTaken
+        return taken ? Promise.race([taken, new Promise<boolean>(resolve => setTimeout(() => resolve(true), timeoutMs))]) : Promise.resolve(true)
+    }
+
+    /**
+     * ⌘V (Ctrl+V) on the desktop with files copied here (Finder, Explorer, Files): offers them on the remote clipboard
+     * for that paste. True when it did, and the paste should wait a moment for the remote to see them; false when the
+     * clipboard holds no files, or these are already offered and not pasted yet.
+     */
+    pasteClipboardFiles (): boolean {
+        const paths = clipboardPaths()
+        if (!paths.length) {
+            return false
+        }
+        const key = paths.join('\n')
+        if (this.pendingPaste === key) {
+            return false
+        }
+        let entries: any[]
+        try {
+            entries = entriesFor(paths)
+        } catch (e: any) {
+            this.toast(`Couldn't read the copied files: ${e?.message ?? e}`)
+            return false
+        }
+        const done = this.send(entries, true)
+        if (!done) {
+            return false
+        }
+        this.pendingPaste = key
+        done.finally(() => { if (this.pendingPaste === key) this.pendingPaste = null })
+        return true
     }
 
     /** Picks files on the Mac to send. */
@@ -135,7 +276,7 @@ export class FileTransfer {
     }
 
     /** A message over the desktop; hides after `hideAfter` ms (0: stays until replaced). */
-    private toast (text: string, actions: { label: string, run: () => void }[] = [], hideAfter = 6000): void {
+    toast (text: string, actions: { label: string, run: () => void }[] = [], hideAfter = 6000): void {
         clearTimeout(this.toastTimer)
         this.toastEl?.remove()
         const el = document.createElement('div')
@@ -190,7 +331,7 @@ export function savePath (dir: string, folder: string | undefined, name: string)
 }
 
 /** `file.txt`, or `file 2.txt`, `file 3.txt`… if taken. */
-function uniquePath (target: string): string {
+export function uniquePath (target: string): string {
     if (!fs.existsSync(target)) {
         return target
     }

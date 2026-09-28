@@ -79,7 +79,7 @@ await suite('resize', async t => {
     // A desktop's own sharpness: Standard for this one while the default is Retina, then "As above" again.
     const sharpness = await ev('return JSON.stringify(H.config.store.remoteDesktop.desktopSharpness ?? [])')
     t.onCleanup(() => ev(`H.inZone(() => { H.config.store.remoteDesktop.desktopSharpness = ${sharpness}; H.config.save() })`))
-    const offered = await ev(`const s = (await H.menu(H.pane)).find(i => i.label === 'Remote desktop settings')?.submenu ?? []
+    const offered = await ev(`const s = (await H.menu(H.pane)).find(i => i.label === 'Settings')?.submenu ?? []
         return s.filter(i => i.type === 'radio').map(i => i.label + (i.checked ? '*' : ''))`)
     check('the settings offer a sharpness for this desktop ("As above" chosen)', offered.includes('As above*') && offered.filter(l => l.startsWith('Retina')).length === 2, offered)
     await ev('H.inZone(() => RD.desktop.setOwnSharpness(H.pane, "standard"))')

@@ -15,13 +15,23 @@ export async function connect (port = Number(process.env.TRD_CDP_PORT)) {
     await new Promise((resolve, reject) => { ws.onopen = resolve; ws.onerror = reject })
     let id = 0
     const pending = new Map()
+    const listeners = new Map()
     ws.onmessage = event => {
         const message = JSON.parse(event.data)
         if (message.id && pending.has(message.id)) {
             const { resolve, reject } = pending.get(message.id)
             pending.delete(message.id)
             message.error ? reject(new Error(JSON.stringify(message.error))) : resolve(message.result)
+        } else if (message.method) {
+            listeners.get(message.method)?.forEach(f => f(message.params))
         }
+    }
+    /** Calls `f` with each event's params (e.g. 'Page.screencastFrame'); returns a function that stops it. */
+    const on = (method, f) => {
+        const set = listeners.get(method) ?? new Set()
+        set.add(f)
+        listeners.set(method, set)
+        return () => set.delete(f)
     }
     const send = (method, params = {}) => new Promise((resolve, reject) => {
         const n = ++id
@@ -36,7 +46,7 @@ export async function connect (port = Number(process.env.TRD_CDP_PORT)) {
         }
         return result.result.value
     }
-    return { send, evaluate, close: () => ws.close() }
+    return { send, evaluate, on, close: () => ws.close() }
 }
 
 /** Waits until a DevTools port answers (Tabby starting up). */

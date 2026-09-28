@@ -15,15 +15,19 @@ export function windowsGuest (t, pane) {
     /**
      * Runs PowerShell in the signed-in Windows session, where the desktop is: a task with the account's interactive
      * token, through the Task Scheduler's COM interface (the ScheduledTasks cmdlets use WMI, which is for
-     * administrators only over WinRM). The script goes as -EncodedCommand, so it needs no quoting.
+     * administrators only over WinRM). The script goes to a file in the account's temporary folder (base64, so it
+     * needs no quoting), which it removes as it starts: as -EncodedCommand, encoded once more for WinRM, a script of
+     * a couple of kilobytes would exceed Windows' command-line limit.
      */
     const inSession = (name, script) => guest(`
+$file = Join-Path $env:TEMP 'trd-task-${name}.ps1'
+[IO.File]::WriteAllText($file, [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${Buffer.from(`Remove-Item -LiteralPath $PSCommandPath -ErrorAction SilentlyContinue\n${script}`, 'utf8').toString('base64')}')), [Text.Encoding]::UTF8)
 $s = New-Object -ComObject Schedule.Service; $s.Connect()
 $d = $s.NewTask(0)
 $d.Principal.LogonType = 3
 $a = $d.Actions.Create(0)
 $a.Path = 'powershell.exe'
-$a.Arguments = '-NoProfile -WindowStyle Hidden -EncodedCommand ${Buffer.from(script, 'utf16le').toString('base64')}'
+$a.Arguments = '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + $file + '"'
 $s.GetFolder('\\').RegisterTaskDefinition('${name}', $d, 6, $null, $null, 3) | Out-Null
 $s.GetFolder('\\').GetTask('${name}').Run($null) | Out-Null`)
     const dropTask = name => guest(`$s = New-Object -ComObject Schedule.Service; $s.Connect(); try { $s.GetFolder('\\').DeleteTask('${name}', 0) } catch { }`)
