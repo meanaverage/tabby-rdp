@@ -1,6 +1,6 @@
 {
   "name": "tabby-rdp",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Remote desktops in Tabby's SSH tabs: Linux (GNOME) and Windows, through the SSH connection, with clipboard, files and sound. Built on IronRDP.",
   "keywords": [
     "tabby-plugin",
