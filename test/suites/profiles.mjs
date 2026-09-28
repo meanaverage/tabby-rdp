@@ -132,12 +132,13 @@ await suite('profiles', async t => {
         await sleep(250)
     }
     const viaForm = await t.waitFor('return H.signin(H.via)', 30)
-    check('once SSH is up, the desktop shows over it, with the sign-in form', !!viaForm && viaForm.title === `Sign in to ${VIA} (via ${host})` && viaForm.user === 'tabby', viaForm)
+    // The host is called by its SSH profile's name.
+    check('once SSH is up, the desktop shows over it, with the sign-in form', !!viaForm && viaForm.title === `Sign in to ${VIA} (via SSH for RDP (test))` && viaForm.user === 'tabby', viaForm)
     check('it is the profile\'s desktop', await ev('return RD.desktop.desktopOf(H.via)?.id') === '127.0.0.1:3389')
     await ev(`H.submit(H.via, ${JSON.stringify(password)})`)
     check('the desktop behind the SSH profile connects', !!(await t.waitFor('return H.connected(H.via)', 40)), await ev('return RD.desktop.logOf(H.via).slice(-4)'))
     const viaLabels = await ev('return await H.labels(H.via)')
-    check('that SSH tab offers the console and its own desktop too', viaLabels.includes('Back to console') && viaLabels.includes(`Open ${host} desktop`), viaLabels)
+    check('that SSH tab offers the console and its own desktop too', viaLabels.includes('Back to console') && viaLabels.includes('Open SSH for RDP (test) desktop'), viaLabels)
     await ev('H.inZone(() => RD.desktop.disconnect(H.via))')
     const otherLabels = await ev('return await H.labels(H.pane)')
     check('an SSH tab not opened from that SSH profile doesn\'t list it', !otherLabels.some(l => (l ?? '').includes(VIA)), otherLabels)

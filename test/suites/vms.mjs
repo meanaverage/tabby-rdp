@@ -20,7 +20,11 @@ await suite('vms', async t => {
     await t.settings({ discoverVMs: true })
     check('SSH tab to the VM host connected', await ev(`H.pane = await H.openSSH({ host: ${JSON.stringify(host)}, user: ${JSON.stringify(user ?? '')}, port: ${Number(port)} }); return !!H.pane`))
     const t0 = Date.now()
+    // A look that failed (the connection still settling) is kept for a minute, as for the menus: look again then.
     await ev('const target = await RD.targets.targetOf(H.pane); await RD.desktop.discoverVMs(target)')
+    if (!(await ev('const target = await RD.targets.targetOf(H.pane); return RD.desktop.desktopsOf(target).some(s => s.found)'))) {
+        await ev('RD.desktop.vms.delete((await RD.targets.targetOf(H.pane)).key); await RD.desktop.discoverVMs(await RD.targets.targetOf(H.pane))')
+    }
     t.time('looking for VMs', Date.now() - t0)
     const found = await ev('const target = await RD.targets.targetOf(H.pane); return RD.desktop.desktopsOf(target).filter(s => s.found)')
     const vm = found.find(s => s.name === NAME)
