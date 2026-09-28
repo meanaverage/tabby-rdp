@@ -5,13 +5,15 @@
 # tabby-rdp
 
 **Remote desktops in your Tabby SSH tabs.**<br>
-Linux (GNOME) and Windows, through the SSH connection you already have.
+Linux and Windows, side by side, through the SSH connections you already have.
 
 [![npm](https://img.shields.io/npm/v/tabby-rdp?color=3b82f6)](https://www.npmjs.com/package/tabby-rdp)
 [![License: MIT](https://img.shields.io/badge/license-MIT-3b82f6)](LICENSE)
 [![Tabby plugin](https://img.shields.io/badge/Tabby-plugin-6366f1)](https://tabby.sh)
 
-<img src="docs/images/desktop.png" width="860" alt="A GNOME desktop in a Tabby SSH tab">
+<a href="https://github.com/meanaverage/tabby-rdp/releases/download/v0.3.0/tabby-rdp-demo.mp4"><img src="docs/images/demo.jpg" width="860" alt="Four desktops in one Tabby tab (GNOME, Windows, xrdp), a file pasted to all of them, and desk (demo video)"></a>
+
+<sub>▶ <a href="https://github.com/meanaverage/tabby-rdp/releases/download/v0.3.0/tabby-rdp-demo.mp4">Watch the 30-second demo</a></sub>
 
 </div>
 
@@ -28,10 +30,18 @@ nothing is opened on the network, and nothing has to be installed on the remote 
   you SSH into.
 - **Remote desktop profiles** for machines you reach without SSH (LAN, VPN): in Tabby's profile list, in a tab of their
   own.
+- **Several machines at once:** split a tab into a grid of desktops, then paste to all of them or type into all of them
+  at once. A short on-screen name says which one you're in.
+- **VMs found for you:** the libvirt VMs on an SSH host that have a desktop show up in its menu, ready to open, or to
+  start and open.
+- **`ssh` on from a host:** in an SSH tab where you typed `ssh` to another machine, the desktop is that machine's.
 - **A proper desktop experience:** clipboard and files both ways, sound and microphone, live resize to the pane,
   sharp Retina rendering, Mac keyboard shortcuts, and automatic reconnects after sleep.
 - **`desk`:** type `desk` in the console and the same shell, with its history and running programs, moves into a
   terminal on the desktop.
+
+Everything is in **Settings › Remote Desktop**: getting started, every setting with a line on what it does, the keys,
+the desktops and certificates the plugin keeps, and troubleshooting.
 
 The remote desktop itself is [IronRDP](https://github.com/Devolutions/IronRDP)'s web client, running inside Tabby.
 Making it work with GNOME took fixes in IronRDP, which we contribute upstream ([below](#built-on-ironrdp)).
@@ -43,6 +53,8 @@ Making it work with GNOME took fixes in IronRDP, which we contribute upstream ([
 - [Features](#features)
 - [Windows and other desktops behind a host](#windows-and-other-desktops-behind-a-host)
 - [Remote desktop profiles](#remote-desktop-profiles)
+- [Several desktops in one tab](#several-desktops-in-one-tab)
+- [VMs on a host](#vms-on-a-host)
 - [desk: the console on the desktop](#desk-the-console-on-the-desktop)
 - [Settings](#settings)
 - [Requirements](#requirements)
@@ -68,7 +80,9 @@ Open an SSH tab to a Linux machine with GNOME, and:
 
 - press **⌘⇧G** (Ctrl+Shift+G on Windows and Linux), or
 - click **Desktop** in the SSH tab's toolbar, or the desktop button in Tabby's header, or
-- right-click the terminal or the tab: **Open remote desktop**.
+- right-click the terminal or the tab: **Open remote desktop**, under the **Remote Desktop** heading.
+
+<p align="center"><img src="docs/images/desktop.png" width="760" alt="A GNOME desktop in a Tabby SSH tab"></p>
 
 The first connection to a machine takes a few seconds while it prepares GNOME Remote Desktop and a session; later
 ones take well under a second. The same shortcut switches between the desktop and the console, and the desktop keeps
@@ -80,7 +94,10 @@ in the system keychain. A machine with both keeps GNOME as the tab's desktop and
 offers **Open \<host\> desktop (xrdp)** in its menus.
 
 It also works in a plain local terminal where you typed `ssh host` (macOS and Linux), as long as that host accepts
-your key without a password prompt.
+your key without a password prompt. And in an SSH tab where you typed `ssh` on to another machine: **Desktop** there
+opens that machine's desktop, going through the first, as long as the first can log in to it by itself (a key there,
+or agent forwarding). So one pane of a split can show the first machine's desktop, and the other, after `ssh other`,
+that machine's.
 
 One desktop per account: a second tab to the same `user@host` switches to the tab that has it open, rather than
 connecting again.
@@ -90,7 +107,9 @@ connecting again.
 | | |
 |---|---|
 | **Clipboard** | Copy and paste text and images in both directions. |
-| **Files** | Drop files from Finder onto the desktop, or use **Send files to the remote desktop…**, then paste them in Files or Explorer. Files copied on the remote offer **Save to Downloads**. |
+| **Files** | Copy files or folders in Finder and press ⌘V on the desktop, or drop them onto it, or use **Remote Desktop › Send files…** in the pane's menu; they paste in Files or Explorer. Files copied on the remote offer **Save to Downloads**. |
+| **Several desktops in one tab** | Paste to all of them, type into all of them, and see which is which: [below](#several-desktops-in-one-tab). |
+| **VMs on a host** | The host's VMs with a desktop, ready to open: [below](#vms-on-a-host). |
 | **Sound** | The remote desktop's sound plays locally. |
 | **Microphone** | Optional (off by default): an app on the remote desktop that records, such as a call, gets your microphone. It is only captured while the app records, with an indicator in the corner of the desktop. |
 | **Resize** | The remote resolution follows the pane as you resize the window or split it. Or reconnect at the new size, or keep a fixed resolution, scaled to fit or at actual size with scroll bars. |
@@ -109,9 +128,9 @@ connecting again.
 ## Windows and other desktops behind a host
 
 An SSH host can lead to other desktops it can reach, such as a Windows VM on the same machine. In that host's menu,
-choose **Add a desktop behind \<host\>…** and enter a name, the address as seen from the host, and optionally the
-user name and domain. It opens right away, and from then on appears next to the host's own desktop in its menus.
-**Remote desktop settings › Edit a desktop** changes one (its saved password, sharpness and remembered certificate
+choose **Desktops › Add a desktop behind \<host\>…** and enter a name, the address as seen from the host, and optionally the
+user name and domain. It opens right away, and from then on appears under **Desktops** in the host's menu.
+**Settings › Edit a desktop** changes one (its saved password, sharpness and remembered certificate
 follow a new address; a new user name forgets the saved password), and **Remove a desktop** removes one, along with
 its saved password and remembered certificate.
 
@@ -170,7 +189,7 @@ keychain, certificates, resize, sharpness, clipboard, files, sound, microphone, 
 and reconnecting work as in SSH tabs. After **Disconnect**, the tab offers **Connect**. In the profile selector you can
 also type `user@host:port` and pick **Quick connect (REMOTE DESKTOP (RDP))**.
 
-**Import an .rdp file…** (in **Remote desktop settings**, or **Remote desktop: import an .rdp file…** in Tabby's
+**Import an .rdp file…** (in the menu's **Settings**, or **Remote desktop: import an .rdp file…** in Tabby's
 command palette) makes such a profile from a file saved by Remote Desktop Connection or handed out by an admin: its
 address, port, user name and domain, named after the file. Other settings in the file (screen size, drives, gateway)
 are ignored.
@@ -178,7 +197,7 @@ are ignored.
 Its **Connect** setting can name an SSH profile instead of connecting directly. The address is then as that host sees
 it, and opening the profile opens that SSH tab and shows the desktop over it once SSH is connected. Such a desktop is
 also offered in the menus of that SSH profile's tabs, next to the host's own desktop, so it works like a desktop
-added with **Add a desktop behind \<host\>…**, but with a place in the profile list.
+added with **Desktops › Add a desktop behind \<host\>…**, but with a place in the profile list.
 
 In Tabby's config file:
 
@@ -198,6 +217,36 @@ A direct connection is a plain TCP connection from this computer, encrypted with
 server's certificate is remembered on the first connection and checked on every later one, as for desktops behind a
 host (above).
 
+## Several desktops in one tab
+
+Split a tab (Tabby's **Split** in the tab's menu, or drag one tab onto another) and each pane can show a desktop: one
+machine's desktop next to another's, or next to its own console. Right-click any of them:
+
+- **Paste to all \<n\> desktops in this tab** pastes what's on your clipboard on every desktop in the tab, in whichever
+  window is active on each: text, a picture, or files and folders copied in Finder (or Explorer, or Files).
+- **Type into all \<n\> desktops in this tab** sends every key you type on one desktop to the others too, shortcuts and
+  **Send keys** included, until you turn it off. An orange label on each desktop says so while it's on. The mouse stays
+  per desktop, and desktops in view-only mode are left out.
+- **Make panes even** evens out the split's panes, which Tabby does itself but offers nowhere else.
+
+As you click into a desktop, its name shows in its corner for a moment, like a TV naming its input ("BUILDBOX", or "WIN-11 ·
+via buildhost · 1920×1080"). It shows by default where it helps (in a split, and for a desktop other than the tab's own
+connection); **Settings › Remote Desktop › Desktop name overlay** sets when, and its font, size, place and color, with a
+preview. Desktops are named after their SSH profile's name.
+
+## VMs on a host
+
+When you right-click an SSH host, the plugin looks at the host's libvirt VMs (`virsh`, as your SSH user; read-only, at
+most once a minute) and lists the ones with a desktop under **Desktops**, with nothing to set up:
+
+- a running VM whose RDP port answers: Windows, or Linux with xrdp;
+- a Windows VM that's shut off: **Start and open**, which starts it (`virsh start`) and connects as soon as it answers.
+
+A Linux VM that runs GNOME is left out: its desktop is reached by SSH-ing to it (its own desktop, or `ssh` typed in a
+console on the host, [above](#use)). A VM found this way asks for its account the first time, like any Windows or xrdp
+desktop; **Save \<name\> to this host's desktops** in its menu keeps it, for a name of your own and other settings.
+**Settings › Remote Desktop › Find virtual machines on SSH hosts** turns this off.
+
 ## desk: the console on the desktop
 
 Type `desk` in an SSH console, and the tab switches to that machine's desktop with a terminal attached to the very same
@@ -209,13 +258,13 @@ shell: its scrollback, working directory, jobs and running programs. Type on eit
 </p>
 
 `desk` is off by default, because it makes interactive SSH logins on that machine start inside a shareable session.
-Turn it on in **Remote desktop settings**. The sessions are handled by a small helper, `trd-pty`, rather than tmux, so
+Turn it on in the pane's menu under **Remote Desktop › Settings**, or in Settings › Remote Desktop. The sessions are handled by a small helper, `trd-pty`, rather than tmux, so
 your terminal's scrollback, colors and shortcuts stay as they are. Turning it off removes it again. Details:
 [docs/desk.md](docs/desk.md).
 
 ## Settings
 
-Right-click the desktop button in Tabby's header, or open **Remote desktop settings** in a terminal's or tab's menu.
+Open **Settings › Remote Desktop** in Tabby, right-click the desktop button in Tabby's header, or open **Settings** in the Remote Desktop section of a terminal's or tab's menu.
 They are stored in Tabby's config under `remoteDesktop`:
 
 | Setting | Default | |
@@ -231,6 +280,8 @@ They are stored in Tabby's config under `remoteDesktop`:
 | Mac shortcuts (`macShortcuts`) | On | macOS. Off: ⌘ is the Windows key. |
 | Bring the console along with `desk` (`desk`) | Off | Installs `desk` and a login line on each machine you open a desktop on; applies on the next connection there. |
 | Session backend (`sessionBackend`) | `native` | For `desk`: `native` (trd-pty) or `tmux`. Config file only. |
+| Find virtual machines on SSH hosts (`discoverVMs`) | On | Lists a host's libvirt VMs with a desktop in its menu ([VMs on a host](#vms-on-a-host)). |
+| Desktop name overlay (`osd`) | When it helps | `show` (`auto`, `always`, `off`), `font`, `size`, `position`, `color` (empty: white) and `seconds`; the settings page previews it. |
 
 ## Requirements
 
