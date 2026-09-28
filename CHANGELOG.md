@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.2.7
+
+(0.2.6 was never released: its staged publish on npm didn't go through, and npm doesn't reuse a version
+number. 0.2.7 is the same change.)
+
+**Security**
+- Files copied on the remote desktop are saved inside the folder you save them to (Downloads). Their names come from
+  the remote, and a name with `../` and forward slashes could be written elsewhere, such as a folder where macOS
+  starts programs at login. Now every part of the path is checked, and a file that would land outside is refused.
+  Update if you use **Save to Downloads** with machines you don't fully trust.
+
 ## 0.2.5
 
 **New**
