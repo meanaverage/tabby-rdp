@@ -7,6 +7,7 @@ import { BaseTerminalTabComponent, TerminalDecorator } from 'tabby-terminal'
 import { DesktopSettings, RemoteDesktopService } from './desktop.service'
 import { RemoteDesktopHelp, TOGGLE_HOTKEY } from './help'
 import { DesktopKeyboard, SEND_KEYS } from './keyboard'
+import { UpdateCheck } from './updates'
 import { isSSHTab } from './ssh'
 import { DesktopPane, desktopPaneOf, RemoteTargets } from './targets'
 
@@ -55,6 +56,10 @@ export class RemoteDesktopConfig extends ConfigProvider {
             osd: { show: 'auto', font: 'condensed', size: 'medium', position: 'top-right', color: '', seconds: 2.5 },
             // Look for VMs with a desktop on SSH hosts (libvirt) and offer them in the menus (see vms.ts).
             discoverVMs: true,
+            // Ask npm once a day whether a newer tabby-rdp is out, and say so (see updates.ts).
+            checkUpdates: true,
+            // The newer version a note was shown for (once per version).
+            updateNoted: '',
             // The tip shown the first time a desktop connects (see help.ts) has been shown.
             tipShown: false,
         },
@@ -136,6 +141,7 @@ export class RemoteDesktopContextMenu extends TabContextMenuItemProvider {
         private keyboard: DesktopKeyboard,
         private help: RemoteDesktopHelp,
         private app: AppService,
+        private updates: UpdateCheck,
     ) {
         super()
     }
@@ -160,6 +166,8 @@ export class RemoteDesktopContextMenu extends TabContextMenuItemProvider {
         const toggle = toggleLabel(this.desktop, pane)
         const items: MenuItemOptions[] = [
             { label: connectedTo ? `Remote Desktop — connected to ${connectedTo}` : 'Remote Desktop', enabled: false },
+            // A newer tabby-rdp: where to get it (Tabby shows plugin upgrades only on its Plugins page).
+            ...this.updates.available ? [{ label: `Update available: ${this.updates.available}…`, click: () => this.updates.upgrade() }] : [],
             ...toggle ? [{ label: toggle, click: () => this.desktop.toggle(pane) }] : [],
         ]
         // The host's other desktops (and VMs found there) and "Add a desktop behind…", one level down to keep the menu short.

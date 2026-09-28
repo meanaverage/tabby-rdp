@@ -15,6 +15,7 @@ import {
     RDPCommands, RDPProfileOpener, RDPProfileSettingsComponent, RDPProfilesService, RDPTabComponent, RDPTabRecovery,
 } from './rdpProfile'
 import { RemoteDesktopSettingsComponent, RemoteDesktopSettingsTab } from './settingsPage'
+import { UpdateCheck } from './updates'
 import { execRemote } from './ssh'
 import { desktopPaneOf, RemoteTargets } from './targets'
 import {
@@ -42,6 +43,7 @@ export default class RemoteDesktopModule {
     constructor (app: AppService, hotkeys: HotkeysService, desktop: RemoteDesktopService, header: HeaderControls, targets: RemoteTargets, keyboard: DesktopKeyboard, injector: Injector) {
         installStyle()
         header.install()
+        injector.get(UpdateCheck).start()
         keyboard.install(TOGGLE_HOTKEY)
         hotkeys.hotkey$.subscribe((id: string) => {
             if (id !== TOGGLE_HOTKEY) {
@@ -54,6 +56,6 @@ export default class RemoteDesktopModule {
         })
         // Handle for tests and troubleshooting from DevTools.
         const w = window as any
-        w.__remoteDesktop = { app, desktop, targets, desktopPaneOf, injector, execRemote, parseRdpFile, help: injector.get(RemoteDesktopHelp) }
+        w.__remoteDesktop = { app, desktop, targets, desktopPaneOf, injector, execRemote, parseRdpFile, help: injector.get(RemoteDesktopHelp), updates: injector.get(UpdateCheck) }
     }
 }

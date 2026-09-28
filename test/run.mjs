@@ -73,6 +73,8 @@ function makeSandbox () {
         '  desk: true',
         // The one-time tip would sit over the desktop in every suite's first connection (the help suite shows it).
         '  tipShown: true',
+        // No suite depends on what npm has now (the help suite tells it a version).
+        '  checkUpdates: false',
         '',
     ].join('\n'))
     const plugins = path.join(dir, 'plugins')
