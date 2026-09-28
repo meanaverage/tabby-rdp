@@ -8,7 +8,8 @@
 //   TRD_TEST_WIN_ADDRESS, _USER, _PASSWORD, _WINRM   the Windows desktop behind it (win-11), Explorer opened over WinRM
 //   TRD_TEST_DEMO_GNOME_USER (default tabbyxrdp)       a second account there with GNOME (lab-2), same SSH key
 //   TRD_TEST_DEMO_XRDP_USER, _PASSWORD                  an xrdp account there (lab-3; testbed/linux/xrdp.sh)
-// and ffmpeg here. Writes docs/demo/tabby-rdp-demo.mp4 (not in git: upload it to GitHub) and docs/images/demo.jpg.
+// and ffmpeg here. Writes docs/demo/tabby-rdp-demo.mp4 (not in git: attached to the GitHub release) and, from it,
+// docs/images/demo.gif, which the README shows (GitHub and npm play a GIF in the page; a linked video only downloads).
 import { spawn, execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -346,9 +347,6 @@ await suite('demo', async t => {
     await sleep(700)
     await ev('H.inZone(() => RD.desktop.pasteToAll(H.a))')
     await sleep(3200)
-    // The README's poster: a JPEG at the video's size (desktops are photos more than drawings; a PNG would be 1.6 MB).
-    const { data: poster } = await c.send('Page.captureScreenshot', { format: 'jpeg', quality: 86, clip: { x: 0, y: 0, width: WIDTH, height: HEIGHT, scale: 1920 / WIDTH } })
-    fs.writeFileSync(path.join(ROOT, 'docs', 'images', 'demo.jpg'), Buffer.from(poster, 'base64'))
     await sleep(900)
 
     // 3. The desktop/console switch.
@@ -406,7 +404,13 @@ await suite('demo', async t => {
     const out = path.join(outDir, 'tabby-rdp-demo.mp4')
     execFileSync('ffmpeg', ['-v', 'error', '-y', '-f', 'concat', '-safe', '0', '-i', list, '-vf', `fps=${FPS},scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p`,
         '-c:v', 'libx264', '-preset', 'slow', '-crf', '21', '-movflags', '+faststart', out])
+    // The README's copy: 1600 wide at 15 frames a second, one palette for the whole clip and only the changed part of
+    // each frame stored, which keeps it near 5 MB (most of the screen stays still).
+    const gif = path.join(ROOT, 'docs', 'images', 'demo.gif')
+    execFileSync('ffmpeg', ['-v', 'error', '-y', '-i', out, '-filter_complex',
+        'fps=15,scale=1600:-1:flags=lanczos,split[a][b];[a]palettegen=stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=4:diff_mode=rectangle', gif])
     const seconds = frames.at(-1).at - frames[0].at
-    console.log(`wrote docs/demo/tabby-rdp-demo.mp4 (${seconds.toFixed(1)} s, ${(fs.statSync(out).size / 1e6).toFixed(1)} MB) and docs/images/demo.jpg`)
+    console.log(`wrote docs/demo/tabby-rdp-demo.mp4 (${seconds.toFixed(1)} s, ${(fs.statSync(out).size / 1e6).toFixed(1)} MB) and docs/images/demo.gif (${(fs.statSync(gif).size / 1e6).toFixed(1)} MB)`)
     check('video written', fs.statSync(out).size > 100000)
+    check('GIF written', fs.statSync(gif).size > 100000)
 })
