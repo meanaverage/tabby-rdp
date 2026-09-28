@@ -1,12 +1,15 @@
 # Changelog
 
-## Unreleased
+## 0.3.1
 
 **New**
 - **New versions:** Tabby shows plugin upgrades only while its Plugins page is open, so tabby-rdp now says so itself.
   Once a day it asks npm for the latest version (nothing else is sent); a newer one gets a note once, an **Update
   available** item in the menus and a line on Settings › Remote Desktop, each leading to Tabby's Upgrade button.
   **Tell me about new versions** turns it off.
+
+**Docs**
+- The README's demo plays in the page (a GIF), on GitHub and on npm.
 
 ## 0.3.0
 
