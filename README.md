@@ -11,9 +11,9 @@ Linux and Windows, side by side, through the SSH connections you already have.
 [![License: MIT](https://img.shields.io/badge/license-MIT-3b82f6)](LICENSE)
 [![Tabby plugin](https://img.shields.io/badge/Tabby-plugin-6366f1)](https://tabby.sh)
 
-<a href="https://github.com/meanaverage/tabby-rdp/releases/download/v0.3.0/tabby-rdp-demo.mp4"><img src="docs/images/demo.jpg" width="860" alt="Four desktops in one Tabby tab (GNOME, Windows, xrdp), a file pasted to all of them, and desk (demo video)"></a>
+<img src="docs/images/demo.gif" width="860" alt="Four desktops in one Tabby tab (GNOME, Windows, xrdp), a file pasted to all of them, a pane switched to its console, and desk">
 
-<sub>▶ <a href="https://github.com/meanaverage/tabby-rdp/releases/download/v0.3.0/tabby-rdp-demo.mp4">Watch the 30-second demo</a></sub>
+<sub>Sharper: <a href="https://github.com/meanaverage/tabby-rdp/releases/download/v0.3.0/tabby-rdp-demo.mp4">the same demo as an MP4</a> (downloads)</sub>
 
 </div>
 
