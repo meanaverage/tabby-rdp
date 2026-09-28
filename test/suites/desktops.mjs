@@ -22,9 +22,9 @@ await suite('desktops', async t => {
         },
         signin () { return H.overlay(H.pane)?.querySelector('.trd-signin form') ?? null },
         textareasDisabled () { return [...H.pane.element.nativeElement.querySelectorAll('textarea.xterm-helper-textarea')].map(x => x.disabled) },
-        async labels () { return (await H.menu(H.pane)).map(i => i.label) },
-        async removeMenu () { return (await H.menu(H.pane)).find(i => i.label === 'Remote desktop settings').submenu.find(i => i.label === 'Remove a desktop') },
-        async editMenu () { return (await H.menu(H.pane)).find(i => i.label === 'Remote desktop settings').submenu.find(i => i.label === 'Edit a desktop') },
+        async labels () { return (await H.menuItems(H.pane)).map(i => i.label) },
+        async removeMenu () { return (await H.menu(H.pane)).find(i => i.label === 'Settings').submenu.find(i => i.label === 'Remove a desktop') },
+        async editMenu () { return (await H.menu(H.pane)).find(i => i.label === 'Settings').submenu.find(i => i.label === 'Edit a desktop') },
         formValues () {
             const f = H.form()
             return f && Object.fromEntries([...f.querySelectorAll('input[name], select[name]')].map(x => [x.name, x.value]))
@@ -132,8 +132,14 @@ await suite('desktops', async t => {
     // 5. Remove it from the settings menu: config and keychain entry gone, no longer offered.
     const remove = await ev('return (await H.removeMenu()).submenu.map(i => i.label)')
     check('the settings list it under "Remove a desktop"', remove.length === 1 && remove[0].startsWith(EDITED), remove)
+    // It asks first (the dialog is answered here: Remove).
+    await ev(`const p = RD.injector.get(require('tabby-core').PlatformService); H.origBox = p.showMessageBox
+        p.showMessageBox = async o => { H.box = o; return { response: 0 } }`)
+    t.onCleanup(() => ev(`const p = RD.injector.get(require('tabby-core').PlatformService); if (H.origBox) p.showMessageBox = H.origBox`))
     await ev('const m = await H.removeMenu(); H.inZone(() => m.submenu[0].click())')
     await sleep(500)
+    const box = await ev('return H.box ? { message: H.box.message, buttons: H.box.buttons } : null')
+    check('Remove asks first, naming the desktop', !!box && box.message.includes(EDITED) && box.buttons[0] === 'Remove', box)
     check('removed from the config', await ev('return (H.config.store.remoteDesktop.desktops ?? []).length === 0'))
     if (keychainWorks) {
         check('its keychain entry removed', !(await t.keychain(`getPassword('tabby-rdp', ${JSON.stringify(editedKey)})`)))

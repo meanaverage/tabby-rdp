@@ -35,7 +35,7 @@ await suite('windows', async t => {
             f.querySelector('[name=password]').value = password
             f.requestSubmit()
         },
-        async entries () { return (await H.menu(H.pane)).filter(i => /desktop|console|Windows/i.test(i.label ?? '') && i.label !== 'Remote desktop settings' && !/^(Send files|Add a desktop)/.test(i.label ?? '')).map(i => i.label) },
+        async entries () { return (await H.menuItems(H.pane)).filter(i => i.enabled !== false && !i.submenu && /desktop|console|Windows/i.test(i.label ?? '') && !/^(Send files|Add a desktop|Save |Paste to all|Type into all)/.test(i.label ?? '')).map(i => i.label) },
         trusted (key) { return (H.config.store.remoteDesktop.trustedCertificates ?? []).find(e => e?.desktop === key)?.sha256 ?? null },
         setTrusted (key, sha256) {
             H.inZone(() => {

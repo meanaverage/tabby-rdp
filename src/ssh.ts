@@ -63,6 +63,21 @@ export async function openTcpStream (tab: SSHTab, host: string, port: number): P
 }
 
 /**
+ * A command on the remote whose stdin and stdout are the stream (a session channel, no PTY): e.g. `ssh -W` run there,
+ * for a tunnel that goes on from the remote. Its stderr is not part of it.
+ */
+export async function execStream (tab: SSHTab, command: string): Promise<Duplex> {
+    const ssh = client(tab)
+    const session = tab.sshSession
+    const channel = await ssh.activateChannel(await ssh.openSessionChannel())
+    const stream = new SSHChannelStream(channel)
+    await channel.requestExec(command)
+    const gone = session?.willDestroy$?.subscribe(() => stream.destroy(new Error('the SSH connection closed')))
+    stream.once('close', () => gone?.unsubscribe())
+    return stream
+}
+
+/**
  * One round trip to the SSH server: opening a session channel waits for the server's confirmation, and nothing
  * runs on the remote until a command is requested on it, so this costs next to nothing there.
  */

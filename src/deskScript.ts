@@ -11,7 +11,14 @@ export interface DeskRequest {
     cwd: string
     /** 'native' (trd-pty), 'tmux', or '' when `desk` ran outside a shared session. */
     kind: string
+    /** The machine `desk` ran on: its /etc/machine-id (or host name); '' from older `desk` scripts. */
+    machine: string
+    /** Its host name, for messages. */
+    hostname: string
 }
+
+/** Remote command printing what `desk` sends as `machine`. */
+export const MACHINE_ID_COMMAND = 'cat /etc/machine-id 2>/dev/null || hostname'
 
 /** Single-quotes a value for sh. */
 export function shq (value: string): string {

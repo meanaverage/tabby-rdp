@@ -141,7 +141,10 @@ elif [ -n "$TMUX" ]; then
     SOCKET=$(tmux display-message -p '#{socket_path}' 2>/dev/null)
     tmux set-option -p allow-passthrough on 2>/dev/null
 fi
-SEQ=$(printf '\033]7777;desk;%s;%s;%s;%s\007' "$(b64 "$SESSION")" "$(b64 "$SOCKET")" "$(b64 "$PWD")" "$(b64 "$KIND")")
+# Which machine this is: a shared home folder puts this script on others too, and the tab may be connected to another
+# machine than the one this runs on (ssh typed in its console).
+MACHINE=$(cat /etc/machine-id 2>/dev/null || hostname)
+SEQ=$(printf '\033]7777;desk;%s;%s;%s;%s;%s;%s\007' "$(b64 "$SESSION")" "$(b64 "$SOCKET")" "$(b64 "$PWD")" "$(b64 "$KIND")" "$(b64 "$MACHINE")" "$(b64 "$(hostname)")")
 if [ "$KIND" = tmux ]; then
     printf '\033Ptmux;\033%s\033\\' "$SEQ"   # tmux only lets it through as passthrough
 else

@@ -5,7 +5,9 @@ import { Duplex } from 'stream'
 import { BaseTabComponent, SplitTabComponent } from 'tabby-core'
 import { DesktopSpec, DIRECT_KEY, specOf } from './desktops'
 import { formatAddress } from './desktopForm'
-import { execRemote, isConnected, isSSHTab, openTcpStream, pingRemote, SSHTab } from './ssh'
+import { shq } from './deskScript'
+import { probesIn } from './probe'
+import { execRemote, execStream, isConnected, isSSHTab, openTcpStream, pingRemote, SSHTab } from './ssh'
 
 /** Tabby profile type of remote desktop tabs (see rdpProfile.ts). */
 export const RDP_PROFILE_TYPE = 'rdp'
@@ -14,8 +16,10 @@ export const RDP_PROFILE_TYPE = 'rdp'
 export interface RemoteTarget {
     /** Canonical `user@hostname:port` (resolved with `ssh -G`); one desktop per key. DIRECT_KEY for a direct connection. */
     key: string
-    /** Short name for status messages. */
+    /** Short name for status messages, the on-screen display and menus: what the user calls it (a profile's name). */
     label: string
+    /** The host's address or name, where the protocol wants one rather than a label (e.g. the RDP destination). */
+    hostname?: string
     /** A stream to host:port as the remote sees it: its own 127.0.0.1, or a machine it can reach (a VM). */
     openTcp (host: string, port: number): Promise<Duplex>
     /** Runs a command on the remote with stdin, returns stdout. */
@@ -30,6 +34,8 @@ export interface RemoteTarget {
     direct?: DesktopSpec
     /** Round-trip time to the SSH server in ms, where it is cheap to measure (Tabby's own connection). */
     ping?: () => Promise<number>
+    /** The SSH tab's host this is reached through, where it isn't that host itself (ssh typed in its console). */
+    via?: string
 }
 
 /** A terminal pane the desktop can be layered over (an SSH tab, or a local terminal running `ssh`), or a remote desktop tab. */
@@ -121,11 +127,15 @@ export function parseSSHCommand (tokens: string[]): SSHCommand | null {
     return destination ? { options, destination } : null
 }
 
-/** `user@hostname:port` as ssh itself resolves it (config aliases, defaults). */
-async function resolveKey (options: string[], destination: string): Promise<string> {
-    const out = await run('ssh', [...options, '-G', destination])
+/** `user@hostname:port` from `ssh -G` output (config aliases, defaults resolved). */
+function keyFromConfig (out: string, destination: string): string {
     const get = (k: string) => new RegExp(`^${k} (.+)$`, 'm').exec(out)?.[1]?.trim()
     return `${get('user') ?? ''}@${(get('hostname') ?? destination).toLowerCase()}:${get('port') ?? '22'}`
+}
+
+/** `user@hostname:port` as ssh itself resolves it (config aliases, defaults). */
+async function resolveKey (options: string[], destination: string): Promise<string> {
+    return keyFromConfig(await run('ssh', [...options, '-G', destination]), destination)
 }
 
 /** A target reached with the system `ssh`, non-interactively (keys/agent/control master only). */
@@ -185,15 +195,77 @@ function sshFailure (label: string, stderr: string, code: number | null): string
 // ---- Tabby SSH tabs ----------------------------------------------------------------------------
 
 class TabbySSHTarget implements RemoteTarget {
-    constructor (readonly key: string, readonly label: string, private tab: SSHTab) { }
+    constructor (readonly key: string, readonly label: string, private tab: SSHTab, readonly hostname?: string) { }
     openTcp (host: string, port: number): Promise<Duplex> { return openTcpStream(this.tab, host, port) }
     exec (command: string, stdin: string): Promise<string> { return execRemote(this.tab, command, stdin) }
     isOpen (): boolean { return isConnected(this.tab) }
     ping (): Promise<number> { return pingRemote(this.tab) }
+    execStream (command: string): Promise<Duplex> { return execStream(this.tab, command) }
     get reconnectSSH (): (() => Promise<void>) | undefined {
         return typeof this.tab.reconnect === 'function' ? () => this.tab.reconnect!() : undefined
     }
     get profileId (): string | undefined { return (this.tab.profile as { id?: string } | undefined)?.id }
+}
+
+// ---- ssh typed in an SSH tab ---------------------------------------------------------------------
+
+/** An `ssh` running in the foreground of a terminal on an SSH tab's host (typed at its prompt). */
+export interface NestedSSH {
+    cmd: SSHCommand
+    /** Its terminal there. */
+    tty: string
+}
+
+/**
+ * Remote script: the user's `ssh` clients in the foreground of a terminal, one `TRD_SSH <n>|<tty>|<args>` line each, the
+ * arguments separated by \037 (from /proc where there is one, so that quoted ones stay whole). Each one's terminal gets a
+ * probe, `$PROBE-<n>` (see probe.ts), which shows which Tabby pane that terminal is.
+ */
+const nestedSSHScript = (probe: string) => `PROBE=${shq(probe)}\n` + String.raw`
+n=0
+for p in $(pgrep -u "$(id -u)" -x ssh 2>/dev/null); do
+    set -- $(ps -o tty= -o stat= -p "$p" 2>/dev/null)
+    case "$1:$2" in ?*:*+*) ;; *) continue ;; esac
+    [ "$1" = "?" ] && continue
+    n=$((n + 1))
+    if [ -r "/proc/$p/cmdline" ]; then args=$(tr '\000' '\037' < "/proc/$p/cmdline"); else args=$(ps -o args= -p "$p" | tr ' ' '\037'); fi
+    printf 'TRD_SSH %s|%s|%s\n' "$n" "$1" "$args"
+    printf '\033]7777;probe;%s-%s\007' "$PROBE" "$n" > "/dev/$1" 2>/dev/null || true
+done
+`
+
+/**
+ * A machine reached from an SSH tab's host with the `ssh` typed there: each command and tunnel runs that host's own
+ * ssh, non-interactively (its keys, or a forwarded agent). Like SystemSSHTarget, one hop further.
+ */
+class NestedSSHTarget implements RemoteTarget {
+    constructor (readonly key: string, readonly label: string, private outer: TabbySSHTarget, private cmd: SSHCommand) { }
+
+    get via (): string { return this.outer.label }
+
+    private ssh (...extra: string[]): string {
+        return ['ssh', ...this.cmd.options, '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=15', ...extra, this.cmd.destination].map(shq).join(' ')
+    }
+
+    openTcp (host: string, port: number): Promise<Duplex> {
+        return this.outer.execStream(`exec ${this.ssh('-o', 'ExitOnForwardFailure=yes', '-W', `${host.includes(':') ? `[${host}]` : host}:${port}`)} 2>/dev/null`)
+    }
+
+    async exec (command: string, stdin: string): Promise<string> {
+        // ssh's exit status and last error line come after the output, so a failed login says why.
+        const out = await this.outer.exec(`e=$(mktemp); ${this.ssh('-T')} ${shq(command)} 2>"$e"; r=$?; ` +
+            `printf '\n__trd_hop %s %s\n' "$r" "$(tail -n 1 "$e")"; rm -f "$e"`, stdin)
+        const m = /\n__trd_hop (\d+) ?(.*)\n?$/.exec(out)
+        if (m?.[1] === '255') {
+            throw new Error(/permission denied|password|keyboard-interactive|host key/i.test(m[2])
+                ? `${this.outer.label} couldn't log in to ${this.label} by itself (${m[2].trim()}). The desktop goes through ${this.outer.label}'s own ssh, which needs a key for ${this.label} there, or agent forwarding.`
+                : `ssh from ${this.outer.label} to ${this.label} failed${m[2] ? `: ${m[2].trim()}` : ''}`)
+        }
+        return m ? out.slice(0, m.index) : out
+    }
+
+    isOpen (): boolean { return this.outer.isOpen() }
+    ping (): Promise<number> { return this.outer.ping() }
 }
 
 // ---- direct connections ------------------------------------------------------------------------
@@ -255,9 +327,11 @@ export class RemoteTargets {
             } else if (isSSHTab(pane)) {
                 const o = pane.profile?.options ?? {}
                 const known = this.cache.get(pane)?.target
+                // Named as its profile is (Tabby's imports end in "(.ssh/config)"), else by its address.
+                const named = (pane.profile?.name ?? '').replace(/\s*\(\.ssh\/config\)$/, '').trim()
                 target = known ?? new TabbySSHTarget(
                     await this.key(['-l', o.user ?? '', '-p', String(o.port ?? 22)], o.host ?? ''),
-                    o.host ?? 'remote', pane)
+                    named || o.host || 'remote', pane, o.host || undefined)
             } else {
                 const found = await this.localSSH(pane)
                 pid = found?.pid
@@ -273,6 +347,40 @@ export class RemoteTargets {
         }
         this.cache.set(pane, { target, pid })
         return target
+    }
+
+    /**
+     * `ssh` clients typed at a prompt in this pane, on its SSH tab's host: only those whose terminal there is this pane's
+     * (see probe.ts), since other panes and tabs can be on the same host. Empty elsewhere.
+     */
+    async nestedSSH (pane: DesktopPane): Promise<NestedSSH[]> {
+        const outer = await this.targetOf(pane)
+        if (!(outer instanceof TabbySSHTarget)) {
+            return []
+        }
+        const probe = `trd${Math.random().toString(36).slice(2, 10)}`
+        const { result: out, ids } = await probesIn(pane, probe, () => outer.exec('sh -s', nestedSSHScript(probe)))
+        const found: NestedSSH[] = []
+        for (const line of out.split('\n')) {
+            const m = /^TRD_SSH (\d+)\|([^|]*)\|(.*)$/.exec(line.trim())
+            const args = m?.[3].split('\x1f').filter(Boolean) ?? []
+            const cmd = /(^|\/)ssh$/.test(args[0] ?? '') ? parseSSHCommand(args.slice(1)) : null
+            if (m && cmd && ids.has(`${probe}-${m[1]}`)) {
+                found.push({ cmd, tty: m[2] })
+            }
+        }
+        // One per destination.
+        return found.filter((f, i, all) => all.findIndex(g => g.cmd.destination === f.cmd.destination) === i)
+    }
+
+    /** A target for an `ssh` found by nestedSSH(), going through the pane's SSH connection. */
+    async nestedTarget (pane: DesktopPane, nested: NestedSSH): Promise<RemoteTarget | null> {
+        const outer = await this.targetOf(pane)
+        if (!(outer instanceof TabbySSHTarget)) {
+            return null
+        }
+        const config = await outer.exec(`${['ssh', ...nested.cmd.options, '-G', nested.cmd.destination].map(shq).join(' ')} 2>/dev/null`, '')
+        return new NestedSSHTarget(keyFromConfig(config, nested.cmd.destination), nested.cmd.destination, outer, nested.cmd)
     }
 
     private key (options: string[], destination: string): Promise<string> {

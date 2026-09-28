@@ -135,9 +135,16 @@ const PAGE_HELPERS = config => `(() => {
         /** Whether the pane's desktop connected (not just its status cleared: the sign-in form does that too). */
         connected (p) { return RD.desktop.logOf(p).some(l => /^connected: /.test(l)) },
         session (p) { return RD.desktop.sessions.get(p) },
-        async menu (p) {
+        /** This plugin's items in a pane's menu (tab header: the tab's menu). */
+        async menu (p, header = false) {
             const { TabContextMenuItemProvider } = require('tabby-core')
-            return (await Promise.all(RD.injector.get(TabContextMenuItemProvider).map(x => x.getItems(p, false)))).flat()
+            const ours = RD.injector.get(TabContextMenuItemProvider).find(x => x.constructor.name === 'RemoteDesktopContextMenu')
+            return ours.getItems(header ? this.topOf(p) : p, header)
+        },
+        /** The same, with the "Desktops" submenu's items in line. */
+        async menuItems (p) {
+            const items = await this.menu(p)
+            return [...items, ...items.find(i => i.label === 'Desktops')?.submenu ?? []]
         },
         /** Closes what the suite opened. */
         async closeAll () {

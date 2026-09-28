@@ -139,7 +139,7 @@ await suite('actions', async t => {
     await setPane(780, 560)
     const big = await settle()
     await t.settings({ resize: 'off', zoom: 'actual' })
-    const radios = (await ev('return (await H.menu(H.pane)).find(i => i.label === "Remote desktop settings")?.submenu.filter(i => i.checked).map(i => i.label) ?? []'))
+    const radios = (await ev('return (await H.menu(H.pane)).find(i => i.label === "Settings")?.submenu.filter(i => i.checked).map(i => i.label) ?? []'))
     check('the settings show "actual size" chosen', radios.includes('Keep the resolution (actual size, scroll)'), radios)
     await setPane(600, 420)
     const actual = await settle()

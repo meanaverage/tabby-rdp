@@ -49,6 +49,7 @@
     "@types/node": "^20.19.0",
     "rxjs": "7.8.2",
     "tabby-core": "1.0.231-nightly.0",
+    "tabby-settings": "1.0.231-nightly.0",
     "tabby-terminal": "1.0.231-nightly.0",
     "typescript": "~5.9.3"
   }

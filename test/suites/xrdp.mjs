@@ -33,7 +33,7 @@ await suite('xrdp', async t => {
             f.querySelector('[name=password]').value = password
             f.requestSubmit()
         },
-        async labels (p) { return (await H.menu(p)).map(i => i.label) },
+        async labels (p) { return (await H.menuItems(p)).map(i => i.label) },
     })`)
     await t.settings({ resize: 'live', sharpness: 'standard', sound: false })
     const desktops = await ev('return JSON.stringify(H.config.store.remoteDesktop.desktops ?? [])')

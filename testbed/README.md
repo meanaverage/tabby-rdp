@@ -57,6 +57,18 @@ The suite checks both ways a host offers xrdp: next to GNOME, as a second deskto
 host's own desktop where GNOME isn't installed (with `tabbyxrdp`, running the plugin's setup with a `PATH` that has no
 `grdctl` or `gnome-shell`).
 
+### A second account to ssh on to, for the nested suite (optional)
+
+After `xrdp.sh`, as the test user on the host:
+
+```sh
+scp testbed/linux/nested.sh user@host: && ssh user@host sh nested.sh
+```
+
+[`nested.sh`](linux/nested.sh) lets the test user `ssh trdhop` to the `tabbyxrdp` account without a password (a key
+made for it), the way you would ssh on from one machine to the next, and moves that account's GNOME Remote Desktop to
+port 3391 (the test user's has 3389). Then `TRD_TEST_NESTED=trdhop npm test -- nested`.
+
 ## Windows machine
 
 Windows 10 or 11 Pro (or Windows Server), for example a VM on the same virtual network as the Linux test host.

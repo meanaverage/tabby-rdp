@@ -9,7 +9,7 @@ await suite('status', async t => {
     await ev(`Object.assign(H, {
         stats () { return H.overlay(H.pane)?.querySelector('.trd-stats') ?? null },
         statsText () { const s = H.stats(); return s ? { numbers: s.querySelector('.trd-stats-numbers').textContent, path: s.querySelector('.trd-stats-path').textContent } : null },
-        async statusItem () { return (await H.menu(H.pane)).find(i => i.label === 'Remote desktop settings').submenu.find(i => /connection status/i.test(i.label ?? '')) },
+        async statusItem () { return (await H.menu(H.pane)).find(i => i.label === 'Settings').submenu.find(i => /connection status/i.test(i.label ?? '')) },
     })`)
     // As a fresh profile has it; the previous value comes back at the end.
     await t.settings({ connectionStatus: false, sharpness: 'standard', desk: true })

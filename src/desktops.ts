@@ -34,6 +34,8 @@ export interface DesktopSpec {
     domain?: string
     /** How to start it when it doesn't answer (a VM on the SSH host, or Wake-on-LAN). */
     wake?: WakeSpec
+    /** A VM found on the SSH host (see vms.ts), not configured: whether it was running or off when found. */
+    found?: 'running' | 'off'
 }
 
 /**

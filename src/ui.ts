@@ -1,15 +1,16 @@
 import { Injectable, NgZone } from '@angular/core'
 import {
-    BaseTabComponent, ConfigProvider, HotkeyDescription, HotkeyProvider, MenuItemOptions, Platform, SplitTabComponent,
+    AppService, BaseTabComponent, ConfigProvider, HotkeyDescription, HotkeyProvider, MenuItemOptions, Platform, SplitTabComponent,
     TabContextMenuItemProvider,
 } from 'tabby-core'
 import { BaseTerminalTabComponent, TerminalDecorator } from 'tabby-terminal'
 import { DesktopSettings, RemoteDesktopService } from './desktop.service'
+import { RemoteDesktopHelp, TOGGLE_HOTKEY } from './help'
 import { DesktopKeyboard, SEND_KEYS } from './keyboard'
 import { isSSHTab } from './ssh'
 import { DesktopPane, desktopPaneOf, RemoteTargets } from './targets'
 
-export const TOGGLE_HOTKEY = 'remote-desktop-toggle'
+export { TOGGLE_HOTKEY }
 
 /** Listed in Settings > Hotkeys, where it can be rebound. Works while the desktop has focus too. */
 @Injectable()
@@ -50,6 +51,12 @@ export class RemoteDesktopConfig extends ConfigProvider {
             desktopSharpness: [],
             // Certificates of desktops behind hosts, trusted on first use: [{ desktop: <session key>, sha256 }].
             trustedCertificates: [],
+            // The on-screen display naming a desktop for a moment (see osd.ts).
+            osd: { show: 'auto', font: 'condensed', size: 'medium', position: 'top-right', color: '', seconds: 2.5 },
+            // Look for VMs with a desktop on SSH hosts (libvirt) and offer them in the menus (see vms.ts).
+            discoverVMs: true,
+            // The tip shown the first time a desktop connects (see help.ts) has been shown.
+            tipShown: false,
         },
     }
 
@@ -83,7 +90,9 @@ export function toggleLabel (desktop: RemoteDesktopService, pane: DesktopPane): 
 export function desktopChoices (desktop: RemoteDesktopService, pane: DesktopPane, targetLabel?: string): MenuItemOptions[] {
     const { specs, current } = desktop.choicesOf(pane)
     const items: MenuItemOptions[] = specs.filter(spec => spec.id !== current?.id).map(spec => ({
-        label: desktop.isOpenElsewhere(pane, spec) ? `Switch to ${spec.name} (open in another tab)` : `Open ${spec.name}`,
+        label: desktop.isOpenElsewhere(pane, spec) ? `Switch to ${spec.name} (open in another tab)`
+            // Found on the host (see vms.ts): say so, and that opening one that's off starts it.
+            : spec.found === 'off' ? `Start and open ${spec.name} (VM, shut off)` : spec.found ? `Open ${spec.name} (VM)` : `Open ${spec.name}`,
         click: () => desktop.showDesktop(pane, spec.id),
     }))
     // Not in a remote desktop tab: it isn't an SSH host.
@@ -121,7 +130,13 @@ export function desktopActions (desktop: RemoteDesktopService, keyboard: Desktop
 export class RemoteDesktopContextMenu extends TabContextMenuItemProvider {
     override weight = 6
 
-    constructor (private desktop: RemoteDesktopService, private targets: RemoteTargets, private keyboard: DesktopKeyboard) {
+    constructor (
+        private desktop: RemoteDesktopService,
+        private targets: RemoteTargets,
+        private keyboard: DesktopKeyboard,
+        private help: RemoteDesktopHelp,
+        private app: AppService,
+    ) {
         super()
     }
 
@@ -132,31 +147,62 @@ export class RemoteDesktopContextMenu extends TabContextMenuItemProvider {
         }
         const pane = desktopPaneOf(tab)
         // Local terminals qualify only while they run ssh.
-        if (!pane || !this.desktop.has(pane) && !await this.targets.targetOf(pane)) {
+        const target = pane && (this.targets.cached(pane) ?? await this.targets.targetOf(pane))
+        if (!pane || !this.desktop.has(pane) && !target) {
             return []
         }
+        // VMs on the host: wait a moment for a fresh look, else show what's known.
+        if (target) {
+            await Promise.race([this.desktop.discoverVMs(target), new Promise(resolve => setTimeout(resolve, 1200))])
+        }
+        // A heading, so the items below read as this plugin's rather than Tabby's.
+        const connectedTo = this.desktop.isConnected(pane) ? this.desktop.desktopOf(pane)?.name : undefined
         const toggle = toggleLabel(this.desktop, pane)
         const items: MenuItemOptions[] = [
+            { label: connectedTo ? `Remote Desktop — connected to ${connectedTo}` : 'Remote Desktop', enabled: false },
             ...toggle ? [{ label: toggle, click: () => this.desktop.toggle(pane) }] : [],
-            ...desktopChoices(this.desktop, pane, this.targets.cached(pane)?.label),
         ]
+        // The host's other desktops (and VMs found there) and "Add a desktop behind…", one level down to keep the menu short.
+        const choices = desktopChoices(this.desktop, pane, this.targets.cached(pane)?.label)
+        if (choices.length) {
+            items.push({ label: 'Desktops', submenu: choices })
+        }
         if (this.desktop.isConnected(pane)) {
-            items.push({ label: 'Send files to the remote desktop…', click: () => this.desktop.sendFiles(pane) })
+            items.push({ label: 'Send files…', click: () => this.desktop.sendFiles(pane) })
             items.push(...desktopActions(this.desktop, this.keyboard, pane))
+            // Several desktops in this tab: paste on all of them, or type into all of them.
+            const all = this.desktop.desktopsInTab(pane)
+            if (all > 1) {
+                items.push({ label: `Paste to all ${all} desktops in this tab`, click: () => this.desktop.pasteToAll(pane) })
+                items.push({
+                    type: 'checkbox',
+                    label: `Type into all ${all} desktops in this tab`,
+                    checked: this.desktop.isBroadcast(pane),
+                    click: () => this.desktop.setBroadcast(pane, !this.desktop.isBroadcast(pane)),
+                })
+            }
+        }
+        if (this.desktop.desktopOf(pane)?.found) {
+            items.push({ label: `Save ${this.desktop.desktopOf(pane)!.name} to this host's desktops`, click: () => this.desktop.saveFoundDesktop(pane) })
         }
         if (this.desktop.canSignInAgain(pane)) {
             items.push({ label: 'Sign in again…', click: () => this.desktop.signInAgain(pane) })
         }
         if (this.desktop.has(pane)) {
-            items.push({ label: 'Disconnect remote desktop', click: () => this.desktop.disconnect(pane) })
+            items.push({ label: 'Disconnect', click: () => this.desktop.disconnect(pane) })
         }
-        items.push({ label: 'Remote desktop settings', submenu: settingsMenu(this.desktop, pane) })
+        items.push({ label: 'Settings', submenu: settingsMenu(this.desktop, pane, this.help) })
+        // Tabby can even out a split's panes but offers it nowhere; a grid of desktops wants it.
+        const split = this.app.tabs.find(t => t instanceof SplitTabComponent && t.getAllTabs().includes(pane)) as SplitTabComponent | undefined
+        if (split && split.getAllTabs().length > 1) {
+            items.push({ label: 'Make panes even', click: () => { split.equalize(); split.layout() } })
+        }
         return items
     }
 }
 
 /** Radio items for the `remoteDesktop` settings; shared by the context menus and the header button. */
-export function settingsMenu (desktop: RemoteDesktopService, pane?: DesktopPane | null): MenuItemOptions[] {
+export function settingsMenu (desktop: RemoteDesktopService, pane?: DesktopPane | null, help?: RemoteDesktopHelp): MenuItemOptions[] {
     const current = desktop.settings()
     const radio = <K extends keyof DesktopSettings>(key: K, value: DesktopSettings[K], label: string): MenuItemOptions => ({
         type: 'radio',
@@ -187,6 +233,10 @@ export function settingsMenu (desktop: RemoteDesktopService, pane?: DesktopPane 
         ownRadio('retina', 'Retina'),
     ] : []
     return [
+        ...help ? [
+            { label: 'All settings, keys and help…', click: () => help.open() },
+            { type: 'separator' as const },
+        ] : [],
         { label: 'When the pane is resized', enabled: false },
         radio('resize', 'live', 'Resize the remote desktop to fit'),
         radio('resize', 'reconnect', 'Reconnect at the new size'),
@@ -249,8 +299,8 @@ export function settingsMenu (desktop: RemoteDesktopService, pane?: DesktopPane 
             label: 'Remove a desktop',
             enabled: desktop.configuredDesktops().length > 0,
             submenu: desktop.configuredDesktops().map((d, i) => ({
-                label: `${d.name ?? `${d.host}:${d.port}`} (behind ${d.via})`,
-                click: () => desktop.removeDesktop(i),
+                label: `${d.name ?? `${d.host}:${d.port}`} (behind ${d.via})…`,
+                click: () => desktop.confirmRemoveDesktop(i),
             })),
         },
     ]

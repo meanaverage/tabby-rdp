@@ -1,18 +1,20 @@
 import { Injectable, NgZone } from '@angular/core'
 import { Subject } from 'rxjs'
-import { AppService, ConfigService, NotificationsService, ProfilesService, SplitTabComponent } from 'tabby-core'
+import { AppService, ConfigService, NotificationsService, PlatformService, ProfilesService, SelectorService, SplitTabComponent } from 'tabby-core'
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
 import { pathToFileURL } from 'url'
 import { DesktopPane, desktopPaneOf, isRDPTab, RDP_PROFILE_TYPE, RemoteTarget, RemoteTargets } from './targets'
-import { consoleScript, DeskRequest } from './deskScript'
+import { consoleScript, DeskRequest, MACHINE_ID_COMMAND } from './deskScript'
 import { AudioPlayer } from './audio'
 import { ConnectionStatus, STYLE as STATS_STYLE } from './connectionStatus'
 import { Microphone } from './microphone'
 import { askDesktop } from './desktopForm'
 import { FileTransfer, STYLE as FILES_STYLE, uniquePath } from './fileTransfer'
 import { desktopIdOf, DesktopSpec, desktopsFor, DIRECT_KEY, ExtraDesktopConfig, OWN_DESKTOP, OwnDesktopFound, sessionKey } from './desktops'
+import { RemoteDesktopHelp } from './help'
+import { OSD_STYLE, OsdSettings, osdSettings, renderOsd } from './osd'
 import { parseRdpFile } from './rdpFile'
 import { prepareRemoteDesktop } from './remoteSetup'
 import { normalizeFingerprint, RDCleanPathProxy, startRDCleanPathProxy } from './rdcleanpath'
@@ -20,7 +22,9 @@ import {
     askCredentials, Credentials, forgetCredentials, forgetCredentialsFor, loadCredentials, moveCredentialsFor, saveCredentials,
     STYLE as SIGNIN_STYLE,
 } from './signin'
+import { isSSHTab } from './ssh'
 import { rdpAnswers, waitForRdp, wakeDesktop } from './wake'
+import { scanVMs, vmSpec } from './vms'
 
 /** How long a desktop that was started (`wake`) gets to answer. */
 const WAKE_TIMEOUT_MS = 3 * 60 * 1000
@@ -59,9 +63,14 @@ const STYLE = `
     pointer-events: none; }
 .trd-status-actions { display: flex; gap: 8px; pointer-events: auto; }
 .trd-status-actions:empty { display: none; }
+.trd-status-help { pointer-events: auto; color: #8ab4f8; font-size: 12px; cursor: pointer; }
+.trd-status-help:hover { text-decoration: underline; }
 .trd-overlay.trd-dim .trd-host { opacity: 0.2; }
 .trd-view-only { display: none; position: absolute; inset: 0; }
 .trd-overlay.trd-view-only-on .trd-view-only { display: block; }
+.trd-overlay.trd-broadcast-on::before { content: 'Typing into all desktops in this tab'; position: absolute; top: 8px; left: 50%;
+    transform: translateX(-50%); z-index: 4; padding: 2px 10px; border-radius: 4px; background: rgba(214, 120, 0, 0.92); color: #fff;
+    font-size: 11px; pointer-events: none; white-space: nowrap; }
 .trd-view-only::after { content: 'View only'; position: absolute; top: 8px; left: 8px; padding: 2px 8px; border-radius: 4px;
     background: rgba(30, 30, 30, 0.85); color: #ddd; font-size: 11px; pointer-events: none; }
 .trd-mic { position: absolute; top: 8px; right: 8px; width: 22px; height: 22px; border-radius: 50%; display: none;
@@ -100,7 +109,7 @@ interface CertificateProblem {
 /** A SHA-256 fingerprint on two lines of 16 bytes, so it fits a narrow pane. */
 const showFingerprint = (fingerprint: string) => fingerprint ? `${fingerprint.slice(0, 47)}\n${fingerprint.slice(48)}` : '(none)'
 
-/** `remoteDesktop` settings (Tabby config), editable from the "Remote desktop settings" menus. */
+/** `remoteDesktop` settings (Tabby config), editable from the menus' Settings and the settings page. */
 export interface DesktopSettings {
     /** When the pane changes size: 'live' resizes the remote monitor in place, 'reconnect' reconnects at the new size, 'off' keeps the size. */
     resize: 'live' | 'reconnect' | 'off'
@@ -120,6 +129,10 @@ export interface DesktopSettings {
     connectionStatus: boolean
     /** Send the microphone to the remote desktop while an application there records (applies on the next connect). */
     microphone: boolean
+    /** The on-screen display naming a desktop for a moment (see osd.ts). */
+    osd: OsdSettings
+    /** Look for virtual machines with a desktop on SSH hosts (libvirt), and offer them in the menus. */
+    discoverVMs: boolean
 }
 
 interface RemoteSize {
@@ -209,6 +222,8 @@ class DesktopSession {
     indicator: ConnectionStatus | null = null
     /** How the pictures come (for the indicator): the graphics pipeline, bitmaps, or IronRDP's choice. */
     graphics = ''
+    /** "What does this mean?" under a message (see status()): opens help about it. */
+    onHelp: ((message: string) => void) | null = null
     /** Resolves when the session is disposed (ends a pending sign-in). */
     readonly disposed: Promise<void>
     private markDisposed!: () => void
@@ -222,7 +237,8 @@ class DesktopSession {
             <div class="trd-host"></div>
             <div class="trd-view-only" title="View only: no keyboard or mouse input goes to the remote desktop"></div>
             <div class="trd-mic"><i class="fas fa-microphone"></i></div>
-            <div class="trd-status"><div class="trd-status-text"></div><div class="trd-status-actions"></div></div>`
+            <div class="trd-osd"></div>
+            <div class="trd-status"><div class="trd-status-text"></div><div class="trd-status-actions"></div><a class="trd-status-help">What does this mean?</a></div>`
         this.host = this.overlay.querySelector('.trd-host')!
         this.statusEl = this.overlay.querySelector('.trd-status')!
         if (getComputedStyle(container).position === 'static') {
@@ -247,6 +263,17 @@ class DesktopSession {
         this.viewOnly = viewOnly
         this.overlay.classList.toggle('trd-view-only-on', viewOnly)
         this.log.push(`view only: ${viewOnly ? 'on' : 'off'}`)
+    }
+
+    private labelTimer?: ReturnType<typeof setTimeout>
+
+    /** Shows which desktop this is, for a moment (see osd.ts). */
+    flashLabel (name: string, sub: string, settings: OsdSettings): void {
+        const osd = this.overlay.querySelector<HTMLElement>('.trd-osd')!
+        renderOsd(osd, name, sub, settings)
+        osd.classList.add('trd-shown')
+        clearTimeout(this.labelTimer)
+        this.labelTimer = setTimeout(() => osd.classList.remove('trd-shown'), settings.seconds * 1000)
     }
 
     /** IronRDP's canvas: the remote frame, at the remote resolution. */
@@ -278,10 +305,16 @@ class DesktopSession {
         }
     }
 
-    /** Shows a message over the desktop (empty: none), with buttons; with buttons the last picture is dimmed. */
-    status (msg: string, actions: StatusAction[] = []): void {
+    /**
+     * Shows a message over the desktop (empty: none), with buttons; with buttons the last picture is dimmed. `help`:
+     * with a "What does this mean?" link, for messages that end the connection.
+     */
+    status (msg: string, actions: StatusAction[] = [], help = false): void {
         this.log.push(`${new Date().toISOString()} ${msg}`)
         this.statusEl.querySelector('.trd-status-text')!.textContent = msg
+        const link = this.statusEl.querySelector<HTMLElement>('.trd-status-help')!
+        link.style.display = help && this.onHelp ? '' : 'none'
+        link.onclick = () => this.onHelp?.(msg)
         this.statusEl.querySelector('.trd-status-actions')!.replaceChildren(...actions.map(action => {
             const button = document.createElement('button')
             button.className = 'btn btn-secondary'
@@ -356,7 +389,38 @@ export class RemoteDesktopService {
         private config: ConfigService,
         private zone: NgZone,
         private profiles: ProfilesService,
+        private help: RemoteDesktopHelp,
+        private selector: SelectorService,
+        private platform: PlatformService,
     ) { }
+
+    /**
+     * The remote a desktop opened in the pane now is on: the pane's own, or in an SSH tab where `ssh` was typed at
+     * the prompt, the machine it went to (as for a local terminal running ssh), through the tab's host. Asks when it
+     * can't tell which. Undefined: cancelled.
+     */
+    private async remoteFor (pane: DesktopPane): Promise<RemoteTarget | null | undefined> {
+        const own = await this.targets.targetOf(pane)
+        const nested = own && isSSHTab(pane) ? await this.targets.nestedSSH(pane).catch(() => []) : []
+        if (!own || !nested.length) {
+            return own
+        }
+        let chosen = nested[0]
+        if (nested.length > 1) {
+            const picked = await this.selector.show<typeof chosen | null>('Which remote desktop?', [
+                ...nested.map(n => ({ name: n.cmd.destination, description: `ssh running in a terminal on ${own.label}`, icon: 'fas fa-desktop', result: n })),
+                { name: own.label, description: 'this tab\'s own SSH connection', icon: 'fas fa-desktop', result: null },
+            ]).catch(() => undefined)
+            if (picked === undefined) {
+                return undefined
+            }
+            if (!picked) {
+                return own
+            }
+            chosen = picked
+        }
+        return await this.targets.nestedTarget(pane, chosen).catch(() => null) ?? own
+    }
 
     has (pane: DesktopPane): boolean {
         this.prune()
@@ -421,7 +485,52 @@ export class RemoteDesktopService {
             ? (this.config.store.profiles ?? []).filter((p: any) => p?.type === RDP_PROFILE_TYPE && p.options?.host && p.options.via === target.profileId)
                 .map((p: any) => ({ ...p.options, name: p.name }))
             : []
-        return desktopsFor(target, this.config.store.remoteDesktop?.desktops, this.ownDesktops.get(target.key), viaProfile)
+        const specs = desktopsFor(target, this.config.store.remoteDesktop?.desktops, this.ownDesktops.get(target.key), viaProfile)
+        // Found VMs come last, and not where a configured desktop has the same address.
+        const found = this.settings().discoverVMs ? this.vms.get(target.key)?.specs ?? [] : []
+        return [...specs, ...found.filter(f => !specs.some(s => s.id === f.id))]
+    }
+
+    /** VMs found on SSH hosts (see vms.ts), by target key: when, and as desktops. */
+    private vms = new Map<string, { at: number, specs: DesktopSpec[], scan?: Promise<void> }>()
+
+    /**
+     * Looks for VMs with a desktop on the host (libvirt), unless it did in the last minute or the setting is off.
+     * Resolves when the list is up to date; menus wait a little for it, and show what they have.
+     */
+    discoverVMs (target: RemoteTarget): Promise<void> {
+        if (!this.settings().discoverVMs || target.direct || typeof target.exec !== 'function') {
+            return Promise.resolve()
+        }
+        const known = this.vms.get(target.key)
+        if (known?.scan) {
+            return known.scan
+        }
+        if (known && Date.now() - known.at < 60000) {
+            return Promise.resolve()
+        }
+        const scan = scanVMs(target).then(found => {
+            this.vms.set(target.key, { at: Date.now(), specs: found.map(vmSpec) })
+            this.changed$.next()
+        }, () => {
+            this.vms.set(target.key, { at: Date.now(), specs: known?.specs ?? [] })
+        })
+        this.vms.set(target.key, { at: known?.at ?? 0, specs: known?.specs ?? [], scan })
+        return scan
+    }
+
+    /** Keeps a found VM open in the pane among the host's desktops (`remoteDesktop.desktops`), under its name. */
+    saveFoundDesktop (pane: DesktopPane): void {
+        const session = this.sessions.get(pane)
+        const spec = session?.spec
+        if (!session?.remote || !spec?.found) {
+            return
+        }
+        const entry = { name: spec.name, via: session.remote.label, host: spec.host, port: spec.port, kind: spec.kind, ...spec.wake ? { wake: spec.wake } : {} }
+        this.config.store.remoteDesktop.desktops = [...this.configuredDesktops(), entry]
+        this.config.save()
+        this.changed$.next()
+        this.notifications.notice(`Saved "${spec.name}" to ${session.remote.label}'s desktops (Settings › Remote Desktop)`)
     }
 
     /** The desktop a plain toggle (hotkey, header, toolbar) opens for this target: the last one used there. */
@@ -440,7 +549,7 @@ export class RemoteDesktopService {
         return { specs, current: this.desktopOf(pane) ?? (target ? this.defaultDesktop(target) : null) }
     }
 
-    /** "Send files to the remote desktop…": picks files to paste there. */
+    /** "Send files…": picks files to paste there. */
     sendFiles (pane: DesktopPane): void {
         this.sessions.get(pane)?.files?.pickAndSend().catch(() => null)
     }
@@ -621,6 +730,29 @@ export class RemoteDesktopService {
         return profile
     }
 
+    /** Asks, then removes a configured desktop (see removeDesktop). The menus and the settings page use this. */
+    async confirmRemoveDesktop (index: number): Promise<boolean> {
+        const d = this.configuredDesktops()[index]
+        if (!d) {
+            return false
+        }
+        const address = `${d.host ?? '127.0.0.1'}:${d.port ?? 3389}`
+        const { response } = await this.platform.showMessageBox({
+            type: 'warning',
+            message: `Remove the desktop "${d.name ?? address}"?`,
+            detail: `${address} behind ${d.via}. Its saved password and remembered certificate are forgotten too. ` +
+                'To open it instead, use its host\'s SSH tab: right-click › Open.',
+            buttons: ['Remove', 'Keep'],
+            defaultId: 1,
+            cancelId: 1,
+        })
+        if (response !== 0) {
+            return false
+        }
+        this.removeDesktop(index)
+        return true
+    }
+
     /** Removes a configured desktop, its saved accounts and its remembered certificate. Open sessions to it keep running. */
     removeDesktop (index: number): void {
         const list = this.configuredDesktops()
@@ -640,7 +772,7 @@ export class RemoteDesktopService {
      * Shows a desktop over the pane: `desktopId` (see desktopsOf), or the one it has open, or the default. A pane
      * holds one desktop at a time; choosing another one replaces it.
      */
-    async showDesktop (pane: DesktopPane, desktopId?: string, options: { background?: boolean, viewOnly?: boolean } = {}): Promise<void> {
+    async showDesktop (pane: DesktopPane, desktopId?: string, options: { background?: boolean, viewOnly?: boolean, target?: RemoteTarget } = {}): Promise<void> {
         this.prune()
         let session = this.sessions.get(pane)
         if (session?.state === 'ended' || session && desktopId && session.spec.id !== desktopId) {
@@ -648,7 +780,10 @@ export class RemoteDesktopService {
             session = undefined
         }
         if (!session) {
-            const target = await this.targets.targetOf(pane)
+            const target = options.target ?? await this.remoteFor(pane)
+            if (target === undefined) {
+                return
+            }
             if (!target) {
                 this.notifications.error('No SSH connection found in this terminal')
                 return
@@ -668,10 +803,15 @@ export class RemoteDesktopService {
             // over the session (Windows).
             const existing = this.paneWithDesktopFor(key)
             if (existing) {
+                if (existing.parent instanceof SplitTabComponent && existing.parent === pane.parent) {
+                    // Next to it, moving the focus there would go unnoticed.
+                    this.help.note(pane.element.nativeElement, `${target.label}'s desktop is already open in the other pane.`, 'nested-ssh')
+                }
                 this.selectPane(existing)
                 return this.showDesktop(existing)
             }
             const created = new DesktopSession(pane.element.nativeElement, key, spec)
+            created.onHelp = message => this.help.explain(message)
             if (options.viewOnly) {
                 created.setViewOnly(true)
             }
@@ -682,6 +822,7 @@ export class RemoteDesktopService {
             const focused = pane.focused$.subscribe(() => {
                 if (created.visible) {
                     setTimeout(() => created.visible && created.focusDesktop())
+                    this.label(pane, created)
                 }
             })
             created.onDispose(() => focused.unsubscribe())
@@ -691,8 +832,11 @@ export class RemoteDesktopService {
             return
         }
         session.setVisible(true)
+        session.overlay.classList.toggle('trd-broadcast-on', this.isBroadcast(pane))
         this.syncIndicator(session)
         this.changed$.next()
+        this.tip(pane, session)
+        this.label(pane, session)
         const shown = session
         setTimeout(() => this.followPane(pane, shown))
     }
@@ -702,11 +846,34 @@ export class RemoteDesktopService {
      * attached to the console's tmux session (or opened in its folder when it isn't in tmux).
      */
     async openConsole (pane: DesktopPane, request: DeskRequest): Promise<void> {
-        await this.showDesktop(pane, OWN_DESKTOP)
         const target = await this.targets.targetOf(pane)
         if (!target) {
             return
         }
+        // `desk` may run on another machine than the pane is connected to: `ssh` typed in its console, with the script
+        // there through a shared home folder. That machine's desktop isn't this connection's to open.
+        if (request.machine) {
+            const machineOf = async (t: RemoteTarget) => (await t.exec('sh -s', MACHINE_ID_COMMAND).catch(() => '')).trim()
+            const machine = await machineOf(target)
+            if (machine && machine !== request.machine) {
+                // Typed `ssh` at the prompt: the machine it went to, when that is where desk ran.
+                for (const nested of isSSHTab(pane) ? await this.targets.nestedSSH(pane).catch(() => []) : []) {
+                    const there = await this.targets.nestedTarget(pane, nested).catch(() => null)
+                    if (there && await machineOf(there) === request.machine) {
+                        return this.openConsoleOn(pane, there, request)
+                    }
+                }
+                const there = request.hostname || 'another machine'
+                this.help.note(pane.element.nativeElement, `desk ran on ${there}, but this tab is connected to ${target.label}. ` +
+                    `Open ${there} in its own tab to use desk there.`, 'nested-ssh')
+                return
+            }
+        }
+        return this.openConsoleOn(pane, target, request)
+    }
+
+    private async openConsoleOn (pane: DesktopPane, target: RemoteTarget, request: DeskRequest): Promise<void> {
+        await this.showDesktop(pane, OWN_DESKTOP, { target })
         // Wait for the desktop (possibly another pane's, for the same account) to be connected.
         let session: DesktopSession | undefined
         for (let i = 0; i < 240; i++) {
@@ -826,7 +993,8 @@ export class RemoteDesktopService {
         const session = this.sessions.get(pane)
         const background = !!session && !session.visible
         this.drop(pane, false)
-        await this.zone.run(() => this.showDesktop(pane, spec.id, { background, viewOnly: session?.viewOnly }))
+        // The same remote as before, even if the `ssh` it was found through has ended since.
+        await this.zone.run(() => this.showDesktop(pane, spec.id, { background, viewOnly: session?.viewOnly, target: session?.remote ?? undefined }))
     }
 
     /** After a desktop ended: reconnect by itself if it dropped, otherwise offer to. */
@@ -847,7 +1015,7 @@ export class RemoteDesktopService {
         } else if (outcome.connected) {
             session.status(`Remote desktop session ended: ${outcome.reason ?? 'unknown reason'}`, [again('Reconnect')])
         } else {
-            session.status(`Remote desktop failed: ${outcome.error ?? 'unknown error'}`, [again('Try again')])
+            session.status(`Remote desktop failed: ${outcome.error ?? 'unknown error'}`, [again('Try again')], true)
         }
     }
 
@@ -877,7 +1045,7 @@ export class RemoteDesktopService {
         const delays = RemoteDesktopService.RECONNECT_DELAYS
         if (state.attempts >= delays.length) {
             this.reconnects.delete(pane)
-            session.status(`${message}\nStopped reconnecting automatically.`, [{ label: 'Reconnect', run: () => this.reopen(pane, spec) }])
+            session.status(`${message}\nStopped reconnecting automatically.`, [{ label: 'Reconnect', run: () => this.reopen(pane, spec) }], true)
             return
         }
         const delay = delays[state.attempts++]
@@ -897,6 +1065,8 @@ export class RemoteDesktopService {
             zoom: store.zoom === 'actual' ? 'actual' : 'fit',
             connectionStatus: store.connectionStatus === true,
             microphone: store.microphone === true,
+            osd: osdSettings(store.osd),
+            discoverVMs: store.discoverVMs !== false,
         }
     }
 
@@ -938,7 +1108,12 @@ export class RemoteDesktopService {
     /** Changes a setting, saves it, and applies it to open desktops. */
     updateSettings (change: Partial<DesktopSettings>): void {
         const store = this.config.store.remoteDesktop
-        Object.assign(store, change)
+        const { osd, ...rest } = change
+        Object.assign(store, rest)
+        if (osd) {
+            // A nested object in Tabby's config takes its fields one by one (the object itself isn't replaced).
+            Object.assign(store.osd, osd)
+        }
         if (change.h264) {
             this.h264Failed.clear()  // turned on again: give it another try everywhere
         }
@@ -1142,6 +1317,169 @@ export class RemoteDesktopService {
         }
     }
 
+    /**
+     * Which desktop a pane shows, for a moment (connected, shown, focused), like a TV naming its input. By default only
+     * where nothing else says: in a split, whose pane headers name the SSH connection, and for a desktop other than
+     * that connection's own (behind the host, or where ssh was typed on to).
+     */
+    private label (pane: DesktopPane, session: DesktopSession, always = false): void {
+        const target = session.remote
+        const osd = this.settings().osd
+        if (session.state !== 'connected' || !session.visible || !target || osd.show === 'off' && !always) {
+            return
+        }
+        const inSplit = pane.parent instanceof SplitTabComponent && pane.parent.getAllTabs().length > 1
+        const own = session.spec.id === OWN_DESKTOP
+        if (osd.show === 'auto' && !always && !inSplit && own && !target.via) {
+            return
+        }
+        // A desktop named after its host already says where it is ("buildhost desktop (xrdp)").
+        const through = own ? target.via : target.direct || session.spec.name.startsWith(target.label) ? null : target.label
+        const size = session.remoteSize ? `${session.remoteSize.width}×${session.remoteSize.height}` : ''
+        session.flashLabel(own ? target.label : session.spec.name, [through ? `via ${through}` : '', size].filter(Boolean).join(' · '), osd)
+    }
+
+    /** Shows the on-screen display on every desktop showing now, whatever `show` says (to try the settings). */
+    showOsdEverywhere (): number {
+        let shown = 0
+        for (const [pane, session] of this.sessions) {
+            if (session.state === 'connected' && session.visible) {
+                this.label(pane, session, true)
+                shown++
+            }
+        }
+        return shown
+    }
+
+    /** The one-time tip (see RemoteDesktopHelp.tipOnce), once a desktop is connected and showing. */
+    private tip (pane: DesktopPane, session: DesktopSession): void {
+        if (session.state === 'connected' && session.visible) {
+            this.help.tipOnce(session.overlay, this.hasConsole(pane), () => session.visible && session.focusDesktop())
+        }
+    }
+
+    /** The open desktops, for the settings page (and bug reports): where they are, and their logs. */
+    sessionSummaries (): { name: string, where: string | null, state: string, log: string[] }[] {
+        this.prune()
+        return [...this.sessions.values()].map(session => ({
+            name: session.spec.name,
+            where: session.remote && !session.remote.direct ? session.remote.label : null,
+            state: session.state === 'connected' ? (session.visible ? 'connected, showing' : 'connected, in the background')
+                : session.state === 'connecting' ? 'connecting' : 'not connected',
+            log: [...session.log],
+        }))
+    }
+
+    /** The certificates remembered for desktops (`remoteDesktop.trustedCertificates`). */
+    trustedCertificates (): { desktop: string, sha256: string }[] {
+        const list = this.config.store.remoteDesktop?.trustedCertificates
+        return (Array.isArray(list) ? list : [])
+            .filter((e: any) => typeof e?.desktop === 'string' && typeof e?.sha256 === 'string')
+            .map((e: any) => ({ desktop: e.desktop, sha256: normalizeFingerprint(e.sha256) || e.sha256 }))
+    }
+
+    /** Forgets one remembered certificate (by session key); the next connection remembers the one it meets. */
+    forgetCertificate (key: string): void {
+        const store = this.config.store.remoteDesktop
+        store.trustedCertificates = (Array.isArray(store.trustedCertificates) ? store.trustedCertificates : []).filter((e: any) => e?.desktop !== key)
+        this.config.save()
+        this.changed$.next()
+    }
+
+    /** Split tabs where keys typed on one desktop go to all of them (see DesktopKeyboard). */
+    private broadcast = new WeakSet<SplitTabComponent>()
+
+    /** The split tab holding the pane, if it has more than one pane. */
+    private splitOf (pane: DesktopPane): SplitTabComponent | null {
+        const split = this.app.tabs.find(t => t instanceof SplitTabComponent && t.getAllTabs().includes(pane)) as SplitTabComponent | undefined
+        return split && split.getAllTabs().length > 1 ? split : null
+    }
+
+    /** The other connected desktops in the pane's tab that take input (not view only), with their sessions. */
+    private othersInTab (pane: DesktopPane): { pane: DesktopPane, session: DesktopSession }[] {
+        const split = this.splitOf(pane)
+        return split ? split.getAllTabs().filter(p => p !== pane).map(p => ({ pane: p as DesktopPane, session: this.sessions.get(p as DesktopPane)! }))
+            .filter(({ session }) => session?.state === 'connected' && !session.viewOnly && session.ui) : []
+    }
+
+    /** How many desktops in the pane's tab would get a paste or typing (itself included), when that's more than one. */
+    desktopsInTab (pane: DesktopPane): number {
+        const own = this.sessions.get(pane)
+        return this.othersInTab(pane).length + (own?.state === 'connected' && !own.viewOnly ? 1 : 0)
+    }
+
+    isBroadcast (pane: DesktopPane): boolean {
+        const split = this.splitOf(pane)
+        return !!split && this.broadcast.has(split)
+    }
+
+    /** Keys typed on one desktop of the pane's tab go to all of them, or no longer; each shows it while it does. */
+    setBroadcast (pane: DesktopPane, on: boolean): void {
+        const split = this.splitOf(pane)
+        if (!split) {
+            return
+        }
+        on ? this.broadcast.add(split) : this.broadcast.delete(split)
+        for (const p of split.getAllTabs()) {
+            const session = this.sessions.get(p as DesktopPane)
+            session?.overlay.classList.toggle('trd-broadcast-on', on)
+            session?.log.push(`typing into all desktops: ${on ? 'on' : 'off'}`)
+        }
+        this.changed$.next()
+    }
+
+    /** A key event for the other desktops of a tab typing into all (see DesktopKeyboard). */
+    broadcastKey (pane: DesktopPane, type: string, init: KeyboardEventInit): void {
+        if (!this.isBroadcast(pane)) {
+            return
+        }
+        for (const { session } of this.othersInTab(pane)) {
+            try {
+                session.ui.sendKeyboardEvent(new KeyboardEvent(type, { ...init, cancelable: true }))
+            } catch (e: any) {
+                session.log.push(`typing into all desktops: ${e?.message ?? e}`)
+            }
+        }
+    }
+
+    /**
+     * Pastes on every connected desktop in the pane's tab: files copied here are offered to each first (see
+     * FileTransfer.pasteClipboardFiles); text and pictures are on their clipboards already. Then Ctrl+V on each, in
+     * whatever window is active there.
+     */
+    pasteToAll (pane: DesktopPane): number {
+        const targets = [...this.sessions.get(pane) ? [{ pane, session: this.sessions.get(pane)! }] : [], ...this.othersInTab(pane)]
+            .filter(({ session }) => session.state === 'connected' && !session.viewOnly && session.ui)
+        for (const { session } of targets) {
+            // Each pastes once it has taken in the files (when there are files to offer), however long that takes it.
+            const offered = session.files?.pasteClipboardFiles() ?? false
+            ;(offered ? session.files!.offerAnswered() : Promise.resolve(true)).then(ok => {
+                if (!ok) {
+                    session.log.push('paste to all desktops: the remote refused the files')
+                    return
+                }
+                try {
+                    session.ui.ctrlV()
+                    session.log.push('keys: Ctrl+V (paste to all desktops)')
+                } catch (e: any) {
+                    session.log.push(`paste to all desktops: ${e?.message ?? e}`)
+                }
+            })
+        }
+        return targets.length
+    }
+
+    /** Resolves when the pane's desktop has taken in the files just offered to it, so a paste then gets them. */
+    pasteReady (pane: DesktopPane): Promise<boolean> {
+        return this.sessions.get(pane)?.files?.offerAnswered() ?? Promise.resolve(true)
+    }
+
+    /** ⌘V on the pane's desktop: offers files copied here for it (see FileTransfer.pasteClipboardFiles). */
+    pasteClipboardFiles (pane: DesktopPane): boolean {
+        const session = this.sessions.get(pane)
+        return !!session?.files && this.isConnected(pane) && !session.viewOnly && session.files.pasteClipboardFiles()
+    }
+
     /** Status log of the pane's desktop session (for tests and troubleshooting). */
     logOf (pane: DesktopPane): string[] {
         return this.sessions.get(pane)?.log ?? []
@@ -1335,7 +1673,7 @@ export class RemoteDesktopService {
         const stop = (message: string) => {
             session.state = 'ended'
             this.changed$.next()
-            session.status(message, [{ label: 'Try again', run: () => this.reopen(pane, spec) }])
+            session.status(message, [{ label: 'Try again', run: () => this.reopen(pane, spec) }], true)
         }
         const fingerprints = `${problem.pinned ? 'Expected' : 'Remembered'} (SHA-256):\n${showFingerprint(problem.expected)}\n\nNow:\n${showFingerprint(problem.actual)}`
         if (problem.pinned) {
@@ -1353,7 +1691,7 @@ export class RemoteDesktopService {
                 `something else may be answering at ${spec.host}:${spec.port}.`, [
                 { label: 'Trust the new certificate', run: () => resolve(true) },
                 { label: 'Cancel', run: () => resolve(false) },
-            ])
+            ], true)
             session.disposed.then(() => resolve(false))
         })
         if (!alive()) {
@@ -1478,7 +1816,7 @@ export class RemoteDesktopService {
             const config = session.ui.configBuilder()
                 .withUsername(username)
                 .withPassword(credentials.password)
-                .withDestination(`${spec.id === OWN_DESKTOP ? target.label : endpoint.host}:${endpoint.port}`)
+                .withDestination(`${spec.id === OWN_DESKTOP ? target.hostname ?? target.label : endpoint.host}:${endpoint.port}`)
                 .withProxyAddress(session.proxy!.url)
                 .withServerDomain(domain)
                 .withAuthToken(session.proxy!.token)
@@ -1555,6 +1893,8 @@ export class RemoteDesktopService {
             session.state = 'connected'
             session.log.push(`connected: ${width}x${height}`)
             session.status('')
+            this.tip(pane, session)
+            this.label(pane, session)
             this.syncIndicator(session)
             this.changed$.next()
             this.reconnects.delete(pane)  // connected again: a later drop starts over
@@ -1598,6 +1938,6 @@ export function installStyle (): void {
     }
     styleInstalled = true
     const style = document.createElement('style')
-    style.textContent = STYLE + SIGNIN_STYLE + FILES_STYLE + STATS_STYLE
+    style.textContent = STYLE + SIGNIN_STYLE + FILES_STYLE + STATS_STYLE + OSD_STYLE
     document.head.appendChild(style)
 }

@@ -1,6 +1,7 @@
 import { Injectable, NgZone } from '@angular/core'
 import { AppService, MenuItemOptions, PlatformService } from 'tabby-core'
 import { RemoteDesktopService } from './desktop.service'
+import { RemoteDesktopHelp } from './help'
 import { DesktopKeyboard } from './keyboard'
 import { isSSHTab } from './ssh'
 import { desktopPaneOf, RemoteTargets } from './targets'
@@ -31,6 +32,7 @@ export class HeaderControls {
         private platform: PlatformService,
         private keyboard: DesktopKeyboard,
         private zone: NgZone,
+        private help: RemoteDesktopHelp,
     ) { }
 
     // All watching and DOM syncing runs outside Angular's zone: inside it, every observer callback and
@@ -61,7 +63,11 @@ export class HeaderControls {
         if (!pane) {
             return
         }
-        await this.targets.targetOf(pane)
+        const target = await this.targets.targetOf(pane)
+        // Look for VMs on the host ahead of the menus (at most once a minute).
+        if (target) {
+            this.desktop.discoverVMs(target).catch(() => null)
+        }
         this.schedule()
     }
 
@@ -123,8 +129,8 @@ export class HeaderControls {
                     ...desktopChoices(this.desktop, pane, this.targets.cached(pane)?.label),
                     ...desktopActions(this.desktop, this.keyboard, pane),
                 ] : []
-                const settings: MenuItemOptions = { label: 'Remote desktop settings', submenu: settingsMenu(this.desktop, pane) }
-                this.platform.popupContextMenu(choices.length ? [...choices, { type: 'separator' }, settings] : settingsMenu(this.desktop, pane), event)
+                const settings: MenuItemOptions = { label: 'Settings', submenu: settingsMenu(this.desktop, pane, this.help) }
+                this.platform.popupContextMenu(choices.length ? [...choices, { type: 'separator' }, settings] : settingsMenu(this.desktop, pane, this.help), event)
             })
         })
         this.disconnectButton.title = 'Disconnect remote desktop'

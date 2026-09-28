@@ -4,20 +4,24 @@ import { BaseTerminalTabComponent, SessionMiddleware, TerminalDecorator } from '
 import { RemoteDesktopService } from './desktop.service'
 import { desktopPaneOf } from './targets'
 import { DeskRequest } from './deskScript'
+import { probeArrived } from './probe'
 
-const PREFIX = Buffer.from('\x1b]7777;desk;')
+const PREFIX = Buffer.from('\x1b]7777;')
 const BEL = 0x07
 const ST = Buffer.from('\x1b\\')
 
 function parse (payload: string): DeskRequest {
-    const [session, socket, cwd, kind] = payload.split(';').map(f => Buffer.from(f ?? '', 'base64').toString('utf8'))
-    // Older `desk` scripts sent no kind: they only knew tmux.
-    return { session: session ?? '', socket: socket ?? '', cwd: cwd ?? '', kind: kind ?? (session ? 'tmux' : '') }
+    const [session, socket, cwd, kind, machine, hostname] = payload.split(';').map(f => Buffer.from(f ?? '', 'base64').toString('utf8'))
+    // Older `desk` scripts sent no kind (they only knew tmux), and no machine.
+    return {
+        session: session ?? '', socket: socket ?? '', cwd: cwd ?? '', kind: kind ?? (session ? 'tmux' : ''),
+        machine: machine?.trim() ?? '', hostname: hostname?.trim() ?? '',
+    }
 }
 
-/** Strips `desk` requests out of a session's output and reports them. */
+/** Strips `desk` requests (and probes, see probe.ts) out of a session's output and reports them. */
 class DeskTrigger extends SessionMiddleware {
-    constructor (private onDesk: (request: DeskRequest) => void) {
+    constructor (private onDesk: (request: DeskRequest) => void, private onProbe: (id: string) => void) {
         super()
     }
 
@@ -33,9 +37,14 @@ class DeskTrigger extends SessionMiddleware {
             if (end === -1) {
                 break
             }
-            const request = parse(data.subarray(body, end).toString('utf8'))
+            const payload = data.subarray(body, end).toString('utf8')
             data = Buffer.concat([data.subarray(0, start), data.subarray(end + (end === st ? ST.length : 1))])
-            setTimeout(() => this.onDesk(request))
+            if (payload.startsWith('desk;')) {
+                const request = parse(payload.slice('desk;'.length))
+                setTimeout(() => this.onDesk(request))
+            } else if (payload.startsWith('probe;')) {
+                this.onProbe(payload.slice('probe;'.length))
+            }
             start = data.indexOf(PREFIX, start)
         }
         if (data.length) {
@@ -60,11 +69,11 @@ export class DeskTriggerDecorator extends TerminalDecorator {
                 }
                 if (!this.desktop.settings().desk) {
                     // A hook left from when it was on; it goes away the next time a desktop opens there.
-                    this.notifications.info('`desk` is off: turn it on in Remote desktop settings')
+                    this.notifications.info('`desk` is off: turn it on in the menu under Remote Desktop › Settings')
                     return
                 }
                 this.desktop.openConsole(pane, request)
-            })))
+            }), id => probeArrived(id, terminal)))
         }
         install()
         this.subscribeUntilDetached(terminal, terminal.sessionChanged$.subscribe(() => install()))

@@ -18,8 +18,8 @@ import { fileURLToPath } from 'node:url'
 import { waitForPort } from './lib/cdp.mjs'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
-const LINUX_SUITES = ['e2e', 'desk', 'resize', 'keyboard', 'actions', 'clipboard', 'files', 'audio', 'microphone', 'graphics', 'reconnect', 'desktops', 'profiles', 'certificates', 'status', 'wake']
-const ALL_SUITES = [...LINUX_SUITES, 'windows', 'winhost', 'xrdp', 'trd-pty', 'screenshots']
+const LINUX_SUITES = ['e2e', 'desk', 'resize', 'keyboard', 'actions', 'clipboard', 'files', 'audio', 'microphone', 'graphics', 'reconnect', 'desktops', 'profiles', 'certificates', 'status', 'wake', 'help', 'nested', 'vms']
+const ALL_SUITES = [...LINUX_SUITES, 'windows', 'winhost', 'xrdp', 'trd-pty', 'screenshots', 'demo']
 
 const args = process.argv.slice(2)
 const flag = name => args.includes(name)
@@ -71,6 +71,8 @@ function makeSandbox () {
         'enableAutomaticUpdates: false',
         'remoteDesktop:',
         '  desk: true',
+        // The one-time tip would sit over the desktop in every suite's first connection (the help suite shows it).
+        '  tipShown: true',
         '',
     ].join('\n'))
     const plugins = path.join(dir, 'plugins')

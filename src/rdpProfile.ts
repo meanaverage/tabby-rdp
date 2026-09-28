@@ -6,6 +6,7 @@ import {
 import { BaseTerminalTabComponent, TerminalDecorator } from 'tabby-terminal'
 import { RemoteDesktopService } from './desktop.service'
 import { formatAddress, parseAddress } from './desktopForm'
+import { RemoteDesktopHelp } from './help'
 import { desktopIdOf, DIRECT_KEY } from './desktops'
 import { forgetCredentials } from './signin'
 import { isConnected, isSSHTab } from './ssh'
@@ -322,10 +323,10 @@ export class RDPProfilesService extends QuickConnectProfileProvider<RDPProfile> 
     }
 }
 
-/** In Tabby's command palette, also where no SSH tab (and so no Remote desktop settings menu) is at hand. */
+/** In Tabby's command palette, also where no SSH tab (and so no Remote Desktop › Settings menu) is at hand. */
 @Injectable()
 export class RDPCommands extends CommandProvider {
-    constructor (private desktop: RemoteDesktopService) {
+    constructor (private desktop: RemoteDesktopService, private help: RemoteDesktopHelp) {
         super()
     }
 
@@ -334,6 +335,10 @@ export class RDPCommands extends CommandProvider {
             id: 'tabby-rdp:import-rdp-file',
             label: 'Remote desktop: import an .rdp file…',
             run: () => this.desktop.importRdpFile(),
+        }, {
+            id: 'tabby-rdp:help',
+            label: 'Remote desktop: settings, keys and help',
+            run: async () => this.help.open(),
         }]
     }
 }

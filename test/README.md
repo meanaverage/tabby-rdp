@@ -43,6 +43,9 @@ automatically in the test profile.
 | `TRD_TEST_WIN_OPENSSH` | winhost | `user@host[:port]` of a Windows machine running OpenSSH Server, accepting the test key (`TRD_TEST_SSH_KEY` or the agent). Signs in with `TRD_TEST_WIN_USER` / `TRD_TEST_WIN_PASSWORD`. |
 | `TRD_TEST_XRDP_USER`, `TRD_TEST_XRDP_PASSWORD` | xrdp | The account on the test host that signs in to xrdp (default user `tabbyxrdp`; see `testbed/linux/xrdp.sh`). The suite is skipped without the password. |
 | `TRD_TEST_XRDP_PORT` | xrdp | xrdp's port on the test host (default 3390). |
+| `TRD_TEST_NESTED` | nested | An ssh destination the test host logs in to without a password, with a GNOME desktop of its own (see `testbed/linux/nested.sh`). The suite is skipped without it. |
+| `TRD_TEST_VM_HOST`, `TRD_TEST_VM_NAME` | vms | A libvirt host (`user@host`, as this computer sees it) and a VM on it with a desktop (RDP on, or Windows). The suite is skipped without them. |
+| `TRD_TEST_VM_GNOME` | vms | Optionally, a running VM on that host with GNOME Remote Desktop, which must not be offered (the test Linux VM is one). |
 | `TRD_TEST_DUMP` | all | A folder to save pictures of the remote screen at checkpoints. |
 
 ## Tabby on another machine
@@ -85,6 +88,10 @@ system keychain doesn't answer (Linux without an unlocked keyring), the keychain
 | [xrdp](suites/xrdp.mjs) | xrdp next to GNOME (a second desktop) and without GNOME (the host's own desktop): sign-in and xrdp's autologon, picture, typing, clipboard, keychain, "Sign in again…", live resize (xrdp 0.10+), and the error when neither runs. |
 | [status](suites/status.mjs) | The connection-status indicator: off by default, the menu toggle and its config, throughput, fps, round trip and path, only while the desktop shows. |
 | [wake](suites/wake.mjs) | Starting a desktop behind a host (`wake`): the probe, a Wake-on-LAN packet to a stand-in machine on the test host, the wait, no waking on automatic reconnects, a missing VM, Cancel, the add form's field. |
+| [help](suites/help.mjs) | Settings › Remote Desktop: opened from the menu and at a section, its settings following the config both ways, remembered certificates, open desktops; the one-time tip on the first connection; "What does this mean?" under a message that ends a connection. |
+| [nested](suites/nested.mjs) | `ssh` typed in an SSH tab: the host's desktop in one pane, a split, `ssh` on to another account there, and Desktop in that pane opens that account's desktop through the host; the first pane keeps its own; typing into both and pasting to both; Make panes even; Reconnect stays with it after the ssh ends; without the ssh, the note about the pane next to it. |
+| [vms](suites/vms.mjs) | VMs found on an SSH host (libvirt): the one with a desktop offered in the host's menu with its address, kind and start-by-name, none without a desktop, none with the setting off. |
+| [demo](suites/demo.mjs) | Not a test: makes the README's demo video (`docs/demo/`, uploaded to GitHub rather than committed) and poster (`docs/images/demo.jpg`) from the test machines: four desktops in one tab, a file pasted to all of them, the console switch and `desk`. Needs the Windows machine (WinRM included), an xrdp account (`TRD_TEST_DEMO_XRDP_USER`, `_PASSWORD`) and a second GNOME account (`TRD_TEST_DEMO_GNOME_USER`, default `tabbyxrdp`) on the test host, and ffmpeg; `TRD_TEST_DEMO_LOOK` points at a Tabby config.yaml whose look (color scheme, font) it takes on. |
 | [trd-pty](unit/trd-pty.py) | The shared-session helper on its own, on the test host. |
 
 Checks print `PASS`, `FAIL` or `SKIP`; some suites also print `TIME` lines (connection and reconnection times, for

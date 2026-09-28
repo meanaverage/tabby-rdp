@@ -1,0 +1,96 @@
+/**
+ * The on-screen display naming a desktop for a moment, like a TV's or an HDMI switcher's input overlay: large condensed
+ * letters, white with a soft shadow and a faint glow behind them, so they read on light and dark pictures alike.
+ * `remoteDesktop.osd` in the config; the settings page previews it.
+ */
+export interface OsdSettings {
+    /** 'auto': where nothing else says which desktop a pane shows (a split, a desktop other than the pane's own). */
+    show: 'auto' | 'always' | 'off'
+    font: keyof typeof OSD_FONTS
+    size: keyof typeof OSD_SIZES
+    position: typeof OSD_POSITIONS[number]
+    /** '' for the default (white); else a CSS color. */
+    color: string
+    seconds: number
+}
+
+/** Font stacks: macOS's, then Windows' (Bahnschrift) and common Linux ones, then any sans-serif. */
+export const OSD_FONTS = {
+    condensed: { label: 'Condensed (DIN Condensed)', family: '"DIN Condensed", "Bahnschrift Condensed", Bahnschrift, "Roboto Condensed", "Arial Narrow", sans-serif', weight: 700, stretch: 'condensed' },
+    din: { label: 'Road sign (DIN Alternate)', family: '"DIN Alternate", Bahnschrift, "D-DIN", Roboto, sans-serif', weight: 700, stretch: 'normal' },
+    slender: { label: 'Slender (Avenir Next Condensed)', family: '"Avenir Next Condensed", "Bahnschrift SemiLight Condensed", "Roboto Condensed", "Arial Narrow", sans-serif', weight: 500, stretch: 'condensed' },
+    slenderBold: { label: 'Slender, heavier', family: '"Avenir Next Condensed", "Bahnschrift SemiBold Condensed", "Roboto Condensed", "Arial Narrow", sans-serif', weight: 600, stretch: 'condensed' },
+    system: { label: 'System font', family: 'system-ui, sans-serif', weight: 600, stretch: 'normal' },
+} as const
+
+/** Letter height in px; smaller in a narrow pane (see render()). */
+export const OSD_SIZES = { small: 28, medium: 44, large: 60, huge: 80 } as const
+
+export const OSD_POSITIONS = ['top-left', 'top-center', 'top-right', 'middle', 'bottom-left', 'bottom-center', 'bottom-right'] as const
+
+export const OSD_DEFAULTS: OsdSettings = { show: 'auto', font: 'condensed', size: 'medium', position: 'top-right', color: '', seconds: 2.5 }
+
+/** The config value, with anything missing or unknown replaced by the default. */
+export function osdSettings (value: any): OsdSettings {
+    const v = value && typeof value === 'object' ? value : {}
+    const seconds = Number(v.seconds)
+    return {
+        show: ['auto', 'always', 'off'].includes(v.show) ? v.show : OSD_DEFAULTS.show,
+        font: v.font in OSD_FONTS ? v.font : OSD_DEFAULTS.font,
+        size: v.size in OSD_SIZES ? v.size : OSD_DEFAULTS.size,
+        position: OSD_POSITIONS.includes(v.position) ? v.position : OSD_DEFAULTS.position,
+        color: typeof v.color === 'string' && CSS.supports('color', v.color) ? v.color : '',
+        seconds: Number.isFinite(seconds) && seconds >= 0.5 && seconds <= 30 ? seconds : OSD_DEFAULTS.seconds,
+    }
+}
+
+export const OSD_STYLE = `
+.trd-osd { position: absolute; inset: 0; pointer-events: none; z-index: 3; opacity: 0; transition: opacity 0.5s; overflow: hidden; }
+.trd-osd.trd-shown { opacity: 1; transition: opacity 0.12s; }
+.trd-osd-glow { position: absolute; width: 520px; height: 300px; max-width: 100%; max-height: 100%; }
+.trd-osd-box { position: absolute; display: flex; flex-direction: column; gap: 0.14em; color: #fff; text-transform: uppercase;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5); white-space: nowrap; max-width: calc(100% - 40px); }
+.trd-osd-name { line-height: 1; letter-spacing: 0.04em; overflow: hidden; text-overflow: ellipsis; }
+.trd-osd-sub { display: flex; align-items: center; gap: 0.6em; font-size: max(11px, 0.3em); letter-spacing: 0.22em; }
+.trd-osd-sub:empty { display: none; }
+.trd-osd-bar { width: 1.6em; height: 3px; flex: none; background: var(--bs-primary, #3b82f6); }
+`
+
+/** Where the letters and the glow sit, per position. */
+function place (position: OsdSettings['position']): { box: string, glow: string, align: string } {
+    const [v, h] = position === 'middle' ? ['middle', 'center'] : position.split('-')
+    const box = [
+        // Below a desktop's own top bar (GNOME's is about 32 px), not over its clock.
+        v === 'top' ? 'top: 56px' : v === 'bottom' ? 'bottom: 20px' : 'top: 50%',
+        h === 'left' ? 'left: 24px' : h === 'right' ? 'right: 24px' : 'left: 50%',
+        `transform: translate(${h === 'center' ? '-50%' : '0'}, ${v === 'middle' ? '-50%' : '0'})`,
+    ].join('; ')
+    const at = `${v === 'middle' ? 'center' : v} ${h === 'center' ? 'center' : h}`
+    const glow = [
+        v === 'top' ? 'top: 0' : v === 'bottom' ? 'bottom: 0' : 'top: 50%',
+        h === 'left' ? 'left: 0' : h === 'right' ? 'right: 0' : 'left: 50%',
+        `transform: translate(${h === 'center' ? '-50%' : '0'}, ${v === 'middle' ? '-50%' : '0'})`,
+        `background: radial-gradient(ellipse at ${at}, rgba(0, 0, 0, 0.42), rgba(0, 0, 0, 0.18) 45%, transparent 72%)`,
+    ].join('; ')
+    return { box, glow, align: h === 'left' ? 'flex-start' : h === 'right' ? 'flex-end' : 'center' }
+}
+
+/** Fills `el` (a .trd-osd) with `name` and an optional second line, as the settings say. */
+export function renderOsd (el: HTMLElement, name: string, sub: string, settings: OsdSettings): void {
+    const font = OSD_FONTS[settings.font]
+    const { box, glow, align } = place(settings.position)
+    // Smaller in a narrow pane: a name should fit in about two thirds of it.
+    const width = el.offsetWidth || 800  // layout width: the settings preview is a scaled-down desktop
+    const size = Math.max(18, Math.min(OSD_SIZES[settings.size], width / Math.max(4, name.length) * 1.1))
+    el.innerHTML = `<div class="trd-osd-glow" style="${glow}"></div>
+        <div class="trd-osd-box" style="${box}; align-items: ${align}; font-family: ${font.family.replace(/"/g, '&quot;')};
+            font-weight: ${font.weight}; font-stretch: ${font.stretch}; font-size: ${size}px${settings.color ? `; color: ${settings.color}` : ''}">
+            <div class="trd-osd-name"></div><div class="trd-osd-sub"></div></div>`
+    el.querySelector('.trd-osd-name')!.textContent = name
+    const subEl = el.querySelector<HTMLElement>('.trd-osd-sub')!
+    if (sub) {
+        const bar = document.createElement('span')
+        bar.className = 'trd-osd-bar'
+        subEl.append(bar, document.createTextNode(sub))
+    }
+}

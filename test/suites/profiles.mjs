@@ -39,7 +39,7 @@ await suite('profiles', async t => {
             f.requestSubmit()
         },
         idle (p) { const e = p.element.nativeElement.querySelector('.trd-rdp-idle'); return e && e.style.display !== 'none' ? e.textContent : null },
-        async labels (p) { return (await H.menu(p)).map(i => i.label) },
+        async labels (p) { return (await H.menuItems(p)).map(i => i.label) },
     })`)
     const profilesBefore = await ev('return JSON.stringify(H.config.store.profiles ?? [])')
     const trustedBefore = await ev('return JSON.stringify(H.config.store.remoteDesktop.trustedCertificates ?? [])')
@@ -90,7 +90,7 @@ await suite('profiles', async t => {
         const frame = await t.waitFor('const c = H.canvas(H.rdp); return c?.colors > 3 ? c : null', 10)
         check('picture drawn, sized to the tab', !!frame && Math.abs(frame.w - frame.paneW) <= 2 && Math.abs(frame.h - frame.paneH) <= 2, frame)
         const labels = await ev('return await H.labels(H.rdp)')
-        check('its menu has no console or host entries', !labels.includes('Back to console') && !labels.some(l => /^Add a desktop behind/.test(l ?? '')) && labels.includes('Disconnect remote desktop'), labels)
+        check('its menu has no console or host entries', !labels.includes('Back to console') && !labels.some(l => /^Add a desktop behind/.test(l ?? '')) && labels.includes('Disconnect'), labels)
         check('its menu has the desktop actions (send keys, view only, screenshot, sign in again)', labels.includes('Send keys') && labels.some(l => /^View only/.test(l ?? '')) &&
             labels.some(l => /^Save a screenshot/.test(l ?? '')) && labels.includes('Sign in again…'), labels)
         await ev('await H.inZone(() => RD.desktop.toggle(H.rdp))')
@@ -153,7 +153,7 @@ await suite('profiles', async t => {
     const utf8 = await ev(`return RD.parseRdpFile(Buffer.from('full address:s:[fe80::1]\\nserver port:i:3391\\n'))`)
     check('.rdp (UTF-8): an IPv6 address, the port from "server port"', utf8?.host === 'fe80::1' && utf8.port === 3391, utf8)
     check('.rdp without an address: refused', await ev(`return RD.parseRdpFile(Buffer.from('audiomode:i:0\\n')) === null`))
-    const menu = await ev(`return (await H.menu(H.pane)).find(i => i.label === 'Remote desktop settings').submenu.map(i => i.label)`)
+    const menu = await ev(`return (await H.menu(H.pane)).find(i => i.label === 'Settings').submenu.map(i => i.label)`)
     check('the settings menu offers "Import an .rdp file…"', menu.includes('Import an .rdp file…'), menu)
     check('so does the command palette', await ev(`const { CommandProvider } = require('tabby-core')
         return (await Promise.all(RD.injector.get(CommandProvider).map(p => p.provide({})))).flat().some(c => c.id === 'tabby-rdp:import-rdp-file')`))

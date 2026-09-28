@@ -2,6 +2,7 @@ import { Injectable, NgZone } from '@angular/core'
 import { AppService, HotkeysService } from 'tabby-core'
 import { RemoteDesktopService } from './desktop.service'
 import { DesktopKind } from './desktops'
+import { clipboardPaths } from './fileTransfer'
 import { desktopPaneOf, DesktopPane } from './targets'
 
 /**
@@ -122,6 +123,25 @@ export class DesktopKeyboard {
         if (!pane || focused?.tagName !== 'IRON-REMOTE-DESKTOP' || !pane.element.nativeElement.contains(focused)) {
             return
         }
+        this.routing = pane
+        try {
+            this.routeFor(pane, event)
+        } finally {
+            this.routing = null
+        }
+    }
+
+    /** The pane whose keys are being routed: its tab's other desktops get copies when typing into all. */
+    private routing: DesktopPane | null = null
+
+    /** A key as the focused desktop gets it, also to the others of a tab typing into all (see RemoteDesktopService.broadcastKey). */
+    private mirror (type: string, init: KeyboardEventInit): void {
+        if (this.routing) {
+            this.desktop.broadcastKey(this.routing, type, init)
+        }
+    }
+
+    private routeFor (pane: DesktopPane, event: KeyboardEvent): void {
         // A Tabby shortcut Tabby just acted on: not for the remote.
         if (event.type === 'keydown' && (this.hotkeys as any).pressedHotkey) {
             this.metaAlone = false
@@ -137,6 +157,24 @@ export class DesktopKeyboard {
         }
         const isMeta = event.code === 'MetaLeft' || event.code === 'MetaRight'
         const macShortcuts = process.platform === 'darwin' && this.desktop.settings().macShortcuts
+        // Paste with files copied here (Finder, …): offer them first, then paste once the remote has had a moment to
+        // take the new clipboard (else it pastes what it had). The whole Ctrl+V goes then, whenever ⌘ is let go.
+        const paste = event.code === 'KeyV' && !event.shiftKey && !event.altKey && (macShortcuts ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey)
+        if (paste && event.type === 'keydown' && !event.repeat && this.desktop.isBroadcast(pane) && clipboardPaths().length) {
+            // Typing into all desktops: the copied files go to all of them.
+            this.metaAlone = false
+            event.stopImmediatePropagation()
+            event.preventDefault()
+            this.desktop.pasteToAll(pane)
+            return
+        }
+        if (paste && event.type === 'keydown' && !event.repeat && this.desktop.pasteClipboardFiles(pane)) {
+            this.metaAlone = false
+            event.stopImmediatePropagation()
+            event.preventDefault()
+            this.desktop.pasteReady(pane).then(ok => { if (ok) this.send(pane, { label: 'Ctrl+V (files copied here)', codes: ['ControlLeft', 'KeyV'] }) })
+            return
+        }
         if (macShortcuts && event.metaKey && event.ctrlKey && !MODIFIERS.test(event.code)) {
             // ⌃⌘+key: the Windows key with that key. With ⌘ sent as Ctrl, ⌃⌘ would only mean Ctrl again, so
             // nothing is lost, and macOS keeps few ⌃⌘ shortcuts for itself.
@@ -180,15 +218,28 @@ export class DesktopKeyboard {
         }
         if (process.platform === 'darwin' && event.type === 'keydown' && event.metaKey && !MODIFIERS.test(event.code)) {
             // ⌘ stays the Windows key: IronRDP gets this keydown as is, plus the keyup macOS won't send.
-            setTimeout(() => this.forward(event, {}, 'keyup'))
+            const routed = this.routing
+            setTimeout(() => {
+                this.routing = routed
+                try {
+                    this.forward(event, {}, 'keyup')
+                } finally {
+                    this.routing = null
+                }
+            })
         }
+        // The focused desktop takes this one from IronRDP's own listener; the others of a tab typing into all get it here.
+        this.mirror(event.type, {
+            key: event.key, code: event.code, location: event.location, repeat: event.repeat,
+            shiftKey: event.shiftKey, altKey: event.altKey, ctrlKey: event.ctrlKey, metaKey: event.metaKey,
+        })
     }
 
     /** Hands IronRDP (its listeners are on window) a copy of the event, with ⌘ mapped to Ctrl when asked. */
     private forward (event: KeyboardEvent, change: { key?: string, code?: string, plain?: boolean }, type: string = event.type): void {
         // `plain`: send the key as is (the Windows key for a ⌘ tap), not mapped.
         const macShortcuts = process.platform === 'darwin' && this.desktop.settings().macShortcuts && !change.plain
-        const copy = new KeyboardEvent(type, {
+        const init: KeyboardEventInit = {
             key: change.key ?? event.key,
             code: change.code ?? event.code,
             location: event.location,
@@ -198,9 +249,11 @@ export class DesktopKeyboard {
             ctrlKey: macShortcuts ? event.ctrlKey || event.metaKey : event.ctrlKey,
             metaKey: macShortcuts ? false : event.metaKey,
             cancelable: true,
-        })
+        }
+        const copy = new KeyboardEvent(type, init)
         this.copies.add(copy)
         window.dispatchEvent(copy)
+        this.mirror(type, init)
     }
 
     /** "Send keys": presses a combination on the pane's desktop (showing it, if hidden). */
@@ -211,9 +264,11 @@ export class DesktopKeyboard {
         }
         const press = (type: string, code: string) => {
             // IronRDP sends the scancode for `code`; `key` only matters in its Unicode mode, which is off.
-            const copy = new KeyboardEvent(type, { key: code.replace(/^Key|(Left|Right)$/g, ''), code, cancelable: true })
+            const init = { key: code.replace(/^Key|(Left|Right)$/g, ''), code, cancelable: true }
+            const copy = new KeyboardEvent(type, init)
             this.copies.add(copy)
             window.dispatchEvent(copy)
+            this.desktop.broadcastKey(pane, type, init)
         }
         combo.codes.forEach(code => press('keydown', code))
         ;[...combo.codes].reverse().forEach(code => press('keyup', code))
