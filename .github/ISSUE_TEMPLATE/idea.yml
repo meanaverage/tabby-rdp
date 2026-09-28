@@ -1,0 +1,11 @@
+name: An idea
+description: Something tabby-rdp could do, or do better.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: idea
+    attributes:
+      label: The idea
+      description: What you'd like to do, and how you'd expect it to work. What you do today instead helps too.
+    validations:
+      required: true

@@ -1,0 +1,47 @@
+name: Something doesn't work
+description: A desktop that won't connect, shows the wrong thing, or behaves oddly.
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what you saw instead. A screenshot helps.
+    validations:
+      required: true
+  - type: input
+    id: versions
+    attributes:
+      label: Versions
+      description: tabby-rdp (Settings › Remote Desktop shows it) and Tabby (Settings › About).
+      placeholder: tabby-rdp 0.3.0, Tabby 1.0.237
+    validations:
+      required: true
+  - type: dropdown
+    id: here
+    attributes:
+      label: Tabby runs on
+      options: [macOS, Windows, Linux]
+    validations:
+      required: true
+  - type: dropdown
+    id: desktop
+    attributes:
+      label: The remote desktop
+      options:
+        - Linux with GNOME, through SSH
+        - Linux with xrdp, through SSH
+        - Windows, behind an SSH host
+        - Windows running OpenSSH Server
+        - A remote desktop profile (direct RDP)
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: Connection log
+      description: >-
+        Settings › Remote Desktop › Open desktops › Copy log, with the desktop still open (or right after it failed).
+        Look it over first: it names your hosts and addresses, which you may want to replace.
+      render: text

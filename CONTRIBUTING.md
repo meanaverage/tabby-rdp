@@ -15,6 +15,16 @@ Issues and pull requests are welcome. For anything larger than a fix, please ope
 | `scripts/` | Development helpers: a separate Tabby for trying changes, and the IronRDP build. |
 | `docs/` | Design notes and README images. |
 
+## How changes land
+
+Everything goes through a pull request against `main`, including the maintainers' own work: push a branch (or fork),
+open a pull request, and CI builds and packages the plugin, runs trd-pty's tests, applies the IronRDP patch series and
+runs its web tests. The end-to-end suites need test machines, so they aren't in CI; say in the pull request which ones
+you ran. `main` only changes by merging a pull request that CI passed. Releases are tags on `main` (below).
+
+The pull request template has a short checklist, and the issue forms ask for what helps most with a connection
+problem: versions, what kind of desktop, and the connection log (Settings › Remote Desktop › Open desktops › Copy log).
+
 ## Working on the plugin
 
 ```sh
