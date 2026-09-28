@@ -133,6 +133,8 @@ export interface DesktopSettings {
     osd: OsdSettings
     /** Look for virtual machines with a desktop on SSH hosts (libvirt), and offer them in the menus. */
     discoverVMs: boolean
+    /** Ask npm once a day whether a newer tabby-rdp is out (see updates.ts). */
+    checkUpdates: boolean
 }
 
 interface RemoteSize {
@@ -1067,6 +1069,7 @@ export class RemoteDesktopService {
             microphone: store.microphone === true,
             osd: osdSettings(store.osd),
             discoverVMs: store.discoverVMs !== false,
+            checkUpdates: store.checkUpdates !== false,
         }
     }
 

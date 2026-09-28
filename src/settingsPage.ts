@@ -6,6 +6,7 @@ import { DesktopSettings, RemoteDesktopService } from './desktop.service'
 import { DIRECT_KEY } from './desktops'
 import { OSD_FONTS, OSD_POSITIONS, OSD_SIZES, OSD_STYLE, OsdSettings, renderOsd } from './osd'
 import { HelpTopic, RemoteDesktopHelp, SETTINGS_TAB_ID, TROUBLESHOOTING } from './help'
+import { installedVersion, UpdateCheck } from './updates'
 import { RDP_PROFILE_TYPE } from './targets'
 
 const REPO = 'https://github.com/meanaverage/tabby-rdp'
@@ -19,6 +20,10 @@ const STYLE = `
 .trd-settings .trd-lead { margin-bottom: 18px; opacity: 0.75; }
 .trd-settings .trd-links { white-space: nowrap; }
 .trd-settings .trd-lead a { margin-left: 10px; }
+.trd-settings .trd-update { display: flex; gap: 10px; align-items: center; margin-bottom: 18px; padding: 10px 12px; border-radius: 6px;
+    border: 1px solid rgba(80, 150, 255, 0.45); background: rgba(80, 150, 255, 0.1); }
+.trd-settings .trd-update > div { flex: auto; }
+.trd-settings .trd-update:empty { display: none; }
 .trd-settings section { margin-bottom: 28px; scroll-margin-top: 12px; }
 .trd-settings section > h4 { font-size: 15px; margin-bottom: 10px; }
 .trd-settings .trd-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 10px; }
@@ -111,6 +116,7 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
             this.config.changed$.subscribe(() => this.refresh()),
             this.desktop.changed$.subscribe(() => this.refresh()),
             this.help.show$.subscribe(({ topic, entry }) => setTimeout(() => this.reveal(topic, entry))),
+            this.injector.get(UpdateCheck).changed$.subscribe(() => this.refresh()),
         )
         const pending = this.help.pending
         this.help.pending = null
@@ -141,6 +147,7 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
             <div class="trd-lead">Linux and Windows desktops in Tabby tabs, through SSH or directly.
                 ${version ? `<span>tabby-rdp ${esc(version)}</span>` : ''}
                 <span class="trd-links"><a href="#" data-link="${REPO}#readme">Guide</a><a href="#" data-link="${REPO}/issues">Report a problem</a></span></div>
+            <div class="trd-update" data-update></div>
 
             <section data-topic="start">
                 <h4>Getting started</h4>
@@ -198,6 +205,7 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
                 ${this.toggleLine('h264', 'Video decoding (H.264)', 'Decodes what the remote sends as video, hardware-accelerated where available. Applies on the next connection.')}
                 ${this.toggleLine('connectionStatus', 'Show connection status', 'A small line in the desktop\'s corner: throughput, frames per second, round trip, and how it\'s connected.')}
                 ${mac ? this.toggleLine('macShortcuts', 'Mac-style shortcuts', 'Use ⌘ as Ctrl on the desktop, so ⌘C copies and ⌘V pastes. Tap ⌘ on its own for the Windows key. When off, ⌘ is always the Windows key.') : ''}
+                ${this.toggleLine('checkUpdates', 'Tell me about new versions', 'Once a day, asks npm (registry.npmjs.org) for the latest tabby-rdp, and says so here and in the menus when there is one. Nothing is sent but the request. Tabby itself shows plugin upgrades only on its Plugins page.')}
                 ${this.toggleLine('discoverVMs', 'Find virtual machines on SSH hosts', 'Lists the host\'s libvirt VMs that have a desktop (RDP answering, or Windows and shut off) in its tab\'s menu, ready to open or start. Read-only: it runs virsh as you there, at most once a minute.')}
                 ${this.toggleLine('desk', 'desk: bring the console along', `Type <code>desk</code> in an SSH console to show that same shell on the desktop. Installs a small helper and a login line on GNOME hosts the next time a desktop opens there; off removes them.`)}
                 <div class="form-line">
@@ -357,6 +365,15 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
                 (el as HTMLSelectElement).value = String(settings[key])
             }
         })
+        // A newer version: say so at the top, with where to get it.
+        const updates = this.injector.get(UpdateCheck)
+        const banner = this.root.querySelector<HTMLElement>('[data-update]')
+        if (banner) {
+            banner.innerHTML = updates.available ? `<div><b>tabby-rdp ${esc(updates.available)} is available.</b> You have ${esc(installedVersion())}.</div>
+                <button class="btn btn-primary btn-sm" data-upgrade>Upgrade…</button><button class="btn btn-link btn-sm" data-whatsnew>What's new</button>` : ''
+            banner.querySelector('[data-upgrade]')?.addEventListener('click', () => updates.upgrade())
+            banner.querySelector('[data-whatsnew]')?.addEventListener('click', () => updates.whatsNew())
+        }
         const osd = settings.osd
         this.root.querySelectorAll<HTMLInputElement | HTMLSelectElement>('[data-osd]').forEach(el => {
             const key = el.dataset.osd as keyof OsdSettings

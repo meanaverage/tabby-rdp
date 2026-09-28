@@ -150,14 +150,21 @@ export class RemoteDesktopHelp {
     open (topic: HelpTopic = 'start', entry?: string): void {
         this.zone.run(() => {
             this.pending = { topic, entry }
+            this.openSettings(SETTINGS_TAB_ID)
+            this.show$.next({ topic, entry })
+        })
+    }
+
+    /** Opens Tabby's settings at one of its pages: this plugin's, or Tabby's own ('plugins', 'hotkeys', …). */
+    openSettings (page: string): void {
+        this.zone.run(() => {
             const tab = this.app.tabs.find(t => t instanceof SettingsTabComponent) as SettingsTabComponent | undefined
             if (tab) {
-                tab.activeTab = SETTINGS_TAB_ID
+                tab.activeTab = page
                 this.app.selectTab(tab)
             } else {
-                this.app.openNewTabRaw({ type: SettingsTabComponent, inputs: { activeTab: SETTINGS_TAB_ID } })
+                this.app.openNewTabRaw({ type: SettingsTabComponent, inputs: { activeTab: page } })
             }
-            this.show$.next({ topic, entry })
         })
     }
 
