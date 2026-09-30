@@ -357,6 +357,7 @@ class DesktopSession {
     dispose (): void {
         this.markDisposed()
         this.setVisible(false)
+        clearTimeout(this.labelTimer)
         this.container.removeEventListener('focusin', this.reclaimFocus, true)
         this.disposers.forEach(f => f())
         this.indicator?.dispose()
@@ -821,7 +822,9 @@ export class RemoteDesktopService {
             }
             session = created
             this.sessions.set(pane, created)
-            pane.destroyed$.subscribe(() => this.disconnect(pane))
+            // Released with the session: a pane outlives the desktops opened and closed in it.
+            const destroyed = pane.destroyed$.subscribe(() => this.disconnect(pane))
+            created.onDispose(() => destroyed.unsubscribe())
             // Tabby focuses the terminal when the pane gets focus (tab switch, split focus); take it back.
             const focused = pane.focused$.subscribe(() => {
                 if (created.visible) {
