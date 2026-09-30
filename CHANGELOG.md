@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased
+
+**New**
+- **Shut down VMs it started:** a VM the plugin started to open its desktop can go back off after 5 minutes, 15 or an
+  hour with no desktop open (a setting; never, by default). A watcher on the SSH host sees to it, so it also works after
+  the tab is closed or Tabby has quit.
+
+- **A GNOME desktop that's open elsewhere** (another computer, or another Tabby window): opening it asks whether to
+  take it over, as Windows does (the other connection is disconnected; the session and its apps carry on), or to open
+  a second screen, which is what happened before. A desktop taken over doesn't take itself back.
+
+**Better**
+- **The headless GNOME session** runs X11 apps (through XWayland), and GNOME's settings daemons for keyboard, media
+  keys and custom shortcuts, accessibility and sound; not power, so it never suspends the machine. A session that's
+  already running gets them on the next connect, without closing its apps.
+
+**Docs**
+- The limitation about Win+R from macOS is gone: ⌃⌘ with a key has been the Windows key with it since 0.3.0.
+
 ## 0.3.1
 
 **New**

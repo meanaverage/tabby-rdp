@@ -207,6 +207,20 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
                 ${mac ? this.toggleLine('macShortcuts', 'Mac-style shortcuts', 'Use ⌘ as Ctrl on the desktop, so ⌘C copies and ⌘V pastes. Tap ⌘ on its own for the Windows key. When off, ⌘ is always the Windows key.') : ''}
                 ${this.toggleLine('checkUpdates', 'Tell me about new versions', 'Once a day, asks npm (registry.npmjs.org) for the latest tabby-rdp, and says so here and in the menus when there is one. Nothing is sent but the request. Tabby itself shows plugin upgrades only on its Plugins page.')}
                 ${this.toggleLine('discoverVMs', 'Find virtual machines on SSH hosts', 'Lists the host\'s libvirt VMs that have a desktop (RDP answering, or Windows and shut off) in its tab\'s menu, ready to open or start. Read-only: it runs virsh as you there, at most once a minute.')}
+                <div class="form-line">
+                    <div class="header">
+                        <div class="title">Shut down VMs it started</div>
+                        <div class="description">A VM started to open its desktop goes back off after this long with no
+                            desktop open, also once Tabby is closed: a small watcher on the SSH host sees to it. VMs that
+                            were already running are left alone.</div>
+                    </div>
+                    <select class="form-control" data-setting="shutDownIdle">
+                        <option value="0">Never</option>
+                        <option value="5">After 5 minutes</option>
+                        <option value="15">After 15 minutes</option>
+                        <option value="60">After an hour</option>
+                    </select>
+                </div>
                 ${this.toggleLine('desk', 'desk: bring the console along', `Type <code>desk</code> in an SSH console to show that same shell on the desktop. Installs a small helper and a login line on GNOME hosts the next time a desktop opens there; off removes them.`)}
                 <div class="form-line">
                     <div class="header">

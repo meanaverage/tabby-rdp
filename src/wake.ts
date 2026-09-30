@@ -91,6 +91,68 @@ print("RD_OK Wake-on-LAN sent to %s via %s:%s" % tuple(sys.argv[1:4]))
 ' "$MAC" "$BCAST" "$PORT" 2>&1 || echo "RD_ERR could not send the Wake-on-LAN packet"
 `
 
+// Leaves a watcher on the SSH host that shuts the libvirt domain $VM down once no connection to its RDP server ($H:$P)
+// has been open through this host for $IDLE seconds, then ends; it also ends when the VM stops running some other way.
+// On the host rather than in Tabby, so it works after the tab closes, the SSH connection drops or Tabby quits. One per
+// VM (a pid file). Detached (setsid, no terminal), it outlives the SSH session where logind lets user processes stay
+// (KillUserProcesses=no, most distributions' default).
+const IDLE_SCRIPT = String.raw`
+command -v virsh >/dev/null 2>&1 || { echo "RD_ERR virsh is not installed on the SSH host"; exit 0; }
+command -v ss >/dev/null 2>&1 || { echo "RD_ERR ss (iproute2) is not installed on the SSH host"; exit 0; }
+# The pid file: with the plugin's other files, or where the home folder isn't writable, in a folder of its own in /tmp.
+D="$HOME/.local/share/tabby-rdp"
+if ! mkdir -p "$D" 2>/dev/null; then
+    D="/tmp/tabby-rdp-$(id -u)"
+    mkdir -p -m 700 "$D" 2>/dev/null
+    [ -d "$D" ] && [ -O "$D" ] && [ ! -L "$D" ] || { echo "RD_ERR could not create a folder for the watcher's pid file"; exit 0; }
+fi
+PIDF="$D/idle-$(printf %s "$VM" | tr -c 'A-Za-z0-9._-' _).pid"
+if [ -s "$PIDF" ] && kill -0 "$(cat "$PIDF")" 2>/dev/null; then
+    echo "RD_OK a watcher for $VM already runs"; exit 0
+fi
+URI=
+for u in qemu:///system qemu:///session; do
+    [ "$(virsh -c "$u" domstate "$VM" 2>/dev/null | head -n 1)" = running ] && { URI=$u; break; }
+done
+[ -n "$URI" ] || { echo "RD_ERR $VM is not running"; exit 0; }
+A=$(getent ahostsv4 "$H" 2>/dev/null | awk 'NR == 1 { print $1 }')
+nohup setsid sh -c '
+VM=$1 URI=$2 A=$3 P=$4 IDLE=$5 PIDF=$6
+echo $$ > "$PIDF"
+trap "rm -f \"$PIDF\"" EXIT
+idle=0 asked=0
+while sleep 30; do
+    [ "$(virsh -c "$URI" domstate "$VM" 2>/dev/null | head -n 1)" = running ] || exit 0
+    if ss -tnH state established dst "$A:$P" 2>/dev/null | grep -q .; then idle=0; asked=0; continue; fi
+    idle=$((idle + 30))
+    [ $idle -ge $IDLE ] || continue
+    # Asked again every 2 minutes while it keeps running, 5 times at most. Windows ignores the request while its screen
+    # sleeps: a Shift press wakes the screen first.
+    if [ $(( (idle - IDLE) % 120 )) -eq 0 ]; then
+        asked=$((asked + 1))
+        [ $asked -le 5 ] || exit 0
+        virsh -c "$URI" send-key "$VM" KEY_LEFTSHIFT >/dev/null 2>&1
+        virsh -c "$URI" shutdown "$VM" >/dev/null 2>&1
+    fi
+done
+' sh "$VM" "$URI" "${"$"}{A:-$H}" "$P" "$IDLE" "$PIDF" </dev/null >/dev/null 2>&1 &
+echo "RD_OK $VM shuts down after $((IDLE / 60)) min without a desktop open ($URI)"
+`
+
+/**
+ * Leaves a watcher on the SSH host that shuts the VM down once its desktop (host:port, as the SSH host reaches it) has
+ * had no connection through that host for `idleSeconds` (counted in steps of 30 s). Resolves with what was done; throws with the reason when it
+ * couldn't.
+ */
+export async function shutDownWhenIdle (target: RemoteTarget, vm: string, host: string, port: number, idleSeconds: number): Promise<string> {
+    const out = await target.exec('sh -s', `VM=${shq(vm)}\nH=${shq(host)}\nP=${port}\nIDLE=${Math.max(1, Math.round(idleSeconds / 30)) * 30}\n${IDLE_SCRIPT}`)
+    const err = /^RD_ERR (.*)$/m.exec(out)
+    if (err) {
+        throw new Error(err[1].trim())
+    }
+    return /^RD_OK (.*)$/m.exec(out)?.[1] ?? 'no result'
+}
+
 /** Whether the RDP server at host:port answers, as seen from the SSH host. */
 export async function rdpAnswers (target: RemoteTarget, host: string, port: number): Promise<boolean> {
     const out = await target.exec('sh -s', `H=${shq(host)}\nP=${port}\n${PROBE_SCRIPT}`)

@@ -19,11 +19,20 @@ export interface RemoteDesktopEndpoint {
     xrdpPort?: number
     /** The account to suggest for xrdp: the SSH user. */
     xrdpUser?: string
+    /** GNOME: RDP clients connected to it already, from elsewhere (each gets a screen of its own). */
+    clients?: number
+    /**
+     * GNOME: how many seconds ago another client (pane) took the desktop over, within the last 2 minutes (its connection
+     * may still be on the way).
+     */
+    takenOver?: number
 }
+
 
 // Runs as the SSH user; needs no root. Prints exactly one `RD_OK port=N user=U pass=P cert=SHA256`,
 // `RD_XRDP port=N user=U` (no GNOME, but xrdp), `RD_WINDOWS` (a Windows host's POSIX sh) or `RD_ERR <reason>` line;
-// with RD_OK, also an RD_XRDP line when xrdp runs besides GNOME.
+// with RD_OK, also an RD_XRDP line when xrdp runs besides GNOME, `RD_CLIENTS N`, the clients connected already, and
+// `RD_TAKEN_OVER <client> <seconds ago>` after a recent take-over.
 // The RDP password is generated once per remote user and kept in a 0600 file; grd reads credentials only
 // at startup, so grd is restarted only when its configuration actually changes (that drops live sessions).
 // (grdctl takes the credentials as arguments, so they are briefly visible in the remote's process list.)
@@ -221,6 +230,7 @@ if [ -z "$SHELL_PID" ]; then
     systemd-run --user --unit=tabby-headless-shell --setenv=XDG_SESSION_TYPE=wayland \
         --setenv=XDG_CURRENT_DESKTOP=$DESK --setenv=XDG_SESSION_DESKTOP=$SESS --setenv=DESKTOP_SESSION=$SESS \
         --setenv=GNOME_SHELL_SESSION_MODE=$SESS --setenv=TABBY_RD_SESSION=$SESSION_VERSION \
+        -p "ExecStopPost=/bin/sh -c 'rm -f $XDG_RUNTIME_DIR/systemd/user/gnome-session-x11-services-ready.target $XDG_RUNTIME_DIR/systemd/user/tabby-gsd-xsettings.service; systemctl --user --no-block stop tabby-gsd-xsettings.service; systemctl --user unset-environment DISPLAY XAUTHORITY'" \
         gnome-shell --headless >/dev/null 2>&1 \
         || fail "could not start a headless GNOME Shell"
     i=0; while [ $i -lt 40 ] && ! busctl --user status org.gnome.Mutter.RemoteDesktop >/dev/null 2>&1; do sleep 0.25; i=$((i+1)); done
@@ -234,6 +244,51 @@ dbus-update-activation-environment --systemd WAYLAND_DISPLAY=${"$"}{WL:-wayland-
     XDG_CURRENT_DESKTOP=$DESK XDG_SESSION_DESKTOP=$SESS DESKTOP_SESSION=$SESS >/dev/null 2>&1
 # Mark D-Bus-activated apps as part of this session too (not in systemd's environment: user services would inherit it).
 dbus-update-activation-environment TABBY_RD_SESSION=$SESSION_VERSION >/dev/null 2>&1
+# X11 apps. The shell reserves an X display at startup and starts XWayland when an X11 app connects to it; apps find it
+# through DISPLAY, which gnome-session would pass on: do that here (the lowest of its sockets, which the shell holds, or
+# its XWayland once running; and the shell's X authority).
+PIDS=" $SHELL_PID $(pgrep -P "$SHELL_PID" -x Xwayland | tr '\n' ' ')"
+XD=$(ss -xlpH 2>/dev/null | awk -v pids="$PIDS" '$5 ~ /^\/tmp\/\.X11-unix\/X[0-9]+$/ && match($0, /pid=[0-9]+,/) && index(pids, " " substr($0, RSTART + 4, RLENGTH - 5) " ") { sub(/.*X/, "", $5); print $5 }' | sort -n | head -1)
+XA=$(ls -t "$XDG_RUNTIME_DIR"/.mutter-Xwaylandauth.* 2>/dev/null | head -1)
+if [ -n "$XD" ]; then
+    dbus-update-activation-environment --systemd DISPLAY=:$XD ${"$"}{XA:+XAUTHORITY=$XA} >/dev/null 2>&1
+fi
+# Once XWayland is up, the shell starts gnome-session's X11 services (gnome-session-x11-services-ready.target), and gives
+# up on X11 if that fails, which it does without gnome-session. A runtime unit of that name (in $XDG_RUNTIME_DIR, gone at
+# logout; removed when the shell stops) stands in for it, with GNOME's X11 settings daemon, as a session would start it.
+U="$XDG_RUNTIME_DIR/systemd/user"
+X11_UNITS="[Unit]
+Description=X11 services for tabby-rdp's headless GNOME Shell
+Wants=tabby-gsd-xsettings.service
+--
+[Unit]
+Description=GNOME XSettings (tabby-rdp's headless GNOME Shell)
+Before=gnome-session-x11-services-ready.target
+[Service]
+ExecStart=/usr/libexec/gsd-xsettings
+TimeoutStopSec=5"
+if [ -n "$XD" ] && [ -x /usr/libexec/gsd-xsettings ] && [ -n "$XDG_RUNTIME_DIR" ]; then
+    mkdir -p "$U"
+    if [ "$(cat "$U/gnome-session-x11-services-ready.target" 2>/dev/null; echo --; cat "$U/tabby-gsd-xsettings.service" 2>/dev/null)" != "$X11_UNITS" ]; then
+        printf '%s\n' "$X11_UNITS" | sed '/^--$/,$d' > "$U/gnome-session-x11-services-ready.target"
+        printf '%s\n' "$X11_UNITS" | sed '1,/^--$/d' > "$U/tabby-gsd-xsettings.service"
+        systemctl --user daemon-reload >/dev/null 2>&1
+        # A shell from before this: its XWayland, if one runs, started without these and has no X11 display (no X11
+        # app works there). End it; the shell starts a new one for the next X11 app.
+        pkill -P "$SHELL_PID" -x Xwayland 2>/dev/null
+    fi
+fi
+# GNOME's settings daemons for the session (keyboard settings, media keys and custom shortcuts, accessibility, sound,
+# disk space and cache upkeep), which gnome-session would start; for as long as the shell runs. Not power (it would
+# suspend the machine when the session looks idle), sharing (it manages GNOME Remote Desktop), or the ones for local
+# hardware (tablets, smartcards, radios, printers, color profiles).
+for d in keyboard media-keys a11y-settings sound housekeeping; do
+    [ -x /usr/libexec/gsd-$d ] || continue
+    systemctl --user is-active -q tabby-gsd-$d && continue
+    systemctl --user reset-failed tabby-gsd-$d >/dev/null 2>&1
+    systemd-run --user --unit=tabby-gsd-$d --collect -p BindsTo=tabby-headless-shell.service -p After=tabby-headless-shell.service \
+        /usr/libexec/gsd-$d >/dev/null 2>&1
+done
 # Also what gnome-session does: bring up graphical-session.target, which the GNOME portal requires. Without it the
 # portal service hangs, and every GTK app waits 25 seconds for it before showing a window. Held for as long as the
 # shell runs (the target can't be started directly).
@@ -257,6 +312,26 @@ PORT=$(grdctl --headless status 2>/dev/null | awk '/Port:/ { print $2; exit }')
 PORT=${"$"}{PORT:-3389}
 i=0; while [ $i -lt 40 ] && ! ss -ltnH "sport = :$PORT" 2>/dev/null | grep -q .; do sleep 0.25; i=$((i+1)); done
 ss -ltnH "sport = :$PORT" 2>/dev/null | grep -q . || fail "nothing is listening on port $PORT"
+# Clients connected already (another Tabby window or computer): grd gives each one a screen of its own, so the plugin
+# asks. Taking over (TRD_TAKEOVER=1) disconnects them, as Windows does: a restart of grd, which leaves the session and
+# its apps running.
+# (Counted again for up to 2 s: a connection of the plugin's own that is being replaced, a reconnect, is closing.)
+clients () { ss -tnH state established "( sport = :$PORT )" 2>/dev/null | grep -c .; }
+CLIENTS=$(clients)
+i=0; while [ "$CLIENTS" -gt 0 ] && [ $i -lt 8 ]; do sleep 0.25; CLIENTS=$(clients); i=$((i+1)); done
+if [ "$CLIENTS" -gt 0 ] && [ "${"$"}{TRD_TAKEOVER:-0}" = 1 ]; then
+    systemctl --user restart gnome-remote-desktop-headless.service >/dev/null 2>&1 || fail "could not restart gnome-remote-desktop-headless"
+    i=0; while [ $i -lt 40 ] && ! ss -ltnH "sport = :$PORT" 2>/dev/null | grep -q .; do sleep 0.25; i=$((i+1)); done
+    CLIENTS=0
+    # Who took over, and when: the client that gave way reconnects by itself, possibly before this one is connected.
+    printf '%s %s\n' "$TRD_CLIENT" "$(date +%s)" > "$D/taken-over"
+fi
+say "RD_CLIENTS $CLIENTS"
+if [ -s "$D/taken-over" ]; then
+    read -r BY AT < "$D/taken-over"
+    AGE=$(( $(date +%s) - ${"$"}{AT:-0} ))
+    [ "$AGE" -lt 120 ] && say "RD_TAKEN_OVER $BY $AGE"
+fi
 # xrdp besides GNOME (on a port of its own; on grd's, one of them couldn't listen): offered as another desktop.
 [ -z "$XRDP_PORT" ] || [ "$XRDP_PORT" = "$PORT" ] || say "RD_XRDP port=$XRDP_PORT user=$(id -un)"
 say "RD_OK port=$PORT user=$RD_USER pass=$RD_PASS cert=$CERT"
@@ -288,8 +363,12 @@ async function isWindows (target: RemoteTarget): Promise<boolean> {
  * reports xrdp's port instead, when xrdp runs there; on a Windows host (OpenSSH Server on Windows), Windows' own RDP
  * server, which signs in with the Windows account (the SSH user, to start with).
  */
-export async function prepareRemoteDesktop (target: RemoteTarget, desk: boolean, backend: SessionBackend = 'native'): Promise<RemoteDesktopEndpoint> {
-    const script = `TRD_DESK=${desk ? 1 : 0}\nTRD_BACKEND=${backend === 'tmux' ? 'tmux' : 'native'}\n` +
+export async function prepareRemoteDesktop (
+    target: RemoteTarget, desk: boolean, backend: SessionBackend = 'native', client = '', takeOver = false,
+): Promise<RemoteDesktopEndpoint> {
+    // client: which pane asks (letters and digits), for the note a take-over leaves on the host (RD_TAKEN_OVER).
+    client = client.replace(/[^A-Za-z0-9]/g, '') || 'none'
+    const script = `TRD_DESK=${desk ? 1 : 0}\nTRD_BACKEND=${backend === 'tmux' ? 'tmux' : 'native'}\nTRD_TAKEOVER=${takeOver ? 1 : 0}\nTRD_CLIENT=${client}\n` +
         SETUP_SCRIPT.replace('@@TRD_PTY_PY@@', trdPty().trimEnd())
     const out = await target.exec('sh -s', script)
     // Without a sh, Windows prints its complaint on stderr, which exec() doesn't return: nothing came back. Only then is
@@ -309,7 +388,12 @@ export async function prepareRemoteDesktop (target: RemoteTarget, desk: boolean,
         if (!certificate) {
             throw new Error(`Remote setup reported no usable certificate fingerprint (${ok[4]})`)
         }
-        return { kind: 'gnome', port: Number(ok[1]), username: ok[2], password: ok[3], certificate, xrdpPort: xrdp ? Number(xrdp[1]) : undefined, xrdpUser: xrdp?.[2] }
+        const clients = Number(/^RD_CLIENTS (\d+)$/m.exec(out)?.[1] ?? 0)
+        const taken = /^RD_TAKEN_OVER (\S+) (\d+)$/m.exec(out)
+        return {
+            kind: 'gnome', port: Number(ok[1]), username: ok[2], password: ok[3], certificate, xrdpPort: xrdp ? Number(xrdp[1]) : undefined, xrdpUser: xrdp?.[2],
+            clients, takenOver: taken && taken[1] !== client ? Number(taken[2]) : undefined,
+        }
     }
     if (xrdp) {
         // xrdp makes its own certificate: trusted on first use, like a desktop behind the host.

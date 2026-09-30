@@ -23,7 +23,7 @@ import {
     STYLE as SIGNIN_STYLE,
 } from './signin'
 import { isSSHTab } from './ssh'
-import { rdpAnswers, waitForRdp, wakeDesktop } from './wake'
+import { rdpAnswers, shutDownWhenIdle, waitForRdp, wakeDesktop } from './wake'
 import { scanVMs, vmSpec } from './vms'
 
 /** How long a desktop that was started (`wake`) gets to answer. */
@@ -135,6 +135,8 @@ export interface DesktopSettings {
     discoverVMs: boolean
     /** Ask npm once a day whether a newer tabby-rdp is out (see updates.ts). */
     checkUpdates: boolean
+    /** Minutes without a desktop open after which a VM the plugin started is shut down again; 0: never (see wake.ts). */
+    shutDownIdle: number
 }
 
 interface RemoteSize {
@@ -979,7 +981,7 @@ export class RemoteDesktopService {
     }
 
     /** Automatic reconnection after a desktop dropped, per pane: attempts so far and the pending timer. */
-    private reconnects = new Map<DesktopPane, { attempts: number, timer?: ReturnType<typeof setTimeout> }>()
+    private reconnects = new Map<DesktopPane, { attempts: number, timer?: ReturnType<typeof setTimeout>, since: number }>()
     private static readonly RECONNECT_DELAYS = [1, 2, 4, 8, 15, 30]
 
     private cancelReconnect (pane: DesktopPane): void {
@@ -1022,7 +1024,8 @@ export class RemoteDesktopService {
     }
 
     private scheduleReconnect (pane: DesktopPane, target: RemoteTarget, spec: DesktopSpec, session: DesktopSession, message: string): void {
-        const state = this.reconnects.get(pane) ?? { attempts: 0 }
+        // since: when the desktop dropped (see openElsewhere).
+        const state = this.reconnects.get(pane) ?? { attempts: 0, since: Date.now() }
         this.reconnects.set(pane, state)
         clearTimeout(state.timer)
         const current = () => this.sessions.get(pane) === session
@@ -1070,6 +1073,7 @@ export class RemoteDesktopService {
             osd: osdSettings(store.osd),
             discoverVMs: store.discoverVMs !== false,
             checkUpdates: store.checkUpdates !== false,
+            shutDownIdle: [5, 15, 60].includes(Number(store.shutDownIdle)) ? Number(store.shutDownIdle) : 0,
         }
     }
 
@@ -1512,11 +1516,11 @@ export class RemoteDesktopService {
      * it finds xrdp or Windows instead of GNOME, as below. Others: the saved account, or the sign-in form (retryError: after a
      * failed sign-in).
      */
-    private async endpointFor (target: RemoteTarget, spec: DesktopSpec, session: DesktopSession, retryError?: string): Promise<Endpoint | null> {
+    private async endpointFor (pane: DesktopPane, target: RemoteTarget, spec: DesktopSpec, session: DesktopSession, automatic: boolean, retryError?: string): Promise<Endpoint | null | 'stopped'> {
         // A Windows host is known from an earlier connect: no setup to run there (it would only fail again).
         if (spec.id === OWN_DESKTOP && !retryError && this.ownDesktops.get(target.key)?.kind !== 'windows') {
             session.status(`Preparing the remote desktop on ${target.label}…`)
-            const endpoint = await prepareRemoteDesktop(target, this.settings().desk, this.config.store.remoteDesktop?.sessionBackend)
+            const endpoint = await prepareRemoteDesktop(target, this.settings().desk, this.config.store.remoteDesktop?.sessionBackend, this.clientOf(pane))
             this.ownDesktops.set(target.key, { kind: endpoint.kind, xrdpPort: endpoint.xrdpPort, xrdpUser: endpoint.xrdpUser })
             // Only the setup knows which desktop the host has; the session follows it (graphics, sign-in, resizing).
             spec.kind = endpoint.kind
@@ -1524,7 +1528,28 @@ export class RemoteDesktopService {
                 session.log.push('setup: the SSH host runs Windows; its own desktop is its RDP server')
             }
             if (endpoint.kind === 'gnome') {
-                return { host: '127.0.0.1', port: endpoint.port, credentials: { username: endpoint.username, password: endpoint.password }, remember: false, certificate: endpoint.certificate }
+                let gnome = endpoint
+                const chosen = this.openChoices.get(pane)
+                this.openChoices.delete(pane)
+                // An automatic reconnect also gives way to a take-over whose connection isn't up yet: one that happened
+                // when this desktop dropped (the host says how long ago, so the clocks needn't agree).
+                const dropped = this.reconnects.get(pane)?.since
+                const displaced = automatic && gnome.takenOver !== undefined && dropped !== undefined &&
+                    Math.abs(gnome.takenOver - (Date.now() - dropped) / 1000) < 10
+                if (gnome.clients || displaced) {
+                    const choice = chosen ?? await this.openElsewhere(pane, target, spec, session, automatic)
+                    if (!choice) {
+                        return 'stopped'
+                    }
+                    if (choice === 'take') {
+                        session.status(`Taking over the desktop on ${target.label}…`)
+                        gnome = await prepareRemoteDesktop(target, this.settings().desk, this.config.store.remoteDesktop?.sessionBackend, this.clientOf(pane), true)
+                        session.log.push(`setup: took the desktop over (${endpoint.clients} other connection(s))`)
+                    } else {
+                        session.log.push(`setup: a screen of its own, besides ${endpoint.clients} other connection(s)`)
+                    }
+                }
+                return { host: '127.0.0.1', port: gnome.port, credentials: { username: gnome.username, password: gnome.password }, remember: false, certificate: gnome.certificate }
             }
             spec.host = '127.0.0.1'
             spec.port = endpoint.port
@@ -1568,8 +1593,15 @@ export class RemoteDesktopService {
             }
             // Signing in to a Windows account can take a few tries; a GNOME desktop the plugin set up can't fail that way.
             for (let attempt = 0; ; attempt++) {
-                const [asked, rdp]: [Endpoint | null, any] = await Promise.all([endpoint ?? this.endpointFor(target, spec, session, retryError), this.loadIronRDP()])
+                const [asked, rdp]: [Endpoint | null | 'stopped', any] = await Promise.all([endpoint ?? this.endpointFor(pane, target, spec, session, automatic, retryError), this.loadIronRDP()])
                 if (!alive()) {
+                    return
+                }
+                if (asked === 'stopped') {
+                    // Not connecting: the reason and what to do instead are on the layer already.
+                    session.state = 'ended'
+                    this.changed$.next()
+                    this.cancelReconnect(pane)
                     return
                 }
                 if (!asked) {
@@ -1663,6 +1695,56 @@ export class RemoteDesktopService {
             throw new Error(`certificate SHA-256 ${fingerprint} is not the one remembered (${known})`)
         }
         session.log.push(`certificate: SHA-256 ${fingerprint}, as remembered`)
+    }
+
+    /** How the pane's next connection to a GNOME desktop that's open elsewhere goes, when that was chosen already. */
+    private openChoices = new Map<DesktopPane, 'take' | 'second'>()
+
+    /** Each pane's name for itself on hosts, for the note a take-over leaves there (see prepareRemoteDesktop). */
+    private clients = new WeakMap<DesktopPane, string>()
+    private clientOf (pane: DesktopPane): string {
+        let id = this.clients.get(pane)
+        if (!id) {
+            id = Math.random().toString(36).slice(2, 12)
+            this.clients.set(pane, id)
+        }
+        return id
+    }
+
+    /**
+     * The host's GNOME desktop has RDP clients already (another Tabby window or computer), and GNOME gives each its own
+     * screen. Opened by hand: asks whether to take it over (disconnecting them, as Windows does), or to add a screen.
+     * An automatic reconnect doesn't ask, nor take it back: this connection gave way to the other, most likely by being
+     * taken over from there, and taking it back by itself would have the two take turns. Resolves with the choice, or
+     * null when not connecting (the layer then says so and offers the choices again).
+     */
+    private async openElsewhere (pane: DesktopPane, target: RemoteTarget, spec: DesktopSpec, session: DesktopSession, automatic: boolean): Promise<'take' | 'second' | null> {
+        const again = (choice: 'take' | 'second') => () => {
+            this.openChoices.set(pane, choice)
+            this.reopen(pane, spec)
+        }
+        const stopped = (message: string) => {
+            session.status(message, [
+                { label: automatic ? 'Take it back' : 'Take it over', run: again('take') },
+                { label: 'Open a second screen', run: again('second') },
+            ], true)
+            return null
+        }
+        if (automatic) {
+            if (!session.visible) {
+                this.notifications.notice(`The desktop on ${target.label} was opened somewhere else`)
+            }
+            return stopped(`The desktop on ${target.label} was opened somewhere else (another Tabby window or computer), and this connection gave way to it.`)
+        }
+        const choice = await new Promise<'take' | 'second' | null>(resolve => {
+            session.status(`The desktop on ${target.label} is open somewhere else too (another Tabby window or computer). GNOME gives each connection a screen of its own, so this one would get a second, empty screen.`, [
+                { label: 'Take it over', run: () => resolve('take') },
+                { label: 'Open a second screen', run: () => resolve('second') },
+                { label: 'Cancel', run: () => resolve(null) },
+            ], true)
+            session.disposed.then(() => resolve(null))
+        })
+        return choice ?? stopped(`Not opened: the desktop on ${target.label} is open somewhere else (another Tabby window or computer).`)
     }
 
     /**
@@ -1770,6 +1852,13 @@ export class RemoteDesktopService {
         const up = await this.zone.runOutsideAngular(() => waitForRdp(target, spec.host, spec.port, WAKE_TIMEOUT_MS, () => cancelled || !alive(), progress))
         if (up) {
             session.log.push(`wake: answered after ${Math.round((Date.now() - started) / 1000)} s`)
+            // Started here, so it can go back off when it's no longer used, if the settings say so (a VM only: a machine
+            // woken over the network would need rights on it).
+            const idle = this.settings().shutDownIdle
+            if (idle > 0 && 'vm' in spec.wake!) {
+                shutDownWhenIdle(target, spec.wake.vm, spec.host, spec.port, idle * 60)
+                    .then(done => session.log.push(`wake: ${done}`), e => session.log.push(`wake: no automatic shutdown: ${e?.message ?? e}`))
+            }
             return true
         }
         if (cancelled || !alive()) {
