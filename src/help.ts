@@ -111,6 +111,9 @@ export function entryFor (message: string): HelpEntry | null {
 }
 
 /** A hotkey as Tabby stores it ('⌘-Shift-G', or a sequence) as it reads on this platform: ⌘⇧G, Ctrl+Shift+G. */
+/** Text for HTML: config values (a hotkey, a desktop's name) are text, never markup. */
+export const esc = (s: unknown): string => String(s ?? '').replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`)
+
 export function hotkeyLabel (binding: unknown): string | null {
     const first = Array.isArray(binding) ? binding[0] : null
     const strokes: string[] = Array.isArray(first) ? first : typeof first === 'string' ? [first] : []
@@ -221,7 +224,7 @@ export class RemoteDesktopHelp {
         }
         store.tipShown = true
         this.config.save()
-        const k = (s: string) => `<kbd>${s}</kbd>`
+        const k = (s: string) => `<kbd>${esc(s)}</kbd>`
         const mac = process.platform === 'darwin'
         const hotkey = this.toggleHotkey()
         const parts = [

@@ -5,13 +5,12 @@ import { SettingsTabComponent, SettingsTabProvider } from 'tabby-settings'
 import { DesktopSettings, RemoteDesktopService } from './desktop.service'
 import { DIRECT_KEY } from './desktops'
 import { OSD_FONTS, OSD_POSITIONS, OSD_SIZES, OSD_STYLE, OsdSettings, renderOsd } from './osd'
-import { HelpTopic, RemoteDesktopHelp, SETTINGS_TAB_ID, TROUBLESHOOTING } from './help'
+import { esc, HelpTopic, RemoteDesktopHelp, SETTINGS_TAB_ID, TROUBLESHOOTING } from './help'
 import { installedVersion, UpdateCheck } from './updates'
 import { RDP_PROFILE_TYPE } from './targets'
 
 const REPO = 'https://github.com/meanaverage/tabby-rdp'
 
-const esc = (s: unknown) => String(s ?? '').replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`)
 const k = (s: string) => `<kbd>${esc(s)}</kbd>`
 
 const STYLE = `
