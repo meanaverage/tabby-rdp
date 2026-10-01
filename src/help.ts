@@ -94,9 +94,14 @@ export const TROUBLESHOOTING: HelpEntry[] = [
     },
     {
         id: 'extra-monitor',
-        title: 'GNOME shows an empty extra monitor',
-        body: `GNOME Remote Desktop's headless mode gives each client its own monitor: a second client for the same account
-            (another computer, or another Tabby window) gets an empty one. Use one client per account at a time.`,
+        title: 'The desktop is open somewhere else',
+        match: /open somewhere else|opened somewhere else/,
+        body: `GNOME Remote Desktop's headless mode gives each connection a screen of its own: a second computer, or another
+            Tabby window, connected to the same account gets an empty extra screen rather than the same one. So when the
+            desktop is open somewhere else already, you choose. <b>Take it over</b> disconnects the other connection, as
+            Windows does; the session and its apps carry on, on this screen. <b>Open a second screen</b> keeps both, each
+            with a screen of its own. A desktop taken over from here doesn't take itself back: it says so, and offers
+            the same two choices.`,
     },
 ]
 

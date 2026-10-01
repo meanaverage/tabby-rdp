@@ -1,0 +1,147 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: meanaverage <18336095+meanaverage@users.noreply.github.com>
+Date: Wed, 30 Sep 2026 16:49:45 -0700
+Subject: [PATCH 14/14] fix(web): read H.264 pictures correctly where WebKit
+ ignores copyTo's format
+
+WebKit (Safari) ignores `VideoFrame.copyTo`'s `format:
+'RGBA'` and copies the picture's own NV12 planes into the buffer, which showed
+the remote desktop as squashed gray copies over a magenta band. The decoder
+now asks `allocationSize` first and reads through the canvas when the size is
+not RGBA's.
+
+The canvas path also no longer uses drawImage's source rectangle: for large
+(hardware-decoded) pictures WebKit ignores it and draws the whole picture
+shrunk into the box. It draws the whole picture shifted so the box lands at
+the origin, and reads that.
+---
+ .../src/H264Decoder.test.ts                   | 35 ++++++++++++++++---
+ .../src/H264Decoder.ts                        | 20 ++++++-----
+ 2 files changed, 42 insertions(+), 13 deletions(-)
+
+diff --git a/web-client/iron-remote-desktop-rdp/src/H264Decoder.test.ts b/web-client/iron-remote-desktop-rdp/src/H264Decoder.test.ts
+index 46cbfe78..070b6afc 100644
+--- a/web-client/iron-remote-desktop-rdp/src/H264Decoder.test.ts
++++ b/web-client/iron-remote-desktop-rdp/src/H264Decoder.test.ts
+@@ -23,11 +23,18 @@ class FakePicture {
+         width: number,
+         height: number,
+         private readonly failCopy?: Error,
++        // The size copyTo wants for a rect: RGBA's, or (as WebKit reports, ignoring the format) NV12's.
++        private readonly copyFormat: 'RGBA' | 'NV12' = 'RGBA',
+     ) {
+         this.visibleRect = { x: 0, y: 0, width, height };
+         this.codedWidth = width;
+         this.codedHeight = height;
+     }
++    allocationSize(options: { rect: { width: number; height: number }; format: string }): number {
++        expect(options.format).toBe('RGBA');
++        const pixels = options.rect.width * options.rect.height;
++        return this.copyFormat === 'RGBA' ? pixels * 4 : pixels * 1.5;
++    }
+     async copyTo(
+         into: Uint8Array,
+         options: { rect: { x: number; y: number; width: number; height: number }; format: string },
+@@ -35,6 +42,7 @@ class FakePicture {
+         if (this.failCopy) {
+             throw this.failCopy;
+         }
++        expect(this.copyFormat).toBe('RGBA');
+         expect(options.format).toBe('RGBA');
+         const { x, y, width, height } = options.rect;
+         for (let row = 0; row < height; row++) {
+@@ -67,8 +75,8 @@ class FakeDecoder {
+         this.state = 'closed';
+     }
+     /** Outputs the picture for a chunk it was given. */
+-    emit(timestamp: number, width = 64, height = 32, failCopy?: Error): FakePicture {
+-        const picture = new FakePicture(timestamp, width, height, failCopy);
++    emit(timestamp: number, width = 64, height = 32, failCopy?: Error, copyFormat?: 'RGBA' | 'NV12'): FakePicture {
++        const picture = new FakePicture(timestamp, width, height, failCopy, copyFormat);
+         this.init.output(picture);
+         return picture;
+     }
+@@ -233,8 +241,7 @@ describe('WebCodecsH264Decoder', () => {
+         expect(decoder.failed).toMatch(/no key frame/);
+     });
+ 
+-    it('reads through a canvas where copyTo cannot convert to RGBA', async () => {
+-        const drawn: unknown[] = [];
++    function stubCanvas(drawn: unknown[]) {
+         class FakeCanvas {
+             constructor(
+                 readonly width: number,
+@@ -250,11 +257,29 @@ describe('WebCodecsH264Decoder', () => {
+             }
+         }
+         vi.stubGlobal('OffscreenCanvas', FakeCanvas);
++    }
++
++    it('reads through a canvas where copyTo cannot convert to RGBA', async () => {
++        const drawn: unknown[] = [];
++        stubCanvas(drawn);
+         decoder.decode(frame(0, true), done);
+         FakeDecoder.instances[0].emit(0, 64, 32, new DOMException('no RGBA', 'NotSupportedError'));
+         await flush();
+         expect(decoder.stats.readback).toBe('canvas');
+-        expect(drawn).toEqual([[0, 0, 2, 1, 0, 0, 2, 1]]);
++        // The whole 64x32 picture, drawn shifted by the region's position (here the origin).
++        expect(drawn).toEqual([[-0, -0, 64, 32]]);
++        expect(Array.from(done.mock.calls[0][1] as Uint8Array)).toEqual([7, 7, 7, 7, 7, 7, 7, 7]);
++    });
++
++    it('reads through a canvas where copyTo ignores the RGBA format (WebKit)', async () => {
++        const drawn: unknown[] = [];
++        stubCanvas(drawn);
++        decoder.decode(frame(0, true, [{ left: 10, top: 4, right: 12, bottom: 5 }]), done);
++        FakeDecoder.instances[0].emit(0, 64, 32, undefined, 'NV12');
++        await flush();
++        expect(decoder.stats.readback).toBe('canvas');
++        // Shifted so the region at (10, 4) lands at the canvas origin, where it is read from.
++        expect(drawn).toEqual([[-10, -4, 64, 32]]);
+         expect(Array.from(done.mock.calls[0][1] as Uint8Array)).toEqual([7, 7, 7, 7, 7, 7, 7, 7]);
+     });
+ 
+diff --git a/web-client/iron-remote-desktop-rdp/src/H264Decoder.ts b/web-client/iron-remote-desktop-rdp/src/H264Decoder.ts
+index 47e01a70..9f838701 100644
+--- a/web-client/iron-remote-desktop-rdp/src/H264Decoder.ts
++++ b/web-client/iron-remote-desktop-rdp/src/H264Decoder.ts
+@@ -309,18 +309,20 @@ export class WebCodecsH264Decoder {
+ 
+     private async readBox(
+         picture: VideoFrame,
+-        visible: { x: number; y: number },
++        visible: { x: number; y: number; width: number; height: number },
+         box: { x: number; y: number; width: number; height: number },
+         into: Uint8Array,
+     ): Promise<void> {
+         if (this.stats.readback === 'copyTo') {
++            const rect = { x: visible.x + box.x, y: visible.y + box.y, width: box.width, height: box.height };
+             try {
+-                await picture.copyTo(into, {
+-                    rect: { x: visible.x + box.x, y: visible.y + box.y, width: box.width, height: box.height },
+-                    format: 'RGBA',
+-                    colorSpace: 'srgb',
+-                });
+-                return;
++                // WebKit ignores the format and copies the picture's own planes (NV12: 1.5 bytes a pixel), which
++                // shows as squashed gray copies of the desktop; it says so in the size it wants for them.
++                if (picture.allocationSize({ rect, format: 'RGBA' }) === box.width * box.height * 4) {
++                    await picture.copyTo(into, { rect, format: 'RGBA', colorSpace: 'srgb' });
++                    return;
++                }
++                this.stats.readback = 'canvas';
+             } catch (error) {
+                 // Converting to RGBA in copyTo came late to browsers; a canvas does the same.
+                 if (
+@@ -342,7 +344,9 @@ export class WebCodecsH264Decoder {
+         if (context === null) {
+             throw new Error('no 2D canvas context');
+         }
+-        context.drawImage(picture, box.x, box.y, box.width, box.height, 0, 0, box.width, box.height);
++        // The whole picture, shifted so the box lands at the origin, rather than drawImage's source rectangle: for
++        // large (hardware-decoded) frames WebKit ignores that and draws the whole picture shrunk into the box.
++        context.drawImage(picture, -box.x, -box.y, visible.width, visible.height);
+         into.set(context.getImageData(0, 0, box.width, box.height).data);
+     }
+ 

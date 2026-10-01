@@ -1,0 +1,220 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: meanaverage <18336095+meanaverage@users.noreply.github.com>
+Date: Wed, 30 Sep 2026 16:48:56 -0700
+Subject: [PATCH 13/14] fix(web): sync the clipboard automatically for the
+ focused session only
+
+With several sessions on a page, each one polled the local clipboard and sent
+it to its server, and wrote whatever its server copied to the local clipboard
+as soon as the window had the focus. A copy on one remote desktop could then
+be overwritten by another that was merely open in the background.
+
+Automatic clipboard sync now belongs to the session whose component has the
+keyboard focus: the others neither read the local clipboard nor write it.
+A remote copy on a session without the focus waits until that session gets it
+(`focusin`), keeping only the latest content.
+---
+ .../src/iron-remote-desktop.svelte            |  3 +
+ .../src/services/clipboard.service.ts         | 39 ++++++++++---
+ .../src/services/clipboardLifecycle.test.ts   | 56 ++++++++++++++++++-
+ .../src/services/remote-desktop.service.ts    |  6 ++
+ 4 files changed, 96 insertions(+), 8 deletions(-)
+
+diff --git a/web-client/iron-remote-desktop/src/iron-remote-desktop.svelte b/web-client/iron-remote-desktop/src/iron-remote-desktop.svelte
+index 4f424801..63824cc6 100644
+--- a/web-client/iron-remote-desktop/src/iron-remote-desktop.svelte
++++ b/web-client/iron-remote-desktop/src/iron-remote-desktop.svelte
+@@ -73,6 +73,8 @@
+         window.addEventListener('keyup', captureKeys, false);
+ 
+         window.addEventListener('focus', focusEventHandler);
++        // Focus moving from another session on the page to this one.
++        window.addEventListener('focusin', focusEventHandler);
+         window.addEventListener('blur', blurEventHandler);
+         document.addEventListener('visibilitychange', visibilityChangeHandler);
+     }
+@@ -367,6 +369,7 @@
+         window.removeEventListener('keydown', captureKeys, false);
+         window.removeEventListener('keyup', captureKeys, false);
+         window.removeEventListener('focus', focusEventHandler);
++        window.removeEventListener('focusin', focusEventHandler);
+         window.removeEventListener('blur', blurEventHandler);
+         document.removeEventListener('visibilitychange', visibilityChangeHandler);
+     });
+diff --git a/web-client/iron-remote-desktop/src/services/clipboard.service.ts b/web-client/iron-remote-desktop/src/services/clipboard.service.ts
+index d0a52f37..65bd4cb3 100644
+--- a/web-client/iron-remote-desktop/src/services/clipboard.service.ts
++++ b/web-client/iron-remote-desktop/src/services/clipboard.service.ts
+@@ -256,13 +256,29 @@ export class ClipboardService {
+                 : undefined;
+     }
+ 
++    // With several sessions on a page, the automatic clipboard sync belongs to the one with the keyboard focus: the
++    // others neither send the local clipboard nor overwrite it.
++    private isFocused(): boolean {
++        return document.hasFocus() && this.remoteDesktopService.hasFocus();
++    }
++
+     private runWhenWindowFocused(fn: () => Promise<void> | void) {
+         if (this.disposed) {
+             return;
+         }
+-        if (document.hasFocus()) {
++        if (this.isFocused()) {
+             Promise.resolve()
+-                .then(() => (this.disposed ? undefined : fn()))
++                .then(() => {
++                    if (this.disposed) {
++                        return;
++                    }
++                    // Focus can move on before this runs: then it waits again.
++                    if (!this.isFocused()) {
++                        this.pendingFocus = fn;
++                        return;
++                    }
++                    return fn();
++                })
+                 .catch((err) => console.error('Failed to set client clipboard: ' + err));
+         } else {
+             this.pendingFocus = fn;
+@@ -270,9 +286,12 @@ export class ClipboardService {
+     }
+ 
+     /**
+-     * Runs the clipboard write that waited for the window to have the focus (the component calls it on focus).
++     * Runs the clipboard write that waited for this session to have the focus (the component calls it on focus).
+      */
+     flushFocused(): void {
++        if (!this.isFocused()) {
++            return;
++        }
+         const pending = this.pendingFocus;
+         this.pendingFocus = null;
+         if (pending) {
+@@ -351,7 +370,7 @@ export class ClipboardService {
+                 return;
+             }
+ 
+-            if (!document.hasFocus()) {
++            if (!this.isFocused()) {
+                 return;
+             }
+ 
+@@ -415,9 +434,15 @@ export class ClipboardService {
+                 values[kind] = value;
+             }
+ 
+-            // Clipboard has changed, we need to acknowledge remote side about it (unless the session ended or monitoring
+-            // was suppressed while reading it).
+-            if (!sameValue && !this.disposed && this.monitoringActive && !this.monitoringSuppressed) {
++            // Clipboard has changed, we need to acknowledge remote side about it (unless the session ended, monitoring
++            // was suppressed or another session took the focus while reading it).
++            if (
++                !sameValue &&
++                !this.disposed &&
++                this.monitoringActive &&
++                !this.monitoringSuppressed &&
++                this.isFocused()
++            ) {
+                 this.lastClientClipboardItems = values;
+ 
+                 const clipboardData = new this.module.ClipboardData();
+diff --git a/web-client/iron-remote-desktop/src/services/clipboardLifecycle.test.ts b/web-client/iron-remote-desktop/src/services/clipboardLifecycle.test.ts
+index 11881c4c..645829cf 100644
+--- a/web-client/iron-remote-desktop/src/services/clipboardLifecycle.test.ts
++++ b/web-client/iron-remote-desktop/src/services/clipboardLifecycle.test.ts
+@@ -27,8 +27,14 @@ const module = {
+     },
+ } as unknown as RemoteDesktopModule;
+ 
+-async function started(): Promise<{ service: RemoteDesktopService; clipboard: ClipboardService }> {
++// `host`: the session's element, its canvas in the element's shadow root as in the web component.
++async function started(host?: HTMLElement): Promise<{ service: RemoteDesktopService; clipboard: ClipboardService }> {
+     const service = new RemoteDesktopService(module);
++    if (host) {
++        const canvas = document.createElement('canvas');
++        host.attachShadow({ mode: 'open' }).appendChild(canvas);
++        service.setCanvas(canvas);
++    }
+     const clipboard = new ClipboardService(service, module);
+     await clipboard.initClipboard();
+     service.sessionStartedObservable.publish(null);
+@@ -88,8 +94,16 @@ describe('clipboard lifecycle', () => {
+         vi.useRealTimers();
+         vi.restoreAllMocks();
+         vi.unstubAllGlobals();
++        document.body.innerHTML = '';
+     });
+ 
++    function sessionElement(): HTMLElement {
++        const host = document.createElement('div');
++        host.tabIndex = 0;
++        document.body.appendChild(host);
++        return host;
++    }
++
+     it('keeps monitoring one session when another component is disposed', async () => {
+         const one = await started();
+         const two = await started();
+@@ -146,4 +160,44 @@ describe('clipboard lifecycle', () => {
+ 
+         expect(written).toEqual([]);
+     });
++
++    it('only the focused session reads the local clipboard', async () => {
++        const [first, second] = [sessionElement(), sessionElement()];
++        const one = await started(first);
++        const two = await started(second);
++
++        second.focus();
++        reads.mockClear();
++        await vi.advanceTimersByTimeAsync(500);
++        // One session polling: about once per 100 ms, not twice.
++        expect(reads.mock.calls.length).toBeGreaterThanOrEqual(3);
++        expect(reads.mock.calls.length).toBeLessThanOrEqual(6);
++
++        one.clipboard.dispose();
++        two.clipboard.dispose();
++    });
++
++    it("writes a session's remote clipboard when that session gets the focus, not another", async () => {
++        const [first, second] = [sessionElement(), sessionElement()];
++        const one = await started(first);
++        const two = await started(second);
++
++        second.focus();
++        remoteCopies(one.service, 'from the first');
++        await tick();
++        expect(written).toEqual([]);
++
++        // Focus moving to the other session in the page (the component calls flushFocused on focusin).
++        two.clipboard.flushFocused();
++        await tick();
++        expect(written).toEqual([]);
++
++        first.focus();
++        one.clipboard.flushFocused();
++        await tick();
++        expect(written).toEqual(['from the first']);
++
++        one.clipboard.dispose();
++        two.clipboard.dispose();
++    });
+ });
+diff --git a/web-client/iron-remote-desktop/src/services/remote-desktop.service.ts b/web-client/iron-remote-desktop/src/services/remote-desktop.service.ts
+index 61f7940f..081e2caa 100644
+--- a/web-client/iron-remote-desktop/src/services/remote-desktop.service.ts
++++ b/web-client/iron-remote-desktop/src/services/remote-desktop.service.ts
+@@ -306,6 +306,12 @@ export class RemoteDesktopService {
+         this.scaleObservable.publish(scale);
+     }
+ 
++    /// Whether this session's component has the keyboard focus within the page, which can show several sessions.
++    hasFocus(): boolean {
++        const root = this.canvas?.getRootNode();
++        return root instanceof ShadowRoot ? root.host === document.activeElement : true;
++    }
++
+     setCanvas(canvas: HTMLCanvasElement) {
+         this.canvas = canvas;
+     }

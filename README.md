@@ -247,6 +247,13 @@ console on the host, [above](#use)). A VM found this way asks for its account th
 desktop; **Save \<name\> to this host's desktops** in its menu keeps it, for a name of your own and other settings.
 **Settings › Remote Desktop › Find virtual machines on SSH hosts** turns this off.
 
+A VM the plugin started can go back off by itself: **Settings › Remote Desktop › Shut down VMs it started** (5
+minutes, 15 or an hour without a desktop open; never, by default). A small watcher on the SSH host sees to it, so it
+also works once the tab is closed or Tabby has quit: after that long with no connection to the VM's desktop through the
+host, it asks the VM to shut down (`virsh shutdown`, with a key press first, since Windows ignores the request while its
+screen sleeps), then ends. VMs that were already running are never touched, and neither are machines woken over the
+network.
+
 ## desk: the console on the desktop
 
 Type `desk` in an SSH console, and the tab switches to that machine's desktop with a terminal attached to the very same
@@ -281,6 +288,7 @@ They are stored in Tabby's config under `remoteDesktop`:
 | Bring the console along with `desk` (`desk`) | Off | Installs `desk` and a login line on each machine you open a desktop on; applies on the next connection there. |
 | Session backend (`sessionBackend`) | `native` | For `desk`: `native` (trd-pty) or `tmux`. Config file only. |
 | Find virtual machines on SSH hosts (`discoverVMs`) | On | Lists a host's libvirt VMs with a desktop in its menu ([VMs on a host](#vms-on-a-host)). |
+| Shut down VMs it started (`shutDownIdle`) | Never | 5, 15 or 60: minutes without a desktop open after which a VM the plugin started is shut down again ([VMs on a host](#vms-on-a-host)). |
 | Tell me about new versions (`checkUpdates`) | On | Once a day, asks npm for the latest tabby-rdp (nothing else is sent), and says so in a note, the menus and the settings page when there's a newer one: Tabby itself shows plugin upgrades only on its Plugins page. |
 | Desktop name overlay (`osd`) | When it helps | `show` (`auto`, `always`, `off`), `font`, `size`, `position`, `color` (empty: white) and `seconds`; the settings page previews it. |
 
@@ -345,17 +353,19 @@ npm run build:ironrdp        # rebuild vendor/ from IronRDP and ironrdp/patches:
 
 ## Limitations
 
-- **One client per account on GNOME.** A second client (another machine, or another Tabby window) gets an extra,
-  empty monitor instead of the same screen, which is how GNOME Remote Desktop's headless mode works.
-- **The headless GNOME session is a shell without `gnome-session`:** apps work (Settings, Files, Terminal, Firefox), but
-  GNOME's background settings daemons don't run, and X11-only apps don't start.
+- **One screen per connection on GNOME.** GNOME Remote Desktop's headless mode can't show the same screen to two
+  clients (another computer, or another Tabby window): a second one gets an extra, empty screen. Opening a desktop
+  that's open elsewhere asks whether to take it over (the other connection is disconnected, as on Windows; the session
+  and its apps carry on) or to open a second screen.
+- **The headless GNOME session is a shell without `gnome-session`.** Apps work, X11 ones too (through XWayland), and so
+  do GNOME's settings daemons for keyboard, media keys and custom shortcuts, accessibility and sound. The ones for
+  power, sharing and local hardware don't run, so the session never suspends or blanks the machine.
 - **GNOME's login-screen mode** isn't supported: it hands clients over with a server redirection, which IronRDP can't
   follow yet. The plugin uses per-user headless sessions instead.
 - **Remembering a Windows password on Linux** needs an unlocked keyring (GNOME Keyring or KWallet), as it does for
   Tabby's own passwords. Without one, the plugin asks each time.
 - **GNOME Remote Desktop listens on all interfaces** (password-protected, TLS); it has no setting to listen on
   loopback only. See [docs/architecture.md](docs/architecture.md#security-notes) to restrict it.
-- **Windows-key combinations** such as Win+R don't come through from macOS. Tapping ⌘ for the Windows key does.
 - **The microphone** needs the system's permission: macOS asks the first time a remote app records (if it was denied,
   allow Tabby in System Settings › Privacy & Security › Microphone, then restart Tabby), and Windows needs "Let desktop
   apps access your microphone". On GNOME, apps record from GNOME Remote Desktop's "Remoteaudio Source", which is the
@@ -371,7 +381,8 @@ npm run build:ironrdp        # rebuild vendor/ from IronRDP and ironrdp/patches:
   far as that xrdp version supports them), sound through the PipeWire or PulseAudio module. Live resize needs xrdp
   0.10 or newer; with 0.9 (Ubuntu 24.04), the desktop keeps its size, scaled to fit, or choose **Reconnect at the new
   size**. xrdp's standard RDP security without TLS (`security_layer=rdp`) isn't supported. `desk` needs GNOME.
-- **Waking a desktop** starts it but never shuts it down again; that is up to you (or the VM's own settings).
+- **Waking a desktop** over the network (Wake-on-LAN) starts it but never shuts it down again; for VMs, see
+  [Shut down VMs it started](#vms-on-a-host).
 
 ## License
 

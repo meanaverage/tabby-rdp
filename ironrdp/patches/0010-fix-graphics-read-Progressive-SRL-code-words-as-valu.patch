@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: meanaverage <18336095+meanaverage@users.noreply.github.com>
 Date: Sun, 27 Sep 2026 03:17:50 -0700
-Subject: [PATCH 10/10] fix(graphics): read Progressive SRL code words as
+Subject: [PATCH 10/14] fix(graphics): read Progressive SRL code words as
  values need them
 
 Windows' RemoteFX Progressive upgrade passes (TILE_UPGRADE) failed to

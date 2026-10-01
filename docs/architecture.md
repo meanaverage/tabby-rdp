@@ -56,11 +56,23 @@ installed beforehand:
    `xdg-open` behave. The activation environment is updated so that D-Bus-activated apps find the display, and
    `graphical-session.target` is held up for as long as the shell runs (a small transient unit bound to it), as
    gnome-session would: GNOME's portal requires it, and without the portal every GTK app waits 25 seconds to start.
+   Also as gnome-session would: `DISPLAY` for X11 apps (the display the shell reserved, served by XWayland on demand);
+   GNOME's settings daemons for keyboard, media keys, accessibility, sound and housekeeping, bound to the shell (not
+   power, which would suspend the machine, sharing, which manages grd, or the ones for local hardware); and, since the
+   shell gives up on X11 when it can't start gnome-session's X11 services, a runtime stand-in for
+   `gnome-session-x11-services-ready.target` (in `$XDG_RUNTIME_DIR`, removed when the shell stops) that starts GNOME's
+   XSettings daemon.
    PipeWire's user sockets are started if they aren't yet (installed after the user's systemd started), since screen
    casting goes through PipeWire, and a virtual audio output is added if the machine has none, for sound.
 4. **`desk`** (only when that setting is on): the login hook and helpers ([desk.md](desk.md)); when off, removes them.
 5. **grd restarts only when its configuration changed:** it reads credentials at startup, and a restart drops open
    sessions.
+6. **Clients connected already:** the script counts the established connections to grd's port (again for up to 2 s,
+   so a connection of the plugin's own being replaced isn't one) and reports them. grd gives each client a screen of
+   its own, so the plugin asks before connecting: take it over (the script runs again with `TRD_TAKEOVER=1`, which
+   restarts grd, dropping those connections but not the session) or a second screen. A take-over leaves a note on the
+   host (which pane, when); a pane whose desktop dropped at that moment doesn't reconnect by itself, even when the
+   new connection isn't up yet, so two clients don't take turns taking it back.
 
 The script prints one `RD_OK port=… user=… pass=… cert=…` or `RD_ERR <reason>` line; errors show in the desktop
 layer. `cert` is the SHA-256 fingerprint of the certificate from step 1, the only one the proxy then accepts on that
@@ -151,6 +163,14 @@ belonged to the old user. The edit form is the add form, filled in (`wake` inclu
   from the SSH host, then probes every 3 s for up to 3 minutes, and connects; a connection that still fails right
   after gets three more tries, 5 s apart, with the same account. A connection that fails later, to a desktop that no
   longer answers, starts it again, except during automatic reconnects. The waiting runs outside Angular's zone.
+- **Shutting it down again (`shutDownIdle`):** after starting a VM, and only then, the plugin can leave a watcher on the
+  SSH host: `setsid nohup sh`, detached from the SSH session, one per VM (a pid file with the plugin's files, or in
+  `/tmp/tabby-rdp-<uid>` when the home folder isn't writable). Every 30 s it checks that the VM still runs and whether
+  an established TCP connection goes from the host to the desktop's address and port (`ss`); after the set time
+  without one, it presses Shift in the VM (`virsh send-key`: Windows ignores ACPI requests while its screen sleeps) and
+  asks for a shutdown, again every 2 minutes, five times at most, and ends when the VM is off. On the host rather than
+  in Tabby, so closing the tab (and with it the SSH connection) or quitting Tabby doesn't keep the VM running; it needs
+  logind to let user processes outlive the session (`KillUserProcesses=no`, the usual default).
 
 ## Remote desktop tabs (RDP profiles)
 

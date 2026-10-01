@@ -266,6 +266,98 @@ function autologon (): (data: Buffer) => Buffer {
     }
 }
 
+/**
+ * Splits what the server sends into whole PDUs, one per WebSocket message. IronRDP's web client drops whatever else a
+ * message holds at the end of the connection sequence (it hands its session reader the bare stream, without the
+ * framer's leftovers): when GNOME sent the last activation PDU and the start of dynamic-channel negotiation in one
+ * read, the graphics channel never opened and the desktop stayed blank, typically after a reconnect. So messages
+ * follow PDU boundaries, not TLS records or SSH reads. Before RDP there can be CredSSP's DER messages and, with
+ * HYBRID_EX (`earlyAuth`), a four-byte Early User Authorization Result; after that, TPKT and fast-path. Returns a
+ * function from server data to the PDUs it completes; it throws on data that is none of these.
+ */
+export function serverFraming (earlyAuth: boolean): (data: Buffer) => Buffer[] {
+    const MAX_DER = 16 * 1024 * 1024
+    let rdp = false
+    let pending: Buffer = Buffer.alloc(0)
+    const invalid = () => new Error('invalid RDP server frame')
+    /** The length of the PDU at the start of `b`, 0 while its header is incomplete. */
+    const lengthOf = (b: Buffer): number => {
+        if (b.length < 2) {
+            return 0
+        }
+        if (!rdp && b[0] === 0x30) {
+            if (!(b[1] & 0x80)) {
+                return 2 + b[1]
+            }
+            const octets = b[1] & 0x7f
+            if (octets === 0 || octets > 4) {
+                throw invalid()
+            }
+            if (b.length < 2 + octets) {
+                return 0
+            }
+            const content = b.readUIntBE(2, octets)
+            if (content > MAX_DER) {
+                throw invalid()
+            }
+            return 2 + octets + content
+        }
+        if (!rdp && earlyAuth) {
+            return 4
+        }
+        if (b[0] === 0x03) {
+            if (b[1] !== 0) {
+                throw invalid()
+            }
+            if (b.length < 4) {
+                return 0
+            }
+            const length = b.readUInt16BE(2)
+            if (length < 4) {
+                throw invalid()
+            }
+            return length
+        }
+        if (rdp && !(b[0] & 0x03)) {
+            if (!(b[1] & 0x80)) {
+                if (b[1] < 2) {
+                    throw invalid()
+                }
+                return b[1]
+            }
+            if (b.length < 3) {
+                return 0
+            }
+            const length = ((b[1] & 0x7f) << 8) | b[2]
+            if (length < 3) {
+                throw invalid()
+            }
+            return length
+        }
+        throw invalid()
+    }
+    return data => {
+        pending = pending.length ? Buffer.concat([pending, data]) : data
+        const out: Buffer[] = []
+        for (;;) {
+            const length = lengthOf(pending)
+            if (!length || pending.length < length) {
+                break
+            }
+            if (!rdp && earlyAuth && pending[0] !== 0x30) {
+                earlyAuth = false
+            } else if (pending[0] === 0x03) {
+                rdp = true
+            }
+            out.push(pending.subarray(0, length))
+            pending = pending.subarray(length)
+        }
+        // A copy of the rest: it would otherwise keep the whole chunk it came in alive.
+        pending = Buffer.from(pending)
+        return out
+    }
+}
+
 // ---- proxy -------------------------------------------------------------------------------------
 
 /**
@@ -387,9 +479,22 @@ export async function startRDCleanPathProxy (openUpstream: UpstreamFactory, chec
                 await checkCertificate(fingerprintOf(chain[0]))
                 ws.send(encodeResponse(x224, chain, req.destination))
                 stage = 'relay'
+                // PROTOCOL_HYBRID_EX in the server's negotiation response: an Early User Authorization Result follows CredSSP.
+                const frames = serverFraming(x224.length >= 19 && x224[11] === 0x02 && x224.readUInt32LE(15) === 8)
                 upstream.on('data', (d: Buffer) => {
                     stats.bytesIn += d.length
-                    ws.send(d)
+                    let pdus: Buffer[]
+                    try {
+                        pdus = frames(d)
+                    } catch (e: any) {
+                        log(`upstream: ${e.message}`)
+                        ws.close()
+                        upstream?.destroy()
+                        return
+                    }
+                    for (const pdu of pdus) {
+                        ws.send(pdu)
+                    }
                 })
                 upstream.on('close', () => ws.close())
                 upstream.on('error', (e: Error) => { log(`upstream error: ${e.message}`); ws.close() })
