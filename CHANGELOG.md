@@ -25,6 +25,8 @@
   clipboard; copies made on another reach the Mac when it gets the focus (IronRDP patches 12 and 13).
 - IronRDP patch 14, meant for upstream: H.264 pictures read correctly in Safari, whose `copyTo` ignores the RGBA format.
 - A closed desktop no longer leaves its pane's subscription and its label timer behind.
+- The first-connect tip shows the desktop/console hotkey as text: a label from the config could carry markup into
+  the page.
 
 **Docs**
 - The limitation about Win+R from macOS is gone: ⌃⌘ with a key has been the Windows key with it since 0.3.0.
