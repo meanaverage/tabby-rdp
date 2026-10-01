@@ -16,6 +16,16 @@
   keys and custom shortcuts, accessibility and sound; not power, so it never suspends the machine. A session that's
   already running gets them on the next connect, without closing its apps.
 
+**Fixed**
+- **A blank desktop after reconnecting** (GNOME): when the server sent the end of the connection sequence and the start
+  of the graphics channel together, IronRDP lost the latter and the desktop stayed transparent. The proxy now hands it
+  each server message on its own.
+- **The clipboard with several desktops open:** closing one desktop stopped the automatic clipboard for the others,
+  and a desktop in the background could overwrite what was copied on another. The desktop with the focus syncs the
+  clipboard; copies made on another reach the Mac when it gets the focus (IronRDP patches 12 and 13).
+- IronRDP patch 14, meant for upstream: H.264 pictures read correctly in Safari, whose `copyTo` ignores the RGBA format.
+- A closed desktop no longer leaves its pane's subscription and its label timer behind.
+
 **Docs**
 - The limitation about Win+R from macOS is gone: ⌃⌘ with a key has been the Windows key with it since 0.3.0.
 

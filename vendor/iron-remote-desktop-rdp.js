@@ -1628,19 +1628,20 @@ class QI {
   }
   async readBox(A, I, g, B) {
     var _a, _b;
-    if (this.stats.readback === "copyTo")
+    if (this.stats.readback === "copyTo") {
+      const D = { x: I.x + g.x, y: I.y + g.y, width: g.width, height: g.height };
       try {
-        await A.copyTo(B, {
-          rect: { x: I.x + g.x, y: I.y + g.y, width: g.width, height: g.height },
-          format: "RGBA",
-          colorSpace: "srgb"
-        });
-        return;
-      } catch (D) {
-        if (!(D instanceof DOMException && D.name === "NotSupportedError") && !(D instanceof TypeError))
-          throw D;
+        if (A.allocationSize({ rect: D, format: "RGBA" }) === g.width * g.height * 4) {
+          await A.copyTo(B, { rect: D, format: "RGBA", colorSpace: "srgb" });
+          return;
+        }
+        this.stats.readback = "canvas";
+      } catch (i) {
+        if (!(i instanceof DOMException && i.name === "NotSupportedError") && !(i instanceof TypeError))
+          throw i;
         this.stats.readback = "canvas";
       }
+    }
     (this.canvas === null || this.canvas.width < g.width || this.canvas.height < g.height) && (this.canvas = new OffscreenCanvas(
       Math.max(g.width, ((_a = this.canvas) == null ? void 0 : _a.width) ?? 0),
       Math.max(g.height, ((_b = this.canvas) == null ? void 0 : _b.height) ?? 0)
@@ -1648,7 +1649,7 @@ class QI {
     const E = this.canvas.getContext("2d", { willReadFrequently: true, colorSpace: "srgb" });
     if (E === null)
       throw new Error("no 2D canvas context");
-    E.drawImage(A, g.x, g.y, g.width, g.height, 0, 0, g.width, g.height), B.set(E.getImageData(0, 0, g.width, g.height).data);
+    E.drawImage(A, -g.x, -g.y, I.width, I.height), B.set(E.getImageData(0, 0, g.width, g.height).data);
   }
   stopWatchdog() {
     this.watchdog !== null && (clearInterval(this.watchdog), this.watchdog = null);

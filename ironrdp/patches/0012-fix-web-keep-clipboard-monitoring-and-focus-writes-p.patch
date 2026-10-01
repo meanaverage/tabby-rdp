@@ -1,0 +1,547 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: meanaverage <18336095+meanaverage@users.noreply.github.com>
+Date: Wed, 30 Sep 2026 16:48:15 -0700
+Subject: [PATCH 12/14] fix(web): keep clipboard monitoring and focus writes
+ per component
+
+The clipboard service stopped its monitoring loop through a module-level
+`isComponentDestroyed` store, and queued clipboard writes that wait for window
+focus in a module-level queue. With several components on a page, destroying
+one stopped clipboard monitoring for all of them, and any focus event ran the
+writes queued by every component.
+
+Each ClipboardService now owns its monitoring timer and its pending focus
+write (only the latest remote clipboard content is kept). Monitoring stops when
+the session ends (the new `sessionEndedObservable`) and resumes with the next
+session. A destroyed component disposes its clipboard service, cancels its
+delayed resize, and does not dispatch `ready` if it was destroyed while
+initializing. `shutdown()` forgets the session before shutting it down, so an
+asynchronous clipboard read can't reach it afterwards.
+---
+ .../src/iron-remote-desktop.svelte            |  33 ++--
+ .../src/lib/stores/componentLifecycleStore.ts |   3 -
+ .../src/lib/stores/runWhenFocusedStore.ts     |  29 ----
+ .../src/services/clipboard.service.ts         |  89 +++++++++--
+ .../src/services/clipboardLifecycle.test.ts   | 149 ++++++++++++++++++
+ .../src/services/remote-desktop.service.ts    |  13 +-
+ 6 files changed, 254 insertions(+), 62 deletions(-)
+ delete mode 100644 web-client/iron-remote-desktop/src/lib/stores/componentLifecycleStore.ts
+ delete mode 100644 web-client/iron-remote-desktop/src/lib/stores/runWhenFocusedStore.ts
+ create mode 100644 web-client/iron-remote-desktop/src/services/clipboardLifecycle.test.ts
+
+diff --git a/web-client/iron-remote-desktop/src/iron-remote-desktop.svelte b/web-client/iron-remote-desktop/src/iron-remote-desktop.svelte
+index f045fd68..4f424801 100644
+--- a/web-client/iron-remote-desktop/src/iron-remote-desktop.svelte
++++ b/web-client/iron-remote-desktop/src/iron-remote-desktop.svelte
+@@ -21,8 +21,6 @@
+     import { PublicAPI } from './services/PublicAPI';
+     import { ScreenScale } from './enums/ScreenScale';
+     import type { RemoteDesktopModule } from './interfaces/RemoteDesktopModule';
+-    import { isComponentDestroyed } from './lib/stores/componentLifecycleStore';
+-    import { runWhenFocusedQueue } from './lib/stores/runWhenFocusedStore';
+     import { ClipboardService } from './services/clipboard.service';
+     import { availableAreaCorner, windowCorner } from './lib/availableArea';
+ 
+@@ -58,6 +56,8 @@
+     let publicAPI = new PublicAPI(remoteDesktopService, clipboardService);
+ 
+     let currentScreenScale = ScreenScale.Fit;
++    let destroyed = false;
++    let visibilityTimer: ReturnType<typeof setTimeout> | undefined;
+ 
+     function captureKeys(evt: KeyboardEvent) {
+         if (capturingInputs()) {
+@@ -144,7 +144,8 @@
+             if (val) {
+                 //Enforce first scaling and delay the call to scaleSession to ensure Dom is ready.
+                 setWrapperStyle('100%', '100%', 'hidden');
+-                setTimeout(() => scaleSession(scale), 150);
++                clearTimeout(visibilityTimer);
++                visibilityTimer = setTimeout(() => scaleSession(scale), 150);
+             }
+         });
+     }
+@@ -154,6 +155,10 @@
+     }
+ 
+     function scaleSession(screenScale: ScreenScale | string) {
++        // A resize callback can come after the component is destroyed (bind:this has cleared its elements then).
++        if (destroyed) {
++            return;
++        }
+         resetHostStyle();
+         if (isVisible) {
+             switch (screenScale) {
+@@ -323,14 +328,7 @@
+     }
+ 
+     function focusEventHandler() {
+-        try {
+-            while (runWhenFocusedQueue.length() > 0) {
+-                const fn = runWhenFocusedQueue.shift();
+-                fn?.();
+-            }
+-        } catch (err) {
+-            console.error('Failed to run the function queued for execution when the window received focus: ' + err);
+-        }
++        clipboardService.flushFocused();
+     }
+ 
+     function blurEventHandler() {
+@@ -344,26 +342,33 @@
+     }
+ 
+     onMount(async () => {
+-        isComponentDestroyed.set(false);
+         loggingService.verbose = verbose === 'true';
+         loggingService.info('Dom ready');
+         await initcanvas();
++        if (destroyed) {
++            return;
++        }
+         try {
+             await clipboardService.initClipboard();
+         } catch (err) {
+             loggingService.error('Clipboard initialization failed: ' + err);
+         }
+-        dispatchReady();
++        // Not ready if it was destroyed in the meantime: a host would connect a session nothing shows.
++        if (!destroyed) {
++            dispatchReady();
++        }
+     });
+ 
+     onDestroy(() => {
++        destroyed = true;
++        clearTimeout(visibilityTimer);
++        clipboardService.dispose();
+         window.removeEventListener('resize', resizeHandler);
+         window.removeEventListener('keydown', captureKeys, false);
+         window.removeEventListener('keyup', captureKeys, false);
+         window.removeEventListener('focus', focusEventHandler);
+         window.removeEventListener('blur', blurEventHandler);
+         document.removeEventListener('visibilitychange', visibilityChangeHandler);
+-        isComponentDestroyed.set(true);
+     });
+ </script>
+ 
+diff --git a/web-client/iron-remote-desktop/src/lib/stores/componentLifecycleStore.ts b/web-client/iron-remote-desktop/src/lib/stores/componentLifecycleStore.ts
+deleted file mode 100644
+index ac63dad6..00000000
+--- a/web-client/iron-remote-desktop/src/lib/stores/componentLifecycleStore.ts
++++ /dev/null
+@@ -1,3 +0,0 @@
+-import { writable } from 'svelte/store';
+-
+-export const isComponentDestroyed = writable(false);
+diff --git a/web-client/iron-remote-desktop/src/lib/stores/runWhenFocusedStore.ts b/web-client/iron-remote-desktop/src/lib/stores/runWhenFocusedStore.ts
+deleted file mode 100644
+index f47804cb..00000000
+--- a/web-client/iron-remote-desktop/src/lib/stores/runWhenFocusedStore.ts
++++ /dev/null
+@@ -1,29 +0,0 @@
+-import { get, writable } from 'svelte/store';
+-
+-function createQueueStore<T>() {
+-    const store = writable<T[]>([]);
+-
+-    return {
+-        subscribe: store.subscribe,
+-
+-        enqueue(item: T) {
+-            store.update((queue) => [...queue, item]);
+-        },
+-
+-        shift(): T | undefined {
+-            let first: T | undefined;
+-            store.update((queue) => {
+-                if (queue.length == 0) return queue;
+-                first = queue[0];
+-                return queue.slice(1);
+-            });
+-            return first;
+-        },
+-
+-        length(): number {
+-            return get(store).length;
+-        },
+-    };
+-}
+-
+-export const runWhenFocusedQueue = createQueueStore<() => void>();
+diff --git a/web-client/iron-remote-desktop/src/services/clipboard.service.ts b/web-client/iron-remote-desktop/src/services/clipboard.service.ts
+index c01095f8..d0a52f37 100644
+--- a/web-client/iron-remote-desktop/src/services/clipboard.service.ts
++++ b/web-client/iron-remote-desktop/src/services/clipboard.service.ts
+@@ -1,9 +1,6 @@
+ import type { RemoteDesktopService } from './remote-desktop.service';
+-import { isComponentDestroyed } from '../lib/stores/componentLifecycleStore';
+-import { get } from 'svelte/store';
+ import type { ClipboardData } from '../interfaces/ClipboardData';
+ import type { RemoteDesktopModule } from '../interfaces/RemoteDesktopModule';
+-import { runWhenFocusedQueue } from '../lib/stores/runWhenFocusedStore';
+ import { ClipboardApiSupported } from '../enums/ClipboardApiSupported';
+ import { IronErrorKind } from '../interfaces/Error';
+ 
+@@ -32,6 +29,13 @@ export class ClipboardService {
+     // Used to prevent the monitoring loop from clobbering an active file upload's
+     // FormatList with a text/image clipboard update.
+     private monitoringSuppressed: boolean = false;
++    // The monitoring loop and the clipboard write waiting for focus belong to this component: a page can hold several,
++    // and one being destroyed must not stop the others.
++    private disposed: boolean = false;
++    private monitoringActive: boolean = false;
++    private monitorTimer?: ReturnType<typeof setTimeout>;
++    // Only the latest remote clipboard content is written once the window has the focus again.
++    private pendingFocus: (() => Promise<void> | void) | null = null;
+ 
+     constructor(remoteDesktopService: RemoteDesktopService, module: RemoteDesktopModule) {
+         this.remoteDesktopService = remoteDesktopService;
+@@ -55,6 +59,24 @@ export class ClipboardService {
+         this.monitoringSuppressed = false;
+     }
+ 
++    /**
++     * Stops the monitoring loop and drops the clipboard write waiting for focus, until the next session starts.
++     */
++    stopMonitoring(): void {
++        this.monitoringActive = false;
++        clearTimeout(this.monitorTimer);
++        this.monitorTimer = undefined;
++        this.pendingFocus = null;
++    }
++
++    /**
++     * For when the component is destroyed: nothing is read from or written to the clipboard anymore.
++     */
++    dispose(): void {
++        this.disposed = true;
++        this.stopMonitoring();
++    }
++
+     async initClipboard() {
+         // Clipboard API is available only in secure contexts (HTTPS).
+         if (!window.isSecureContext) {
+@@ -130,6 +152,12 @@ export class ClipboardService {
+             return;
+         }
+ 
++        // Destroyed while the checks above were waiting.
++        if (this.disposed) {
++            return;
++        }
++
++        this.remoteDesktopService.sessionEndedObservable.subscribe(() => this.stopMonitoring());
+         this.remoteDesktopService.setOnForceClipboardUpdate(this.onForceClipboardUpdate.bind(this));
+ 
+         if (this.ClipboardApiSupported === ClipboardApiSupported.Full) {
+@@ -138,6 +166,7 @@ export class ClipboardService {
+ 
+                 // Start the clipboard monitoring loop after session has been started
+                 this.remoteDesktopService.sessionStartedObservable.subscribe((_) => {
++                    this.monitoringActive = !this.disposed;
+                     this.scheduleOnMonitorClipboardUpdate();
+                 });
+             } else {
+@@ -217,14 +246,37 @@ export class ClipboardService {
+     }
+ 
+     private scheduleOnMonitorClipboardUpdate() {
+-        setTimeout(this.onMonitorClipboard.bind(this), CLIPBOARD_MONITORING_INTERVAL_MS);
++        clearTimeout(this.monitorTimer);
++        this.monitorTimer =
++            this.monitoringActive && !this.disposed
++                ? setTimeout(() => {
++                      this.monitorTimer = undefined;
++                      this.onMonitorClipboard();
++                  }, CLIPBOARD_MONITORING_INTERVAL_MS)
++                : undefined;
+     }
+ 
+-    private runWhenWindowFocused(fn: () => void) {
++    private runWhenWindowFocused(fn: () => Promise<void> | void) {
++        if (this.disposed) {
++            return;
++        }
+         if (document.hasFocus()) {
+-            fn();
++            Promise.resolve()
++                .then(() => (this.disposed ? undefined : fn()))
++                .catch((err) => console.error('Failed to set client clipboard: ' + err));
+         } else {
+-            runWhenFocusedQueue.enqueue(fn);
++            this.pendingFocus = fn;
++        }
++    }
++
++    /**
++     * Runs the clipboard write that waited for the window to have the focus (the component calls it on focus).
++     */
++    flushFocused(): void {
++        const pending = this.pendingFocus;
++        this.pendingFocus = null;
++        if (pending) {
++            this.runWhenWindowFocused(pending);
+         }
+     }
+ 
+@@ -253,12 +305,15 @@ export class ClipboardService {
+     }
+ 
+     // This callback is required to send initial clipboard state if available.
+-    private onForceClipboardUpdate() {
++    private async onForceClipboardUpdate() {
+         try {
++            if (this.disposed) {
++                return;
++            }
+             if (this.lastSentClipboardData) {
+-                this.remoteDesktopService.onClipboardChanged(this.lastSentClipboardData);
++                await this.remoteDesktopService.onClipboardChanged(this.lastSentClipboardData);
+             } else {
+-                this.remoteDesktopService.onClipboardChangedEmpty();
++                await this.remoteDesktopService.onClipboardChangedEmpty();
+             }
+         } catch (err) {
+             console.error('Failed to send initial clipboard state: ' + err);
+@@ -273,12 +328,15 @@ export class ClipboardService {
+ 
+     // This callback is required to update client clipboard state when remote side has changed.
+     private onRemoteClipboardChangedAutoMode(data: ClipboardData) {
++        if (this.disposed) {
++            return;
++        }
+         try {
+             const mime_formats = this.clipboardDataToRecord(data);
+             const clipboard_item = new ClipboardItem(mime_formats);
+             this.runWhenWindowFocused(() => {
+                 this.lastReceivedClipboardData = this.clipboardDataToClipboardItemsRecord(data);
+-                navigator.clipboard.write([clipboard_item]);
++                return navigator.clipboard.write([clipboard_item]);
+             });
+         } catch (err) {
+             console.error('Failed to set client clipboard: ' + err);
+@@ -289,7 +347,7 @@ export class ClipboardService {
+     private async onMonitorClipboard(): Promise<void> {
+         let stopped = false;
+         try {
+-            if (this.monitoringSuppressed) {
++            if (this.disposed || !this.monitoringActive || this.monitoringSuppressed) {
+                 return;
+             }
+ 
+@@ -357,8 +415,9 @@ export class ClipboardService {
+                 values[kind] = value;
+             }
+ 
+-            // Clipboard has changed, we need to acknowledge remote side about it.
+-            if (!sameValue) {
++            // Clipboard has changed, we need to acknowledge remote side about it (unless the session ended or monitoring
++            // was suppressed while reading it).
++            if (!sameValue && !this.disposed && this.monitoringActive && !this.monitoringSuppressed) {
+                 this.lastClientClipboardItems = values;
+ 
+                 const clipboardData = new this.module.ClipboardData();
+@@ -405,7 +464,7 @@ export class ClipboardService {
+                 this.lastClipboardMonitorLoopError = err;
+             }
+         } finally {
+-            if (!stopped && !get(isComponentDestroyed)) {
++            if (!stopped) {
+                 this.scheduleOnMonitorClipboardUpdate();
+             }
+         }
+diff --git a/web-client/iron-remote-desktop/src/services/clipboardLifecycle.test.ts b/web-client/iron-remote-desktop/src/services/clipboardLifecycle.test.ts
+new file mode 100644
+index 00000000..11881c4c
+--- /dev/null
++++ b/web-client/iron-remote-desktop/src/services/clipboardLifecycle.test.ts
+@@ -0,0 +1,149 @@
++import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
++import { RemoteDesktopService } from './remote-desktop.service';
++import { ClipboardService } from './clipboard.service';
++import type { RemoteDesktopModule } from '../interfaces/RemoteDesktopModule';
++import type { ClipboardData } from '../interfaces/ClipboardData';
++
++/**
++ * Clipboard monitoring and the clipboard write that waits for focus belong to each component. A page can show
++ * several sessions; destroying one of them used to stop monitoring for all of them (a shared "destroyed" store),
++ * and writes queued by any of them ran on the next focus (a shared queue).
++ */
++
++function textData(text: string): ClipboardData {
++    return {
++        items: () => [{ mimeType: () => 'text/plain', value: () => text }],
++        isEmpty: () => false,
++    } as unknown as ClipboardData;
++}
++
++const module = {
++    ClipboardData: class {
++        addText() {}
++        addBinary() {}
++        isEmpty() {
++            return false;
++        }
++    },
++} as unknown as RemoteDesktopModule;
++
++async function started(): Promise<{ service: RemoteDesktopService; clipboard: ClipboardService }> {
++    const service = new RemoteDesktopService(module);
++    const clipboard = new ClipboardService(service, module);
++    await clipboard.initClipboard();
++    service.sessionStartedObservable.publish(null);
++    return { service, clipboard };
++}
++
++// What the service hands a clipboard update from the server to (the auto-mode callback ClipboardService installed).
++function remoteCopies(service: RemoteDesktopService, text: string) {
++    (service as unknown as { onRemoteClipboardChanged: (data: ClipboardData) => void }).onRemoteClipboardChanged(
++        textData(text),
++    );
++}
++
++// Lets pending promises (clipboard reads and writes) settle; timers are fake.
++const tick = () => vi.advanceTimersByTimeAsync(1);
++
++describe('clipboard lifecycle', () => {
++    let focused: boolean;
++    let written: string[];
++    let reads: ReturnType<typeof vi.fn>;
++
++    beforeEach(() => {
++        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
++        focused = true;
++        written = [];
++        reads = vi.fn(async () => []);
++        vi.spyOn(document, 'hasFocus').mockImplementation(() => focused);
++        vi.stubGlobal('isSecureContext', true);
++        // jsdom's Blob can't be read back; the service only wraps the text in one.
++        vi.stubGlobal(
++            'Blob',
++            class {
++                constructor(readonly parts: string[]) {}
++            },
++        );
++        vi.stubGlobal(
++            'ClipboardItem',
++            class {
++                constructor(readonly items: Record<string, { parts: string[] }>) {}
++            },
++        );
++        vi.stubGlobal('navigator', {
++            ...navigator,
++            clipboard: {
++                read: reads,
++                write: vi.fn(async ([item]: [{ items: Record<string, { parts: string[] }> }]) => {
++                    written.push(item.items['text/plain'].parts[0]);
++                }),
++                readText: vi.fn(),
++                writeText: vi.fn(),
++            },
++            permissions: { query: vi.fn(async () => ({ state: 'granted' })) },
++        });
++    });
++
++    afterEach(() => {
++        vi.useRealTimers();
++        vi.restoreAllMocks();
++        vi.unstubAllGlobals();
++    });
++
++    it('keeps monitoring one session when another component is disposed', async () => {
++        const one = await started();
++        const two = await started();
++
++        two.clipboard.dispose();
++        reads.mockClear();
++        await vi.advanceTimersByTimeAsync(500);
++
++        // Only the remaining session polls: about once per 100 ms.
++        expect(reads.mock.calls.length).toBeGreaterThanOrEqual(3);
++        expect(reads.mock.calls.length).toBeLessThanOrEqual(6);
++        one.clipboard.dispose();
++    });
++
++    it('stops monitoring when the session ends, and starts again with the next one', async () => {
++        const { service, clipboard } = await started();
++
++        service.shutdown();
++        reads.mockClear();
++        await vi.advanceTimersByTimeAsync(500);
++        expect(reads).not.toHaveBeenCalled();
++
++        service.sessionStartedObservable.publish(null);
++        await vi.advanceTimersByTimeAsync(500);
++        expect(reads).toHaveBeenCalled();
++        clipboard.dispose();
++    });
++
++    it('writes only the latest remote clipboard once the window has the focus again', async () => {
++        const { service, clipboard } = await started();
++
++        focused = false;
++        remoteCopies(service, 'first');
++        remoteCopies(service, 'second');
++        await tick();
++        expect(written).toEqual([]);
++
++        focused = true;
++        clipboard.flushFocused();
++        await tick();
++        expect(written).toEqual(['second']);
++        clipboard.dispose();
++    });
++
++    it('drops a waiting write when its component is disposed', async () => {
++        const { service, clipboard } = await started();
++
++        focused = false;
++        remoteCopies(service, 'stale');
++        clipboard.dispose();
++        focused = true;
++        clipboard.flushFocused();
++        await tick();
++
++        expect(written).toEqual([]);
++    });
++});
+diff --git a/web-client/iron-remote-desktop/src/services/remote-desktop.service.ts b/web-client/iron-remote-desktop/src/services/remote-desktop.service.ts
+index 3ef5aa91..61f7940f 100644
+--- a/web-client/iron-remote-desktop/src/services/remote-desktop.service.ts
++++ b/web-client/iron-remote-desktop/src/services/remote-desktop.service.ts
+@@ -43,6 +43,9 @@ export class RemoteDesktopService {
+ 
+     sessionStartedObservable: Observable<null> = new Observable();
+ 
++    /// Published when the session ends: shut down, or its run() returned.
++    sessionEndedObservable: Observable<null> = new Observable();
++
+     resizeObservable: Observable<ResizeEvent> = new Observable();
+ 
+     session?: Session;
+@@ -147,8 +150,12 @@ export class RemoteDesktopService {
+     }
+ 
+     shutdown() {
++        // Forgotten before it's shut down, so nothing started asynchronously (a clipboard read) reaches it afterwards.
++        const session = this.session;
++        this.session = undefined;
++        this.sessionEndedObservable.publish(null);
+         this.fileTransferProvider?.dispose();
+-        this.session?.shutdown();
++        session?.shutdown();
+     }
+ 
+     mouseButtonState(event: MouseEvent, isDown: boolean, preventDefault: boolean) {
+@@ -227,6 +234,10 @@ export class RemoteDesktopService {
+                 loggingService.info('Starting the session.');
+                 return await session.run();
+             } finally {
++                if (this.session === session) {
++                    this.session = undefined;
++                    this.sessionEndedObservable.publish(null);
++                }
+                 this.setVisibility(false);
+             }
+         };
