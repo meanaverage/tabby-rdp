@@ -20,7 +20,7 @@ the origin, and reads that.
  2 files changed, 42 insertions(+), 13 deletions(-)
 
 diff --git a/web-client/iron-remote-desktop-rdp/src/H264Decoder.test.ts b/web-client/iron-remote-desktop-rdp/src/H264Decoder.test.ts
-index 46cbfe78..070b6afc 100644
+index e454e2df..bb81b17f 100644
 --- a/web-client/iron-remote-desktop-rdp/src/H264Decoder.test.ts
 +++ b/web-client/iron-remote-desktop-rdp/src/H264Decoder.test.ts
 @@ -23,11 +23,18 @@ class FakePicture {
@@ -61,7 +61,7 @@ index 46cbfe78..070b6afc 100644
          this.init.output(picture);
          return picture;
      }
-@@ -233,8 +241,7 @@ describe('WebCodecsH264Decoder', () => {
+@@ -245,8 +253,7 @@ describe('WebCodecsH264Decoder', () => {
          expect(decoder.failed).toMatch(/no key frame/);
      });
  
@@ -71,7 +71,7 @@ index 46cbfe78..070b6afc 100644
          class FakeCanvas {
              constructor(
                  readonly width: number,
-@@ -250,11 +257,29 @@ describe('WebCodecsH264Decoder', () => {
+@@ -262,11 +269,29 @@ describe('WebCodecsH264Decoder', () => {
              }
          }
          vi.stubGlobal('OffscreenCanvas', FakeCanvas);
@@ -103,10 +103,10 @@ index 46cbfe78..070b6afc 100644
      });
  
 diff --git a/web-client/iron-remote-desktop-rdp/src/H264Decoder.ts b/web-client/iron-remote-desktop-rdp/src/H264Decoder.ts
-index 47e01a70..9f838701 100644
+index c95ac01a..1d4b5e84 100644
 --- a/web-client/iron-remote-desktop-rdp/src/H264Decoder.ts
 +++ b/web-client/iron-remote-desktop-rdp/src/H264Decoder.ts
-@@ -309,18 +309,20 @@ export class WebCodecsH264Decoder {
+@@ -311,18 +311,20 @@ export class WebCodecsH264Decoder {
  
      private async readBox(
          picture: VideoFrame,
@@ -134,7 +134,7 @@ index 47e01a70..9f838701 100644
              } catch (error) {
                  // Converting to RGBA in copyTo came late to browsers; a canvas does the same.
                  if (
-@@ -342,7 +344,9 @@ export class WebCodecsH264Decoder {
+@@ -344,7 +346,9 @@ export class WebCodecsH264Decoder {
          if (context === null) {
              throw new Error('no 2D canvas context');
          }

@@ -328,9 +328,12 @@ tabby-rdp ships IronRDP with a short series of patches ([ironrdp/](ironrdp)). Th
 | Echo the correct size in the sound channel's Training Confirm | [Devolutions/IronRDP#2019](https://github.com/Devolutions/IronRDP/pull/2019) |
 | The graphics pipeline in the web client, following its resets | Covered by [Devolutions/IronRDP#1977](https://github.com/Devolutions/IronRDP/pull/1977) (not ours; [tested with GNOME](https://github.com/Devolutions/IronRDP/pull/1977#issuecomment-5851624036)) |
 | Sound in the web client | [Devolutions/IronRDP#2020](https://github.com/Devolutions/IronRDP/pull/2020) |
-| H.264 in the web client, decoded by the browser (WebCodecs) | Not submitted yet |
-| Decode Windows' RemoteFX Progressive refinements | Not submitted yet |
-| Microphone in the web client | Not submitted yet |
+| Let the host send key events to a session | [Devolutions/IronRDP#2026](https://github.com/Devolutions/IronRDP/pull/2026) (design under discussion) |
+| Decode Windows' RemoteFX Progressive refinements | Covered by [Devolutions/IronRDP#2010](https://github.com/Devolutions/IronRDP/pull/2010) and [#1977](https://github.com/Devolutions/IronRDP/pull/1977) (not ours) |
+| H.264 in the web client, decoded by the browser (WebCodecs) | Not submitted yet: waits for #1977 |
+| Microphone in the web client | Not submitted yet: waits for #2020 |
+| Keep clipboard sync working for the other desktops when one closes | Not submitted yet |
+| Sync the clipboard only for the desktop that has the focus | Not submitted yet |
 
 The aim is to make IronRDP's browser client work well with both Linux and Windows desktops, for everyone who embeds
 it, not just this plugin.
