@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.2
 
 **New**
 - **Shut down VMs it started:** a VM the plugin started to open its desktop can go back off after 5 minutes, 15 or an
