@@ -50,20 +50,20 @@ session with an error: the application can reconnect without H.264.
 `h264Supported()` asks VideoDecoder.isConfigSupported first.
 ---
  crates/ironrdp-egfx/README.md                 |  11 +
- crates/ironrdp-egfx/src/client.rs             | 336 +++++++++++-
- crates/ironrdp-egfx/src/h264.rs               | 500 ++++++++++++++++++
+ crates/ironrdp-egfx/src/client.rs             | 409 +++++++++++++-
+ crates/ironrdp-egfx/src/h264.rs               | 500 +++++++++++++++++
  crates/ironrdp-egfx/src/lib.rs                |   1 +
  crates/ironrdp-session/src/active_stage.rs    | 103 +++-
- .../tests/egfx/external_h264.rs               | 417 +++++++++++++++
+ .../tests/egfx/external_h264.rs               | 527 ++++++++++++++++++
  .../ironrdp-testsuite-core/tests/egfx/h264.rs | 158 ++++++
  .../ironrdp-testsuite-core/tests/egfx/mod.rs  |   2 +
  crates/ironrdp-web/src/h264.rs                |  97 ++++
  crates/ironrdp-web/src/lib.rs                 |   1 +
  crates/ironrdp-web/src/session.rs             | 104 +++-
- .../src/H264Decoder.test.ts                   | 302 +++++++++++
- .../src/H264Decoder.ts                        | 410 ++++++++++++++
+ .../src/H264Decoder.test.ts                   | 314 +++++++++++
+ .../src/H264Decoder.ts                        | 412 ++++++++++++++
  .../iron-remote-desktop-rdp/src/main.ts       |  18 +-
- 14 files changed, 2415 insertions(+), 45 deletions(-)
+ 14 files changed, 2612 insertions(+), 45 deletions(-)
  create mode 100644 crates/ironrdp-egfx/src/h264.rs
  create mode 100644 crates/ironrdp-testsuite-core/tests/egfx/external_h264.rs
  create mode 100644 crates/ironrdp-testsuite-core/tests/egfx/h264.rs
@@ -94,7 +94,7 @@ index 2145e61b..d99bbd7f 100644
  
  This crate contains optional integration support for OpenH264 through the
 diff --git a/crates/ironrdp-egfx/src/client.rs b/crates/ironrdp-egfx/src/client.rs
-index a9a471c6..3e7762c8 100644
+index a9a471c6..3fad6c4d 100644
 --- a/crates/ironrdp-egfx/src/client.rs
 +++ b/crates/ironrdp-egfx/src/client.rs
 @@ -53,7 +53,7 @@
@@ -173,7 +173,7 @@ index a9a471c6..3e7762c8 100644
  // ============================================================================
  // Handler Trait
  // ============================================================================
-@@ -422,6 +464,18 @@ pub struct GraphicsPipelineClient {
+@@ -422,6 +464,21 @@ pub struct GraphicsPipelineClient {
      frames_queued: u32,
      total_frames_decoded: u32,
      pending_output_reset: Option<(u16, u16)>,
@@ -189,10 +189,13 @@ index a9a471c6..3e7762c8 100644
 +    queue: VecDeque<Queued>,
 +    /// `EndFrame`s in `queue`: frames received but not yet processed.
 +    queued_frame_ends: u32,
++    /// Surface sizes as of the commands received so far, which can be ahead of `surfaces` while commands wait in
++    /// `queue`: a frame is handed out when it arrives, and its regions are bounded by its surface then.
++    received_surfaces: BTreeMap<u16, (u16, u16)>,
  }
  
  impl GraphicsPipelineClient {
-@@ -449,9 +503,64 @@ impl GraphicsPipelineClient {
+@@ -449,9 +506,65 @@ impl GraphicsPipelineClient {
              frames_queued: 0,
              total_frames_decoded: 0,
              pending_output_reset: None,
@@ -202,6 +205,7 @@ index a9a471c6..3e7762c8 100644
 +            h264_results: BTreeMap::new(),
 +            queue: VecDeque::new(),
 +            queued_frame_ends: 0,
++            received_surfaces: BTreeMap::new(),
          }
      }
  
@@ -257,7 +261,7 @@ index a9a471c6..3e7762c8 100644
      // ========================================================================
      // State Queries
      // ========================================================================
-@@ -507,6 +616,201 @@ impl GraphicsPipelineClient {
+@@ -507,6 +620,217 @@ impl GraphicsPipelineClient {
          self.pending_output_reset.take()
      }
  
@@ -268,6 +272,18 @@ index a9a471c6..3e7762c8 100644
 +    /// Queues a decoded PDU; with an external H.264 decoder, an AVC420 frame is handed out right away, so that
 +    /// decoding overlaps with receiving what follows.
 +    fn enqueue(&mut self, pdu: GfxPdu) -> PduResult<()> {
++        match &pdu {
++            GfxPdu::CreateSurface(create) if create.width != 0 && create.height != 0 => {
++                self.received_surfaces
++                    .insert(create.surface_id, (create.width, create.height));
++            }
++            GfxPdu::DeleteSurface(delete) => {
++                self.received_surfaces.remove(&delete.surface_id);
++            }
++            // ResetGraphics implicitly destroys all surfaces (see `handle_reset_graphics`).
++            GfxPdu::ResetGraphics(_) => self.received_surfaces.clear(),
++            _ => {}
++        }
 +        let pdu = match pdu {
 +            GfxPdu::WireToSurface1(wire)
 +                if self.external_h264
@@ -336,6 +352,9 @@ index a9a471c6..3e7762c8 100644
 +        if rect.left > rect.right || rect.top > rect.bottom {
 +            return Err(pdu_other_err!("invalid destination rectangle ordering"));
 +        }
++        let Some(&(surface_width, surface_height)) = self.received_surfaces.get(&pdu.surface_id) else {
++            return Err(pdu_other_err!("unknown surface in WireToSurface1"));
++        };
 +        let mut cursor = ReadCursor::new(&pdu.bitmap_data);
 +        // Each stream with whether its picture is the one to show (the main view) or only keeps the stream whole.
 +        let streams = if pdu.codec_id == Codec1Type::Avc420 {
@@ -358,19 +377,20 @@ index a9a471c6..3e7762c8 100644
 +        let mut queued = Vec::with_capacity(streams.len());
 +        for (stream, main_view) in streams {
 +            let regions: Vec<ExclusiveRectangle> = if main_view {
-+                stream
++                let regions: Vec<ExclusiveRectangle> = stream
 +                    .rectangles
 +                    .iter()
 +                    .filter_map(|region| {
 +                        let clipped = ExclusiveRectangle {
 +                            left: region.left.max(rect.left),
 +                            top: region.top.max(rect.top),
-+                            right: region.right.min(rect.right),
-+                            bottom: region.bottom.min(rect.bottom),
++                            right: region.right.min(rect.right).min(surface_width),
++                            bottom: region.bottom.min(rect.bottom).min(surface_height),
 +                        };
 +                        (clipped.left < clipped.right && clipped.top < clipped.bottom).then_some(clipped)
 +                    })
-+                    .collect()
++                    .collect();
++                bound_regions(regions, pdu.surface_id, surface_width, surface_height)
 +            } else {
 +                Vec::new()
 +            };
@@ -459,7 +479,7 @@ index a9a471c6..3e7762c8 100644
      // ========================================================================
      // PDU Handlers
      // ========================================================================
-@@ -682,6 +986,7 @@ impl GraphicsPipelineClient {
+@@ -682,6 +1006,7 @@ impl GraphicsPipelineClient {
          let cap = self.negotiated_caps.insert(cap);
  
          debug!(
@@ -467,7 +487,7 @@ index a9a471c6..3e7762c8 100644
              avc420 = self.codec_caps.avc420,
              avc444 = self.codec_caps.avc444,
              "EGFX capabilities confirmed"
-@@ -1126,8 +1431,9 @@ impl GraphicsPipelineClient {
+@@ -1126,8 +1451,9 @@ impl GraphicsPipelineClient {
          // Per [3.3.5.12]: client MUST send FrameAcknowledge after EndFrame.
          // We send the actual queue depth (not Unavailable / 0xFFFFFFFF as FreeRDP does);
          // the real value gives the server backpressure information for frame pacing.
@@ -478,7 +498,7 @@ index a9a471c6..3e7762c8 100644
              frame_id,
              total_frames_decoded: self.total_frames_decoded,
          });
-@@ -1145,7 +1451,7 @@ impl DvcProcessor for GraphicsPipelineClient {
+@@ -1145,7 +1471,7 @@ impl DvcProcessor for GraphicsPipelineClient {
      }
  
      fn start(&mut self, _channel_id: u32) -> PduResult<Vec<DvcMessage>> {
@@ -487,7 +507,7 @@ index a9a471c6..3e7762c8 100644
              self.handler.capabilities()
          } else {
              // No H.264 decoder: filter out capability sets that imply AVC support.
-@@ -1197,14 +1503,11 @@ impl DvcProcessor for GraphicsPipelineClient {
+@@ -1197,14 +1523,11 @@ impl DvcProcessor for GraphicsPipelineClient {
              }
          }
  
@@ -505,13 +525,66 @@ index a9a471c6..3e7762c8 100644
      }
  }
  
-@@ -1214,6 +1517,11 @@ impl DvcClientProcessor for GraphicsPipelineClient {}
+@@ -1214,6 +1537,64 @@ impl DvcClientProcessor for GraphicsPipelineClient {}
  // Frame Cropping
  // ============================================================================
  
-+/// Bytes of RGBA8888 for a rectangle.
++/// Bytes of RGBA8888 for a rectangle, saturating where `usize` is too small (wasm32: a 65535x65535 rectangle).
 +fn rgba_len(rect: &ExclusiveRectangle) -> usize {
-+    usize::from(rect.right.saturating_sub(rect.left)) * usize::from(rect.bottom.saturating_sub(rect.top)) * 4
++    usize::from(rect.right.saturating_sub(rect.left))
++        .saturating_mul(usize::from(rect.bottom.saturating_sub(rect.top)))
++        .saturating_mul(4)
++}
++
++/// The most RGBA bytes one externally decoded frame is read back into: as much as the compositor holds in all.
++const MAX_H264_REGION_BYTES: u64 = 256 * 1024 * 1024;
++
++fn area(rect: &ExclusiveRectangle) -> u64 {
++    u64::from(rect.right.saturating_sub(rect.left)) * u64::from(rect.bottom.saturating_sub(rect.top))
++}
++
++/// Bounds what an externally decoded frame's regions ask the decoder to read back.
++///
++/// The regions are already clipped to the destination and the surface, but each can still cover all of it, and a
++/// region count costs the server a few bytes each: overlapping copies of the whole surface would have the decoder
++/// read the same picture into memory over and over. When the regions add up to more than the surface, their
++/// bounding box (within the surface, so at most the surface once) covers the same pixels instead. A surface too
++/// large for the compositor to hold gets no regions: the access unit is still decoded, which keeps the stream
++/// whole, but nothing is read back.
++fn bound_regions(
++    regions: Vec<ExclusiveRectangle>,
++    surface_id: u16,
++    surface_width: u16,
++    surface_height: u16,
++) -> Vec<ExclusiveRectangle> {
++    let total = regions.iter().map(area).fold(0u64, u64::saturating_add);
++    let regions = if total > u64::from(surface_width) * u64::from(surface_height) {
++        warn!(
++            surface_id,
++            count = regions.len(),
++            total,
++            "H.264 regions cover more than their surface; reading back their bounding box"
++        );
++        let bounding = regions.into_iter().reduce(|b, r| ExclusiveRectangle {
++            left: b.left.min(r.left),
++            top: b.top.min(r.top),
++            right: b.right.max(r.right),
++            bottom: b.bottom.max(r.bottom),
++        });
++        bounding.into_iter().collect()
++    } else {
++        regions
++    };
++    let bytes = regions
++        .iter()
++        .map(area)
++        .fold(0u64, u64::saturating_add)
++        .saturating_mul(4);
++    if bytes > MAX_H264_REGION_BYTES {
++        warn!(surface_id, bytes, "H.264 regions too large to read back; skipping them");
++        return Vec::new();
++    }
++    regions
 +}
 +
  /// Convert BGRA pixel data to RGBA8888
@@ -1179,10 +1252,10 @@ index f53e0aed..b80186a6 100644
  
 diff --git a/crates/ironrdp-testsuite-core/tests/egfx/external_h264.rs b/crates/ironrdp-testsuite-core/tests/egfx/external_h264.rs
 new file mode 100644
-index 00000000..023fac8b
+index 00000000..a957554d
 --- /dev/null
 +++ b/crates/ironrdp-testsuite-core/tests/egfx/external_h264.rs
-@@ -0,0 +1,417 @@
+@@ -0,0 +1,527 @@
 +//! `GraphicsPipelineClient::with_external_h264`: AVC420 frames (and AVC444 main views) decoded outside the
 +//! processor, whose pixels are applied (and frames acknowledged) in the order the server sent them.
 +
@@ -1599,6 +1672,116 @@ index 00000000..023fac8b
 +        last.data,
 +        solid(u8::try_from(frames[2].id).expect("small id"), rect(0, 0, 16, 8))
 +    );
++}
++
++/// An AVC420 `WireToSurface1` for any surface and destination.
++fn avc420_to(surface_id: u16, destination: ExclusiveRectangle, regions: &[Avc420Region]) -> GfxPdu {
++    GfxPdu::WireToSurface1(WireToSurface1Pdu {
++        surface_id,
++        codec_id: Codec1Type::Avc420,
++        pixel_format: PixelFormat::XRgb,
++        destination_rectangle: destination,
++        bitmap_data: encode_avc420_bitmap_stream(regions, IDR_ACCESS_UNIT),
++    })
++}
++
++#[test]
++fn overlapping_regions_are_read_back_once() {
++    let mut client = client();
++    // Three copies of the whole 16x8 surface: 384 pixels of regions for a 128-pixel surface.
++    let whole = Avc420Region::new(0, 0, 16, 8, 22, 100);
++    process_all(
++        &mut client,
++        &[
++            start(1),
++            avc420(&[whole.clone(), whole.clone(), whole], IDR_ACCESS_UNIT),
++            end(1),
++        ],
++    );
++    let frame = client.take_h264_frames().remove(0);
++    assert_eq!(frame.regions, [rect(0, 0, 16, 8)]);
++    let sent = client
++        .complete_h264_frame(frame.id, Some(solid(1, rect(0, 0, 16, 8))))
++        .expect("complete");
++    assert_eq!(acks(&sent), [(1, 0)]);
++}
++
++#[test]
++fn regions_are_clipped_to_the_surface() {
++    let mut client = client();
++    // A destination and a region far larger than the 16x8 surface.
++    let pdu = avc420_to(
++        1,
++        rect(0, 0, 4096, 4096),
++        &[Avc420Region::new(0, 0, 4096, 4096, 22, 100)],
++    );
++    process_all(&mut client, &[start(1), pdu, end(1)]);
++    assert_eq!(client.take_h264_frames()[0].regions, [rect(0, 0, 16, 8)]);
++}
++
++#[test]
++fn a_frame_for_an_unknown_surface_is_refused() {
++    let mut client = client();
++    let pdu = avc420_to(9, rect(0, 0, 16, 8), &[Avc420Region::new(0, 0, 16, 8, 22, 100)]);
++    assert!(client.process(0, &wire(&start(1))).is_ok());
++    assert!(client.process(0, &wire(&pdu)).is_err());
++}
++
++#[test]
++fn regions_too_large_to_read_back_are_skipped() {
++    let mut client = client();
++    let huge = GfxPdu::CreateSurface(CreateSurfacePdu {
++        surface_id: 2,
++        width: 16384,
++        height: 16384,
++        pixel_format: PixelFormat::XRgb,
++    });
++    let pdu = avc420_to(
++        2,
++        rect(0, 0, 16384, 16384),
++        &[Avc420Region::new(0, 0, 16384, 16384, 22, 100)],
++    );
++    process_all(&mut client, &[huge, start(1), pdu, end(1)]);
++    // Still decoded, which keeps the stream whole, but nothing is read back: 1 GiB of RGBA.
++    let frame = client.take_h264_frames().remove(0);
++    assert!(frame.regions.is_empty());
++    assert_eq!(
++        acks(
++            &client
++                .complete_h264_frame(frame.id, Some(Vec::new()))
++                .expect("complete")
++        ),
++        [(1, 0)]
++    );
++}
++
++#[test]
++fn a_surface_created_behind_a_waiting_frame_bounds_its_own_frames() {
++    let mut client = client();
++    let whole = Avc420Region::new(0, 0, 16, 8, 22, 100);
++    let surface2 = GfxPdu::CreateSurface(CreateSurfacePdu {
++        surface_id: 2,
++        width: 32,
++        height: 4,
++        pixel_format: PixelFormat::XRgb,
++    });
++    let pdu = avc420_to(2, rect(0, 0, 64, 64), &[Avc420Region::new(0, 0, 64, 64, 22, 100)]);
++    // Surface 2 is created while frame 1 still waits for the decoder: its CreateSurface is queued, not processed.
++    process_all(
++        &mut client,
++        &[
++            start(1),
++            avc420(&[whole], IDR_ACCESS_UNIT),
++            end(1),
++            surface2,
++            start(2),
++            pdu,
++            end(2),
++        ],
++    );
++    let frames = client.take_h264_frames();
++    assert_eq!(frames.len(), 2);
++    assert_eq!(frames[1].regions, [rect(0, 0, 32, 4)]);
 +}
 diff --git a/crates/ironrdp-testsuite-core/tests/egfx/h264.rs b/crates/ironrdp-testsuite-core/tests/egfx/h264.rs
 new file mode 100644
@@ -2105,10 +2288,10 @@ index a96ae6e3..83f921c3 100644
 +}
 diff --git a/web-client/iron-remote-desktop-rdp/src/H264Decoder.test.ts b/web-client/iron-remote-desktop-rdp/src/H264Decoder.test.ts
 new file mode 100644
-index 00000000..46cbfe78
+index 00000000..e454e2df
 --- /dev/null
 +++ b/web-client/iron-remote-desktop-rdp/src/H264Decoder.test.ts
-@@ -0,0 +1,302 @@
+@@ -0,0 +1,314 @@
 +import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 +import { WebCodecsH264Decoder, h264Supported, type H264Frame } from './H264Decoder';
 +
@@ -2283,6 +2466,18 @@ index 00000000..46cbfe78
 +        expect(Array.from(done.mock.calls[0][1] as Uint8Array)).toEqual([5, 1, 0, 255]);
 +    });
 +
++    it('fails on a region larger than the picture before allocating for it', async () => {
++        const failures: string[] = [];
++        decoder.close();
++        decoder = new WebCodecsH264Decoder({ onFailure: (reason) => failures.push(reason), now: () => clock });
++        // 65535x65535 RGBA would be a 17 GB buffer.
++        decoder.decode(frame(0, true, [{ left: 0, top: 0, right: 65535, bottom: 65535 }]), done);
++        FakeDecoder.instances[0].emit(0);
++        await flush();
++        expect(done.mock.calls[0][1]).toBeNull();
++        expect(failures.join()).toMatch(/outside the 64x32 picture/);
++    });
++
 +    it('completes frames the decoder never output without pixels', async () => {
 +        decoder.decode(frame(0, true), done);
 +        decoder.decode(frame(1, false), done);
@@ -2413,10 +2608,10 @@ index 00000000..46cbfe78
 +});
 diff --git a/web-client/iron-remote-desktop-rdp/src/H264Decoder.ts b/web-client/iron-remote-desktop-rdp/src/H264Decoder.ts
 new file mode 100644
-index 00000000..47e01a70
+index 00000000..c95ac01a
 --- /dev/null
 +++ b/web-client/iron-remote-desktop-rdp/src/H264Decoder.ts
-@@ -0,0 +1,410 @@
+@@ -0,0 +1,412 @@
 +/**
 + * H.264 (AVC420) for the graphics pipeline, decoded with the browser's WebCodecs `VideoDecoder` (hardware-accelerated
 + * where the platform offers it). Given to a session with the `h264Decoder` extension.
@@ -2688,17 +2883,19 @@ index 00000000..47e01a70
 +            width: r.right - r.left,
 +            height: r.bottom - r.top,
 +        }));
-+        const total = rects.reduce((sum, r) => sum + r.width * r.height * 4, 0);
-+        const out = new Uint8Array(total);
-+        if (rects.length === 0) {
-+            return out;
-+        }
++        // Checked before anything is allocated: a region larger than the picture would otherwise size the buffer.
++        // (ironrdp-egfx bounds what the regions add up to: at most their surface, once.)
 +        for (const r of rects) {
 +            if (r.x < 0 || r.y < 0 || r.x + r.width > visible.width || r.y + r.height > visible.height) {
 +                throw new Error(
 +                    `region ${JSON.stringify(r)} is outside the ${visible.width}x${visible.height} picture`,
 +                );
 +            }
++        }
++        const total = rects.reduce((sum, r) => sum + r.width * r.height * 4, 0);
++        const out = new Uint8Array(total);
++        if (rects.length === 0) {
++            return out;
 +        }
 +        // One readback for all regions: their bounding box.
 +        const left = Math.min(...rects.map((r) => r.x));
