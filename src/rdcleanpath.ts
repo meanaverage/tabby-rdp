@@ -35,7 +35,10 @@ function fingerprintOf (der: Buffer): string {
 export interface RDCleanPathProxy {
     url: string
     token: string
-    /** Why the last connection failed, when the proxy can tell better than the client (e.g. no TLS on offer). */
+    /**
+     * Why the last connection failed before the relay was up (the server didn't answer, refused, offered no TLS, sent
+     * no certificate): the client only sees a generic RDCleanPath error then.
+     */
     failure: string | null
     /** RDP bytes relayed since the proxy started (after TLS, before SSH): from the server, and to it. */
     stats: { bytesIn: number, bytesOut: number }
@@ -423,6 +426,7 @@ export async function startRDCleanPathProxy (openUpstream: UpstreamFactory, chec
         failure = null
 
         const fail = (why: string) => {
+            failure = why
             log(`RDCleanPath failed: ${why}`)
             try { ws.send(encodeError()) } catch { }
             ws.close()
@@ -504,9 +508,6 @@ export async function startRDCleanPathProxy (openUpstream: UpstreamFactory, chec
                 }
                 log(`RDCleanPath relay up to ${req.destination}`)
             } catch (e: any) {
-                if (e instanceof NoTlsError) {
-                    failure = e.message
-                }
                 fail(e?.message ?? String(e))
             }
         })
