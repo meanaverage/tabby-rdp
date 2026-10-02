@@ -931,6 +931,8 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
             return
         }
         result.type = RDP_PROFILE_TYPE
+        // Into the plugin's group unless the editor's Group field was used.
+        result.group ||= await this.desktop.remoteDesktopGroup()
         if (!result.name) {
             result.name = provider.getSuggestedName(profiles.getConfigProxyForProfile(result)) ?? 'Remote desktop'
         }

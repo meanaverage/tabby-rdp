@@ -822,6 +822,22 @@ export class RemoteDesktopService {
     }
 
     /**
+     * The profile group for remote desktop profiles the plugin makes itself (an .rdp import, "New profile…" on the
+     * settings page): "Remote desktops", made the first time. Profiles made on Tabby's Profiles page go where the user
+     * puts them.
+     */
+    async remoteDesktopGroup (): Promise<string> {
+        const groups = await this.profiles.getProfileGroups({ includeNonUserGroup: false })
+        const existing = groups.find(g => g.name === 'Remote desktops')
+        if (existing?.id) {
+            return existing.id
+        }
+        const group = { name: 'Remote desktops', profiles: [] } as any
+        await this.profiles.newProfileGroup(group, { genId: true })
+        return group.id
+    }
+
+    /**
      * Adds a "Remote desktop (RDP)" profile from a .rdp file's contents (address, user name, domain; see rdpFile.ts)
      * and opens it; or opens the profile that already has that address and user. Returns the profile, or null.
      */
@@ -842,6 +858,7 @@ export class RemoteDesktopService {
             type: RDP_PROFILE_TYPE,
             name: fileName.replace(/^.*[\\/]/, '').replace(/\.rdp$/i, '') || parsed.host,
             icon: 'fas fa-desktop',
+            group: await this.remoteDesktopGroup(),
             options: { host: parsed.host, port: parsed.port, kind: 'windows', username: parsed.username ?? '', domain: parsed.domain ?? '', via: '' },
         }
         await this.profiles.newProfile(profile)
