@@ -14,6 +14,18 @@ const REPO = 'https://github.com/meanaverage/tabby-rdp'
 
 const k = (s: string) => `<kbd>${esc(s)}</kbd>`
 
+/** The page's tabs (as Tabby's "Profiles & connections" page has Profiles and Advanced), each holding sections by topic. */
+const TABS: { id: string, title: string, topics: HelpTopic[] }[] = [
+    { id: 'start', title: 'Getting started', topics: ['start', 'keyboard'] },
+    { id: 'settings', title: 'Settings', topics: ['settings'] },
+    { id: 'osd', title: 'Overlay', topics: ['osd'] },
+    { id: 'desktops', title: 'Desktops', topics: ['desktops', 'certificates'] },
+    { id: 'accounts', title: 'Accounts', topics: ['accounts'] },
+    { id: 'troubleshooting', title: 'Troubleshooting', topics: ['troubleshooting'] },
+]
+/** The tab shown last, so that the page comes back to it. */
+let lastTab = 'start'
+
 const STYLE = `
 .trd-settings { display: block; }
 .trd-settings h3 { margin-bottom: 4px; }
@@ -24,7 +36,10 @@ const STYLE = `
     border: 1px solid rgba(80, 150, 255, 0.45); background: rgba(80, 150, 255, 0.1); }
 .trd-settings .trd-update > div { flex: auto; }
 .trd-settings .trd-update:empty { display: none; }
+.trd-settings .nav-tabs { margin-bottom: 18px; }
+.trd-settings .nav-tabs .nav-link { cursor: pointer; }
 .trd-settings section { margin-bottom: 28px; scroll-margin-top: 12px; }
+.trd-settings [data-body] > section:only-child > h4:first-child { display: none; }
 .trd-settings section > h4 { font-size: 15px; margin-bottom: 10px; }
 .trd-settings .trd-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 10px; }
 .trd-settings .trd-card { display: flex; flex-direction: column; gap: 8px; padding: 12px; border-radius: 6px;
@@ -155,6 +170,7 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
                 ${version ? `<span>tabby-rdp ${esc(version)}</span>` : ''}
                 <span class="trd-links"><a href="#" data-link="${REPO}#readme">Guide</a><a href="#" data-link="${REPO}/issues">Report a problem</a></span></div>
             <div class="trd-update" data-update></div>
+            <ul class="nav nav-tabs" data-nav></ul>
 
             <section data-topic="start">
                 <h4>Getting started</h4>
@@ -326,6 +342,24 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
                 <div class="trd-list" data-list="sessions"></div>
             </section>`
 
+        // The sections go into the tabs' bodies; one tab shows at a time.
+        const nav = this.root.querySelector('[data-nav]')!
+        for (const tab of TABS) {
+            const item = document.createElement('li')
+            item.className = 'nav-item'
+            item.innerHTML = `<a class="nav-link" data-tab="${tab.id}">${esc(tab.title)}</a>`
+            item.querySelector('a')!.addEventListener('click', event => {
+                event.preventDefault()
+                this.showTab(tab.id)
+            })
+            nav.appendChild(item)
+            const body = document.createElement('div')
+            body.dataset.body = tab.id
+            body.hidden = true
+            body.append(...tab.topics.map(topic => this.root.querySelector(`section[data-topic="${topic}"]`)).filter((e): e is Element => !!e))
+            this.root.appendChild(body)
+        }
+        this.showTab(lastTab)
         this.root.querySelectorAll<HTMLElement>('[data-setting]').forEach(el => {
             el.addEventListener('change', () => this.zone.run(() => this.changeSetting(el)))
         })
@@ -596,18 +630,24 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
         this.platform.setClipboard({ text: [`tabby-rdp ${version} on ${process.platform}: ${name}`, ...log].join('\n') })
     }
 
-    /** Scrolls to a section (and opens a troubleshooting entry), with a short highlight. */
+    private showTab (id: string): void {
+        lastTab = TABS.some(t => t.id === id) ? id : TABS[0].id
+        this.root.querySelectorAll<HTMLElement>('[data-tab]').forEach(el => el.classList.toggle('active', el.dataset.tab === lastTab))
+        this.root.querySelectorAll<HTMLElement>('[data-body]').forEach(el => { el.hidden = el.dataset.body !== lastTab })
+    }
+
+    /** Shows the tab with a section (and opens a troubleshooting entry), with a short highlight. */
     private reveal (topic: HelpTopic, entry?: string): void {
         const target = (entry && this.root.querySelector<HTMLDetailsElement>(`details[data-entry="${CSS.escape(entry)}"]`))
             || this.root.querySelector<HTMLElement>(`[data-topic="${topic}"]`)
         if (!target) {
             return
         }
+        this.showTab(TABS.find(t => t.topics.includes(topic))?.id ?? topic)
         if (target instanceof HTMLDetailsElement) {
             target.open = true
         }
-        // Getting started is at the top: show the page's title with it.
-        ;(topic === 'start' && !entry ? this.root : target).scrollIntoView({ block: 'start', behavior: 'smooth' })
+        ;(entry ? target : this.root).scrollIntoView({ block: 'start', behavior: 'smooth' })
         target.classList.remove('trd-flash')
         void target.offsetWidth
         target.classList.add('trd-flash')
