@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.4
 
 **Fixed**
 - **Paste to all desktops in a tab** pasted this computer's clipboard only on the desktop with the focus; the others
