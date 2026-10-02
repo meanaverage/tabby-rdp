@@ -40,7 +40,6 @@ const STYLE = `
 .trd-settings .nav-tabs { margin-bottom: 18px; }
 .trd-settings .nav-tabs .nav-link { cursor: pointer; }
 .trd-settings section { margin-bottom: 28px; scroll-margin-top: 12px; }
-.trd-settings [data-body] > section:only-child > h4:first-child { display: none; }
 .trd-settings section > h4 { font-size: 15px; margin-bottom: 10px; }
 .trd-settings .trd-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 10px; }
 .trd-settings .trd-card { display: flex; flex-direction: column; gap: 8px; padding: 12px; border-radius: 6px;
@@ -376,7 +375,15 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
             const body = document.createElement('div')
             body.dataset.body = tab.id
             body.hidden = true
-            body.append(...tab.topics.map(topic => this.root.querySelector(`section[data-topic="${topic}"]`)).filter((e): e is Element => !!e))
+            const sections = tab.topics.map(topic => this.root.querySelector(`section[data-topic="${topic}"]`)).filter((e): e is Element => !!e)
+            // The tab's name is heading enough: a section titled the same, or alone in its tab, drops its own.
+            for (const section of sections) {
+                const heading = section.querySelector(':scope > h4')
+                if (heading && (sections.length === 1 || heading.textContent?.trim() === tab.title)) {
+                    heading.remove()
+                }
+            }
+            body.append(...sections)
             this.root.appendChild(body)
         }
         this.showTab(lastTab)
