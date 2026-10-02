@@ -17,7 +17,7 @@ npm test -- --port 9334 e2e       # use a Tabby already running with --remote-de
 npm test -- screenshots           # regenerate docs/images from the test machines
 ```
 
-`npm test` ([`run.mjs`](run.mjs)) starts a separate Tabby with a fresh, minimal profile in a temporary folder, this
+`npm test` ([`run.ts`](run.ts)) starts a separate Tabby with a fresh, minimal profile in a temporary folder, this
 plugin linked in, and DevTools on a free port; runs the suites one after another; and closes that Tabby when done,
 also on failure or Ctrl+C. Your own Tabby isn't touched. Tabby is found at its usual install path, or pass
 `--tabby <path>` / set `TABBY_BIN`.
@@ -69,29 +69,29 @@ system keychain doesn't answer (Linux without an unlocked keyring), the keychain
 
 | Suite | What it covers |
 |---|---|
-| [e2e](suites/e2e.mjs) | Every entry point (toolbar button, hotkey, menus, header), focus and typing, one desktop per account across tabs, a local terminal running `ssh`, Disconnect. |
-| [desk](suites/desk.mjs) | Logins in the shared session, `desk`, typing in the desktop terminal, RDP and SSH disconnects keeping the session, turning `desk` off and on. |
-| [resize](suites/resize.mjs) | Resize to fit, reconnect at the new size, keep the resolution, Retina with GNOME's scale. |
-| [keyboard](suites/keyboard.mjs) | Tabby shortcuts kept off the covered console, ⌘ as Ctrl, no stuck keys, the shortcuts that stay Tabby's. |
-| [actions](suites/actions.mjs) | Send keys (also from the console), ⌃⌘ with a key as Super with it, View only (label, mouse, keys, across a reconnect), screenshots to Downloads and the clipboard, actual size with a fixed resolution. |
-| [clipboard](suites/clipboard.mjs) | Text both ways, through the terminal `desk` opens. |
-| [files](suites/files.mjs) | Files both ways with Files (Nautilus): copy there and save here; drop here and paste there. |
-| [audio](suites/audio.mjs) | A tone played on the desktop arrives as sound; with sound off, none is set up. |
-| [microphone](suites/microphone.mjs) | Recording on the desktop opens the microphone here, a tone fed in as the microphone arrives there, and it is released when the recording stops; with the setting off, none is set up. |
-| [graphics](suites/graphics.mjs) | H.264: advertised where Tabby decodes it, frames decoded when GNOME sends it (it needs a hardware encoder); a window flipping between two colors comes out in them, with H.264 on and off. |
-| [reconnect](suites/reconnect.mjs) | A dropped SSH connection: "Reconnect SSH", automatic reconnect (also while hidden), Stop, Try again. |
-| [desktops](suites/desktops.mjs) | "Add a desktop behind…", its sign-in and keychain entry, "Edit a desktop" (keychain entry, sharpness and remembered certificate following a new address), "Remove a desktop" (using the host's own GNOME desktop as the extra one). |
-| [profiles](suites/profiles.mjs) | "Remote desktop (RDP)" profiles: quick connect; a direct one in its own tab (sign-in, certificate remembered, picture, no console, desktop actions, one tab per server, Disconnect and Connect, recovery); one through a saved SSH profile, opening its SSH tab with the desktop over it; .rdp files: the parser, "Import an .rdp file…" (the test host's GNOME as the RDP server). |
-| [certificates](suites/certificates.mjs) | The own desktop's certificate checked against the setup's; a desktop behind the host remembered on first use, a changed certificate stopped before sign-in (Cancel, "Trust the new certificate", also on an automatic reconnect), forgotten on removal. |
-| [windows](suites/windows.mjs) | A Windows desktop behind an SSH host: sign-in, keychain, picture, resize, reconnect, its certificate remembered and a changed one stopped; with WinRM, typing, clipboard, sound and files, each checked inside Windows, and H.264 with a window flipping between two colors. |
-| [winhost](suites/winhost.mjs) | An SSH host that is itself Windows: detected on the first open, its own desktop signed in to with the Windows account, its certificate remembered, no setup the second time. |
-| [xrdp](suites/xrdp.mjs) | xrdp next to GNOME (a second desktop) and without GNOME (the host's own desktop): sign-in and xrdp's autologon, picture, typing, clipboard, keychain, "Sign in again…", live resize (xrdp 0.10+), and the error when neither runs. |
-| [status](suites/status.mjs) | The connection-status indicator: off by default, the menu toggle and its config, throughput, fps, round trip and path, only while the desktop shows. |
-| [wake](suites/wake.mjs) | Starting a desktop behind a host (`wake`): the probe, a Wake-on-LAN packet to a stand-in machine on the test host, the wait, no waking on automatic reconnects, a missing VM, Cancel, the add form's field. |
-| [help](suites/help.mjs) | Settings › Remote Desktop: opened from the menu and at a section, its settings following the config both ways, remembered certificates, open desktops; the one-time tip on the first connection; "What does this mean?" under a message that ends a connection. |
-| [nested](suites/nested.mjs) | `ssh` typed in an SSH tab: the host's desktop in one pane, a split, `ssh` on to another account there, and Desktop in that pane opens that account's desktop through the host; the first pane keeps its own; typing into both and pasting to both; Make panes even; Reconnect stays with it after the ssh ends; without the ssh, the note about the pane next to it. |
-| [vms](suites/vms.mjs) | VMs found on an SSH host (libvirt): the one with a desktop offered in the host's menu with its address, kind and start-by-name, none without a desktop, none with the setting off. |
-| [demo](suites/demo.mjs) | Not a test: makes the demo video (`docs/demo/`, attached to the GitHub release rather than committed) and the README's GIF of it (`docs/images/demo.gif`) from the test machines: four desktops in one tab, a file pasted to all of them, the console switch and `desk`. Needs the Windows machine (WinRM included), an xrdp account (`TRD_TEST_DEMO_XRDP_USER`, `_PASSWORD`) and a second GNOME account (`TRD_TEST_DEMO_GNOME_USER`, default `tabbyxrdp`) on the test host, and ffmpeg; `TRD_TEST_DEMO_LOOK` points at a Tabby config.yaml whose look (color scheme, font) it takes on. |
+| [e2e](suites/e2e.ts) | Every entry point (toolbar button, hotkey, menus, header), focus and typing, one desktop per account across tabs, a local terminal running `ssh`, Disconnect. |
+| [desk](suites/desk.ts) | Logins in the shared session, `desk`, typing in the desktop terminal, RDP and SSH disconnects keeping the session, turning `desk` off and on. |
+| [resize](suites/resize.ts) | Resize to fit, reconnect at the new size, keep the resolution, Retina with GNOME's scale. |
+| [keyboard](suites/keyboard.ts) | Tabby shortcuts kept off the covered console, ⌘ as Ctrl, no stuck keys, the shortcuts that stay Tabby's. |
+| [actions](suites/actions.ts) | Send keys (also from the console), ⌃⌘ with a key as Super with it, View only (label, mouse, keys, across a reconnect), screenshots to Downloads and the clipboard, actual size with a fixed resolution. |
+| [clipboard](suites/clipboard.ts) | Text both ways, through the terminal `desk` opens. |
+| [files](suites/files.ts) | Files both ways with Files (Nautilus): copy there and save here; drop here and paste there. |
+| [audio](suites/audio.ts) | A tone played on the desktop arrives as sound; with sound off, none is set up. |
+| [microphone](suites/microphone.ts) | Recording on the desktop opens the microphone here, a tone fed in as the microphone arrives there, and it is released when the recording stops; with the setting off, none is set up. |
+| [graphics](suites/graphics.ts) | H.264: advertised where Tabby decodes it, frames decoded when GNOME sends it (it needs a hardware encoder); a window flipping between two colors comes out in them, with H.264 on and off. |
+| [reconnect](suites/reconnect.ts) | A dropped SSH connection: "Reconnect SSH", automatic reconnect (also while hidden), Stop, Try again. |
+| [desktops](suites/desktops.ts) | "Add a desktop behind…", its sign-in and keychain entry, "Edit a desktop" (keychain entry, sharpness and remembered certificate following a new address), "Remove a desktop" (using the host's own GNOME desktop as the extra one). |
+| [profiles](suites/profiles.ts) | "Remote desktop (RDP)" profiles: quick connect; a direct one in its own tab (sign-in, certificate remembered, picture, no console, desktop actions, one tab per server, Disconnect and Connect, recovery); one through a saved SSH profile, opening its SSH tab with the desktop over it; .rdp files: the parser, "Import an .rdp file…" (the test host's GNOME as the RDP server). |
+| [certificates](suites/certificates.ts) | The own desktop's certificate checked against the setup's; a desktop behind the host remembered on first use, a changed certificate stopped before sign-in (Cancel, "Trust the new certificate", also on an automatic reconnect), forgotten on removal. |
+| [windows](suites/windows.ts) | A Windows desktop behind an SSH host: sign-in, keychain, picture, resize, reconnect, its certificate remembered and a changed one stopped; with WinRM, typing, clipboard, sound and files, each checked inside Windows, and H.264 with a window flipping between two colors. |
+| [winhost](suites/winhost.ts) | An SSH host that is itself Windows: detected on the first open, its own desktop signed in to with the Windows account, its certificate remembered, no setup the second time. |
+| [xrdp](suites/xrdp.ts) | xrdp next to GNOME (a second desktop) and without GNOME (the host's own desktop): sign-in and xrdp's autologon, picture, typing, clipboard, keychain, "Sign in again…", live resize (xrdp 0.10+), and the error when neither runs. |
+| [status](suites/status.ts) | The connection-status indicator: off by default, the menu toggle and its config, throughput, fps, round trip and path, only while the desktop shows. |
+| [wake](suites/wake.ts) | Starting a desktop behind a host (`wake`): the probe, a Wake-on-LAN packet to a stand-in machine on the test host, the wait, no waking on automatic reconnects, a missing VM, Cancel, the add form's field. |
+| [help](suites/help.ts) | Settings › Remote Desktop: opened from the menu and at a section, its settings following the config both ways, remembered certificates, open desktops; the one-time tip on the first connection; "What does this mean?" under a message that ends a connection. |
+| [nested](suites/nested.ts) | `ssh` typed in an SSH tab: the host's desktop in one pane, a split, `ssh` on to another account there, and Desktop in that pane opens that account's desktop through the host; the first pane keeps its own; typing into both and pasting to both; Make panes even; Reconnect stays with it after the ssh ends; without the ssh, the note about the pane next to it. |
+| [vms](suites/vms.ts) | VMs found on an SSH host (libvirt): the one with a desktop offered in the host's menu with its address, kind and start-by-name, none without a desktop, none with the setting off. |
+| [demo](suites/demo.ts) | Not a test: makes the demo video (`docs/demo/`, attached to the GitHub release rather than committed) and the README's GIF of it (`docs/images/demo.gif`) from the test machines: four desktops in one tab, a file pasted to all of them, the console switch and `desk`. Needs the Windows machine (WinRM included), an xrdp account (`TRD_TEST_DEMO_XRDP_USER`, `_PASSWORD`) and a second GNOME account (`TRD_TEST_DEMO_GNOME_USER`, default `tabbyxrdp`) on the test host, and ffmpeg; `TRD_TEST_DEMO_LOOK` points at a Tabby config.yaml whose look (color scheme, font) it takes on. |
 | [trd-pty](unit/trd-pty.py) | The shared-session helper on its own, on the test host. |
 
 Checks print `PASS`, `FAIL` or `SKIP`; some suites also print `TIME` lines (connection and reconnection times, for
@@ -101,16 +101,28 @@ few seconds.
 
 ## Writing a suite
 
-```js
-import { suite } from '../lib/harness.mjs'
+```ts
+import { suite } from '../lib/harness.js'
 
 await suite('example', async t => {
     t.check('SSH tab connected', await t.ev('H.pane = await H.openSSH(); return !!H.pane'))
     await t.ev('await H.inZone(() => RD.desktop.showDesktop(H.pane))')
-    t.check('desktop connected', !!(await t.waitFor('return H.connected(H.pane)', 40)))
+    t.check('desktop connected', !!(await t.waitFor<boolean>('return H.connected(H.pane)', 40)))
 })
 ```
 
 `t.ev` runs in Tabby's page, where `RD` is the plugin's test handle and `H` the helpers in
-[`lib/harness.mjs`](lib/harness.mjs). Node-side, `t` has input (`key`, `press`, `type`, `clickDesktop`), the
+[`lib/harness.ts`](lib/harness.ts). Node-side, `t` has input (`key`, `press`, `type`, `clickDesktop`), the
 clipboard, remote commands, settings, waiting, and cleanup registration.
+
+## TypeScript
+
+The suites, the harness and the runner are TypeScript, run from source by [`tsx`](https://tsx.is) (`npm test`), so
+there is no build step before running them. They need Node 22 or later, as before (the DevTools client uses Node's
+own `WebSocket`); with `tsx` any Node 22 will do, where Node's own type stripping would take 22.18. The plugin itself
+still supports Node 18. `test/package.json` marks the tree as ESM (the plugin itself is CommonJS).
+
+`npm run typecheck` checks the plugin and the tests; `npm run typecheck:test` only the tests (what CI runs beyond the
+build). A page expression is a string, so nothing can check what it returns: `ev` and `waitFor` default to `unknown`,
+and a suite that reads a shape out of one states it (`ev<CanvasInfo>(...)`) — the shared ones are exported from
+[`lib/harness.ts`](lib/harness.ts).

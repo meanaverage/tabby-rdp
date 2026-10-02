@@ -1,4 +1,4 @@
-"""Runs a PowerShell script on the Windows test machine over WinRM (NTLM, encrypted), for test/suites/windows.mjs.
+"""Runs a PowerShell script on the Windows test machine over WinRM (NTLM, encrypted), for test/suites/windows.ts.
 
 The suite pipes this file to `python3 -` on the SSH host (which needs pywinrm: `pip install pywinrm`), followed by
 a call to main() with the address, account and script, so the password never appears on a command line.

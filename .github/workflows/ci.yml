@@ -19,10 +19,10 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build
+      - name: Type check the tests
+        run: npm run typecheck:test
       - name: Unit tests
-        run: node --test test/unit/*.mjs
-      - name: Test scripts parse
-        run: for f in test/run.mjs test/lib/*.mjs test/suites/*.mjs; do node --check "$f"; done
+        run: npm run test:unit
       - name: Package contents
         run: |
           npm pack --dry-run 2>&1 | tee pack.txt
