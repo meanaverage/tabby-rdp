@@ -2205,6 +2205,39 @@ export function installStyle (): void {
     }
     styleInstalled = true
     const style = document.createElement('style')
-    style.textContent = STYLE + SIGNIN_STYLE + FILES_STYLE + STATS_STYLE + OSD_STYLE
+    style.textContent = STYLE + SIGNIN_STYLE + FILES_STYLE + STATS_STYLE + OSD_STYLE + DRAGBAR_STYLE
     document.head.appendChild(style)
+    keepWindowDraggable()
+}
+
+/** A strip the height of the tab bar that stays a window drag region over a dialog (the plugin's, and Tabby's). */
+const DRAGBAR_STYLE = `
+.trd-form-dragbar { display: none; }
+.modal > .trd-form-dragbar { display: block; position: fixed; left: 0; right: 0; top: 0; height: var(--tabs-height, 38px); -webkit-app-region: drag; }
+`
+
+/**
+ * Tabby's dialogs (ng-bootstrap modals) cover the whole window, tab bar included, with nothing marked as a drag
+ * region, so the window can't be moved while one shows. Each gets a strip where the tab bar is; the dialog box itself
+ * is below it. The plugin's own dialogs do the same (see settingsPage.ts).
+ */
+function keepWindowDraggable (): void {
+    const strip = (modal: Element) => {
+        if (!modal.querySelector(':scope > .trd-form-dragbar')) {
+            const bar = document.createElement('div')
+            bar.className = 'trd-form-dragbar'
+            modal.prepend(bar)
+        }
+    }
+    // ng-bootstrap appends each dialog (ngb-modal-window.modal) to the body itself: only the body's children are watched.
+    document.querySelectorAll('body > .modal').forEach(strip)
+    new MutationObserver(records => {
+        for (const record of records) {
+            record.addedNodes.forEach(node => {
+                if (node instanceof Element && node.classList.contains('modal')) {
+                    strip(node)
+                }
+            })
+        }
+    }).observe(document.body, { childList: true })
 }

@@ -92,7 +92,6 @@ const STYLE = `
 .trd-settings .trd-row a[data-profile], .trd-settings .trd-row a[data-desktop] { cursor: pointer; text-decoration: underline; }
 .trd-settings .trd-form-overlay { position: fixed; inset: 0; z-index: 1050; background: rgba(0, 0, 0, 0.55); }
 /* The window stays draggable by its tab bar while the form shows (Tabby's own dialogs cover it). */
-.trd-form-dragbar { display: none; }
 .trd-settings .trd-form-overlay .trd-form-dragbar, .trd-capture .trd-form-dragbar { display: block; position: absolute; left: 0; right: 0; top: 0;
     height: var(--tabs-height, 38px); -webkit-app-region: drag; }
 .trd-settings .trd-form-overlay .trd-signin { top: var(--tabs-height, 38px); }
