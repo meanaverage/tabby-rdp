@@ -343,6 +343,7 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
             <section data-topic="desktops">
                 <h4>Desktops behind SSH hosts</h4>
                 <div class="trd-list" data-list="desktops"></div>
+                <div class="trd-add"><button class="btn btn-secondary btn-sm" data-action="desktop">Add a desktop…</button></div>
             </section>
 
             <section data-topic="accounts">
@@ -416,6 +417,7 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
             import: () => this.desktop.importRdpFile(),
             hotkeys: () => this.showTabbySettings('hotkeys'),
             account: () => this.editAccount(null),
+            desktop: () => this.desktop.addDesktopIn(this.root),
             profiles: () => this.showTabbySettings('profiles'),
             'osd-white': () => this.changeOsd({ color: '' }),
             'osd-try': () => {
@@ -535,12 +537,12 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
             const account = d.account ? this.desktop.accounts().find(a => a.id === d.account) : undefined
             const who = account ? ` · account ${esc(account.name)}` : d.username ? ` · ${esc(d.username)}` : ''
             return this.row(esc(d.name ?? address), `${esc(address)} behind ${esc(d.via)} · ${esc(d.kind ?? 'windows')}${who}${wake}`, [
-                { label: 'Edit…', run: () => { this.desktop.editDesktopIn(this.root, i) } },
+                { label: 'Edit…', run: () => { this.desktop.editDesktopIn(this.root, i, true) } },
                 { label: 'Remove…', danger: true, run: () => { this.desktop.confirmRemoveDesktop(i) } },
             ])
         }), this.empty(desktops.length
             ? 'Also in the host\'s SSH tab: right-click › Settings › Edit a desktop.'
-            : 'None yet. A Windows VM or another computer an SSH host can reach: right-click that host\'s SSH tab › <b>Desktops › Add a desktop behind…</b>'))
+            : 'None yet. A Windows VM or another computer that an SSH host can reach. Also in that host\'s SSH tab: right-click › <b>Desktops › Add a desktop behind…</b>'))
     }
 
     private renderAccounts (): void {
@@ -562,7 +564,7 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
                 { label: 'Remove…', danger: true, run: () => { this.desktop.confirmRemoveAccount(a.id) } },
             ])
             row.querySelectorAll<HTMLElement>('[data-profile]').forEach(el => el.addEventListener('click', () => this.zone.run(() => this.editProfile(el.dataset.profile!))))
-            row.querySelectorAll<HTMLElement>('[data-desktop]').forEach(el => el.addEventListener('click', () => this.zone.run(() => this.desktop.editDesktopIn(this.root, Number(el.dataset.desktop)))))
+            row.querySelectorAll<HTMLElement>('[data-desktop]').forEach(el => el.addEventListener('click', () => this.zone.run(() => this.desktop.editDesktopIn(this.root, Number(el.dataset.desktop), true))))
             // Without a password saved, the first desktop to connect asks for it and saves it.
             this.desktop.accountHasPassword(a.id).then(has => {
                 const note = row.querySelector('[data-password]')

@@ -28,6 +28,11 @@ export interface DesktopFormOptions {
     entry: ExtraDesktopConfig
     /** The saved accounts to offer (Settings › Remote Desktop › Accounts). */
     accounts?: SavedAccount[]
+    /**
+     * Asks which SSH host the desktop is behind (from the settings page, where no SSH tab says): the SSH profiles'
+     * names and hosts to suggest. Without it, the entry's `via` is kept as it is.
+     */
+    hosts?: string[]
     /** Refuses an entry with a message (e.g. the address is taken), or null to accept it. */
     check?: (entry: ExtraDesktopConfig) => string | null
 }
@@ -46,6 +51,8 @@ export function askDesktop (pane: HTMLElement, options: DesktopFormOptions): Pro
                 <div class="trd-signin-title"></div>
                 <div class="trd-signin-error"></div>
                 <input class="form-control" name="name" placeholder="Name, e.g. Windows VM" spellcheck="false">
+                <input class="form-control" name="via" list="trd-via-hosts" placeholder="Behind which SSH host: a profile's name, or its hostname" spellcheck="false">
+                <datalist id="trd-via-hosts"></datalist>
                 <input class="form-control" name="address" placeholder="Address as seen from the host, e.g. 127.0.0.1:3389" spellcheck="false">
                 <select class="form-control" name="kind">
                     <option value="windows">Windows (or another RDP server)</option>
@@ -69,6 +76,10 @@ export function askDesktop (pane: HTMLElement, options: DesktopFormOptions): Pro
     const error = form.querySelector('.trd-signin-error')!
     const initial = options.entry
     field('name').value = initial.name ?? ''
+    const via = field('via')
+    via.value = initial.via ?? ''
+    via.hidden = !options.hosts
+    form.querySelector('datalist')!.append(...(options.hosts ?? []).map(h => new Option(h)))
     field('address').value = formatAddress(initial.host ?? '127.0.0.1', Number(initial.port ?? 3389))
     field<HTMLSelectElement>('kind').value = initial.kind === 'gnome' || initial.kind === 'xrdp' ? initial.kind : 'windows'
     field('username').value = initial.username ?? ''
@@ -130,6 +141,11 @@ export function askDesktop (pane: HTMLElement, options: DesktopFormOptions): Pro
                 field('address').focus()
                 return
             }
+            if (options.hosts && !via.value.trim()) {
+                error.textContent = 'Say which SSH host it is behind.'
+                via.focus()
+                return
+            }
             const username = field('username').value.trim()
             const domain = field('domain').value.trim()
             const kind = field<HTMLSelectElement>('kind').value
@@ -139,6 +155,7 @@ export function askDesktop (pane: HTMLElement, options: DesktopFormOptions): Pro
             // Other keys of an edited entry (hand-written ones) are kept.
             const entry: ExtraDesktopConfig = {
                 ...initial,
+                ...options.hosts ? { via: via.value.trim() } : {},
                 name,
                 host: address.host,
                 port: address.port,

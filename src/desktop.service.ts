@@ -735,16 +735,43 @@ export class RemoteDesktopService {
         pane.frontend?.focus()
     }
 
+    /** "Add a desktop…" from the settings page: the form asks which SSH host it is behind, and the desktop isn't opened. */
+    async addDesktopIn (host: HTMLElement): Promise<void> {
+        const entry = await askDesktop(host, {
+            title: 'Add a desktop behind an SSH host',
+            action: 'Add',
+            accounts: this.accounts(),
+            hosts: await this.sshHosts(),
+            entry: { host: '127.0.0.1', port: 3389 },
+            check: e => this.addressTaken(e, -1),
+        })
+        if (!entry) {
+            return
+        }
+        this.config.store.remoteDesktop.desktops = [...this.configuredDesktops(), entry]
+        this.config.save()
+        this.changed$.next()
+    }
+
+    /** What a desktop's `via` can name: the SSH profiles' names and hosts (see viaMatches), for the form to suggest. */
+    private async sshHosts (): Promise<string[]> {
+        const profiles = await this.profiles.getProfiles().catch(() => [])
+        const names = profiles.filter((p: any) => p.type === 'ssh' && !p.isTemplate)
+            .flatMap((p: any) => [p.name?.replace(/\s*\(\.ssh\/config\)$/, ''), p.options?.host].filter(Boolean))
+        return [...new Set<string>(names)].sort((a, b) => a.localeCompare(b))
+    }
+
     /** "Edit a desktop" with the form over any element (a pane, or the settings page). */
-    async editDesktopIn (host: HTMLElement, index: number): Promise<void> {
+    async editDesktopIn (host: HTMLElement, index: number, askVia = false): Promise<void> {
         const old = this.configuredDesktops()[index]
         if (!old) {
             return
         }
         const entry = await askDesktop(host, {
-            title: `Edit ${old.name ?? desktopIdOf(old)} (behind ${old.via})`,
+            title: `Edit ${old.name ?? desktopIdOf(old)}${askVia ? '' : ` (behind ${old.via})`}`,
             action: 'Save',
             accounts: this.accounts(),
+            hosts: askVia ? await this.sshHosts() : undefined,
             entry: old,
             check: e => this.addressTaken(e, index),
         })
