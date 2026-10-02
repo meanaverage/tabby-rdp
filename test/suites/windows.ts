@@ -284,9 +284,7 @@ if (Test-Path $state) { Get-ChildItem $state -File | Where-Object { $keep -notco
     await ev('H.inZone(() => RD.desktop.showConsole(H.pane))')
     check('the toggle names the Windows desktop', (await ev<string[]>('return await H.entries()'))[0] === `Show ${NAME}`, await ev('return await H.entries()'))
     await ev('H.inZone(() => RD.desktop.disconnect(H.pane))')
-    if (!keychainWorks) {
-        return
-    }
+    if (keychainWorks) {
     const t2 = Date.now()
     await ev('await H.inZone(() => RD.desktop.toggle(H.pane))')  // the last-used desktop: Windows
     const last = await outcome()
@@ -304,15 +302,20 @@ if (Test-Path $state) { Get-ChildItem $state -File | Where-Object { $keep -notco
     check('... stopped before signing in', !(await log()).some(l => /RDCleanPath relay up/.test(l)))
     await ev(`H.inZone(() => H.clickStatus(H.pane, 'Trust the new certificate'))`)
     check('"Trust the new certificate": connected, the certificate remembered again', /Z $/.test(await outcome() ?? '') && await ev(`return H.trusted(${JSON.stringify(key)})`) === certificate)
+    } else {
+        t.skip('reconnecting with the saved account, and a changed certificate', 'the system keychain does not answer (Linux: no unlocked keyring)')
+    }
 
-    // 12. A saved account: the desktop signs in with it in place of its own saved account; without a password yet, the
-    // form asks and saves it as the account's (Tabby's Vault here, turned on for this, so it works without a keyring
-    // too); a wrong one brings the form back with the account's name, and "Sign in again…" asks anew.
+    // 12. A saved account (with or without a keyring: Tabby's Vault is turned on for it): the desktop signs in with it in
+    // place of its own saved account; without a password yet, the form asks and saves it as the account's; a wrong one brings the form back with the account's name, and "Sign in again…" asks anew.
     await ev('H.inZone(() => RD.desktop.disconnect(H.pane))')
     const vaultWas = await ev<boolean>('return RD.injector.get(require("tabby-core").VaultService).isEnabled()')
     if (!vaultWas) {
-        await ev('await RD.injector.get(require("tabby-core").VaultService).setEnabled(true, "trd-test-vault")')
-        t.onCleanup(() => ev('H.inZone(() => RD.injector.get(require("tabby-core").VaultService).setEnabled(false))'))
+        // Tabby remembers the passphrase only through its unlock prompt: answered here by the service itself.
+        await ev(`const V = RD.injector.get(require("tabby-core").VaultService); V.getPassphrase = async () => "trd-test-vault"; V.isOpen = () => true
+            await V.setEnabled(true, "trd-test-vault")`)
+        // Off again afterwards, and out of the config: a Vault left on would make every later SSH connection ask for it.
+        t.onCleanup(() => ev('H.inZone(() => { RD.injector.get(require("tabby-core").VaultService).setEnabled(false); delete H.config.store.vault; H.config.save() })'))
     }
     const accountsBefore = await ev('return JSON.stringify(H.config.store.remoteDesktop.accounts ?? [])')
     t.onCleanup(() => ev(`H.inZone(() => { H.config.store.remoteDesktop.accounts = ${accountsBefore}; H.config.save() })`))
