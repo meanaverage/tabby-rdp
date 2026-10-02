@@ -304,4 +304,42 @@ if (Test-Path $state) { Get-ChildItem $state -File | Where-Object { $keep -notco
     check('... stopped before signing in', !(await log()).some(l => /RDCleanPath relay up/.test(l)))
     await ev(`H.inZone(() => H.clickStatus(H.pane, 'Trust the new certificate'))`)
     check('"Trust the new certificate": connected, the certificate remembered again', /Z $/.test(await outcome() ?? '') && await ev(`return H.trusted(${JSON.stringify(key)})`) === certificate)
+
+    // 12. A saved account: the desktop signs in with it in place of its own saved account; without a password yet, the
+    // form asks and saves it as the account's (Tabby's Vault here, turned on for this, so it works without a keyring
+    // too); a wrong one brings the form back with the account's name, and "Sign in again…" asks anew.
+    await ev('H.inZone(() => RD.desktop.disconnect(H.pane))')
+    const vaultWas = await ev<boolean>('return RD.injector.get(require("tabby-core").VaultService).isEnabled()')
+    if (!vaultWas) {
+        await ev('await RD.injector.get(require("tabby-core").VaultService).setEnabled(true, "trd-test-vault")')
+        t.onCleanup(() => ev('H.inZone(() => RD.injector.get(require("tabby-core").VaultService).setEnabled(false))'))
+    }
+    const accountsBefore = await ev('return JSON.stringify(H.config.store.remoteDesktop.accounts ?? [])')
+    t.onCleanup(() => ev(`H.inZone(() => { H.config.store.remoteDesktop.accounts = ${accountsBefore}; H.config.save() })`))
+    const accountId = await ev<string>(`return (await RD.desktop.saveAccount({ name: 'Windows test account', username: ${JSON.stringify(win.account)} })).id`)
+    t.onCleanup(() => ev(`await RD.desktop.removeAccount(${JSON.stringify(accountId)})`))
+    await ev(`H.inZone(() => { const d = H.config.store.remoteDesktop.desktops.find(d => d.name === ${JSON.stringify(NAME)}); d.account = ${JSON.stringify(accountId)}; H.config.save() })`)
+    check('the Accounts list names the desktop that uses the account', (await ev<{ name: string }[]>(`return RD.desktop.accountUses(${JSON.stringify(accountId)})`)).some(u => u.name === NAME))
+    await ev('await H.inZone(() => RD.desktop.toggle(H.pane))')
+    form = await t.waitFor<{ user: string, error: string, focused: string | null }>('return H.signin()', 20)
+    const locked = await ev('return H.overlay(H.pane).querySelector(".trd-signin [name=username]")?.readOnly === true')
+    const rememberLabel = await ev<string>('return H.overlay(H.pane).querySelector(".trd-signin-remember")?.textContent.trim() ?? ""')
+    check('no password saved yet: the form asks, with the account\'s user name locked and "Save as the password of …"', form?.user === win.account && locked && /Save as the password of "Windows test account"/.test(rememberLabel), { form, locked, rememberLabel })
+    await ev('H.submit("definitely-not-the-password")')
+    form = await t.waitFor<{ user: string, error: string, focused: string | null }>('const f = H.signin(); return f?.error ? f : null', 40)
+    check('a wrong password: the form again, for the account', /wrong|refused/i.test(form?.error ?? '') && form?.user === win.account, form)
+    await ev(`H.submit(${JSON.stringify(win.password)})`)
+    check('the right one connects', /Z $/.test(await outcome() ?? ''), (await log()).slice(-3))
+    check('... and is saved as the account\'s password', !!(await t.waitFor(`return (await RD.desktop.accountHasPassword(${JSON.stringify(accountId)})) === 'yes'`, 5)))
+    check('the log says the account was used on the next connection', await (async () => {
+        await ev('H.inZone(() => RD.desktop.disconnect(H.pane))')
+        await ev('await H.inZone(() => RD.desktop.toggle(H.pane))')
+        const result = await outcome()
+        return /Z $/.test(result ?? '') && !(await ev('return H.signin()')) && (await log()).some(l => /sign-in: the saved account "Windows test account"/.test(l))
+    })(), (await log()).slice(-4))
+    await ev('H.inZone(() => RD.desktop.signInAgain(H.pane))')
+    form = await t.waitFor<{ user: string, error: string, focused: string | null }>('return H.signin()', 20)
+    check('"Sign in again…" asks for the account\'s password anew', form?.user === win.account, form)
+    await ev(`H.submit(${JSON.stringify(win.password)})`)
+    check('connected again', /Z $/.test(await outcome() ?? ''))
 })
