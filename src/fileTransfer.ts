@@ -201,6 +201,22 @@ export class FileTransfer {
     }
 
     /**
+     * Resolves with the remote's next answer to a new clipboard (its Format List Response): true if it took it in,
+     * and after `timeoutMs` without one (paste anyway). Call it before sending the clipboard.
+     */
+    clipboardAnswered (timeoutMs = 3000): Promise<boolean> {
+        return new Promise<boolean>(resolve => {
+            const answered = (ok: boolean) => {
+                clearTimeout(timer)
+                this.provider.off('format-list-response', answered)
+                resolve(!!ok)
+            }
+            const timer = setTimeout(() => answered(true), timeoutMs)
+            this.provider.on('format-list-response', answered)
+        })
+    }
+
+    /**
      * ⌘V (Ctrl+V) on the desktop with files copied here (Finder, Explorer, Files): offers them on the remote clipboard
      * for that paste. True when it did, and the paste should wait a moment for the remote to see them; false when the
      * clipboard holds no files, or these are already offered and not pasted yet.

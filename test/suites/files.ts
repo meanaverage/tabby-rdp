@@ -43,17 +43,24 @@ await suite('files', async t => {
     check('saved here, same content', !!got && await t.readFile(got) === 'made on the remote\n', saved)
 
     // 2. Here → remote: drop a file on the desktop, paste in the Files window.
+    // FreeRDP 3.32.0, GNOME Remote Desktop's RDP library, never returns from a pasted file's name with a dot in it (its
+    // check for ".." loops; fixed in 3.32.1), and the desktop hangs for good. On such a host the files here have no dot.
+    const freerdp = (await t.remote('H.pane', `grep -o 'libfreerdp3\\.so\\.[0-9.]*' /proc/$(pgrep -u "$(id -u)" -f gnome-remote-desktop-daemon | head -1)/maps 2>/dev/null | head -1`)).trim()
+    const ext = freerdp.endsWith('.so.3.32.0') ? '' : '.txt'
+    if (!ext) {
+        t.skip('file names with a dot, here → remote', 'the host has FreeRDP 3.32.0, which hangs on them (fixed in 3.32.1): sent without ".txt"')
+    }
     const content = `made here ${Date.now()}\n`
-    await ev(`const overlay = H.overlay(H.pane); const dt = new DataTransfer(); dt.items.add(new File([${JSON.stringify(content)}], 'from-here.txt', { type: 'text/plain' }))
+    await ev(`const overlay = H.overlay(H.pane); const dt = new DataTransfer(); dt.items.add(new File([${JSON.stringify(content)}], 'from-here${ext}', { type: 'text/plain' }))
         overlay.dispatchEvent(new DragEvent('dragover', { dataTransfer: dt, bubbles: true, cancelable: true })); overlay.dispatchEvent(new DragEvent('drop', { dataTransfer: dt, bubbles: true, cancelable: true }))`)
     check('drop: offered, with a "paste on the remote" note', !!(await t.waitFor(`return /ready: paste/.test(H.toast(H.pane))`, 10)), await ev('return H.toast(H.pane)'))
-    check('drop: nothing typed into the console under the desktop', !(await ev<string>('return H.screen(H.pane)')).includes('from-here.txt'))
+    check('drop: nothing typed into the console under the desktop', !(await ev<string>('return H.screen(H.pane)')).includes(`from-here${ext}`))
     const t1 = Date.now()
     await t.press('v', ['Control'])
     let arrived = ''
     for (let i = 0; i < 30 && arrived !== content; i++) {
         await sleep(500)
-        arrived = await t.remote('H.pane', `cat ${DIR}/from-here.txt 2>/dev/null`)
+        arrived = await t.remote('H.pane', `cat ${DIR}/from-here${ext} 2>/dev/null`)
     }
     t.time('paste → file on the remote', Date.now() - t1)
     check('here → remote: pasted in Files, same content', arrived === content, arrived)
@@ -67,9 +74,9 @@ await suite('files', async t => {
     const local = path.join(here, 'copied')
     fs.mkdirSync(path.join(local, 'folder'), { recursive: true })
     const one = `copied here ${Date.now()}\n`
-    fs.writeFileSync(path.join(local, 'copied-here.txt'), one)
-    fs.writeFileSync(path.join(local, 'folder', 'inner.txt'), 'inside the folder\n')
-    const urls = ['copied-here.txt', 'folder'].map(f => `$.NSURL.fileURLWithPath(${JSON.stringify(path.join(local, f))})`).join(', ')
+    fs.writeFileSync(path.join(local, `copied-here${ext}`), one)
+    fs.writeFileSync(path.join(local, 'folder', `inner${ext}`), 'inside the folder\n')
+    const urls = [`copied-here${ext}`, 'folder'].map(f => `$.NSURL.fileURLWithPath(${JSON.stringify(path.join(local, f))})`).join(', ')
     // The writer stays running while the paste reads the clipboard, as Finder does: macOS fills in some of its
     // formats (the list of all the names) from the writer on demand, and loses them when it has gone.
     const writer = spawn('osascript', ['-l', 'JavaScript', '-e', `ObjC.import('AppKit'); var pb = $.NSPasteboard.generalPasteboard; pb.clearContents; pb.writeObjects($([${urls}])); delay(60); ''`], { stdio: 'ignore' })
@@ -84,7 +91,7 @@ await suite('files', async t => {
     let both = ''
     for (let i = 0; i < 30 && both !== `${one}inside the folder\n`; i++) {
         await sleep(500)
-        both = await t.remote('H.pane', `cat ${DIR}/copied-here.txt ${DIR}/folder/inner.txt 2>/dev/null`)
+        both = await t.remote('H.pane', `cat ${DIR}/copied-here${ext} ${DIR}/folder/inner${ext} 2>/dev/null`)
     }
     t.time('⌘V → copied files on the remote', Date.now() - t2)
     check('copied here, pasted there: the file and the folder with its file, same content', both === `${one}inside the folder\n`, both)
