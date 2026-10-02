@@ -83,7 +83,8 @@ await suite('help', async t => {
     check('Add a desktop… opens Tabby\'s profile editor for a remote desktop profile', !!(await t.waitFor('return !!document.querySelector(".modal rdp-profile-settings")', 4)))
     const accountOptions = await ev<string[]>('return [...document.querySelector(".modal rdp-profile-settings [name=account]").options].map(o => o.text)')
     check('its Account field offers the saved account and New account…', accountOptions.some(o => /Lab admin/.test(o)) && accountOptions.at(-1) === 'New account…', accountOptions)
-    check('the window stays draggable by its tab bar', await ev('const el = document.elementFromPoint(window.innerWidth - 300, 20); return getComputedStyle(el).webkitAppRegion === "drag"'))
+    // The strip over the dialog, where the tab bar is (hit-tested at the corner: a small window's dialog covers the middle).
+    check('the window stays draggable by its tab bar', await ev('const bar = document.querySelector(".modal > .trd-form-dragbar"); const el = document.elementFromPoint(4, 4); return !!bar && getComputedStyle(bar).webkitAppRegion === "drag" && el === bar'))
     await ev('RD.injector.get(require("@ng-bootstrap/ng-bootstrap").NgbModal).dismissAll()')
     await sleep(300)
 
