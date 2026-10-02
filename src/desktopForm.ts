@@ -46,6 +46,7 @@ export function askDesktop (pane: HTMLElement, options: DesktopFormOptions): Pro
     const overlay = document.createElement('div')
     overlay.className = 'trd-overlay trd-form-overlay'
     overlay.innerHTML = `
+        <div class="trd-form-dragbar"></div>
         <div class="trd-signin">
             <form autocomplete="off">
                 <div class="trd-signin-title"></div>

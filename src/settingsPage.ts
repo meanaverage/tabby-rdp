@@ -91,6 +91,11 @@ const STYLE = `
 .trd-settings .trd-list + .trd-add { margin-top: 10px; display: flex; gap: 6px; align-items: center; }
 .trd-settings .trd-row a[data-profile], .trd-settings .trd-row a[data-desktop] { cursor: pointer; text-decoration: underline; }
 .trd-settings .trd-form-overlay { position: fixed; inset: 0; z-index: 1050; background: rgba(0, 0, 0, 0.55); }
+/* The window stays draggable by its tab bar while the form shows (Tabby's own dialogs cover it). */
+.trd-form-dragbar { display: none; }
+.trd-settings .trd-form-overlay .trd-form-dragbar, .trd-capture .trd-form-dragbar { display: block; position: absolute; left: 0; right: 0; top: 0;
+    height: var(--tabs-height, 38px); -webkit-app-region: drag; }
+.trd-settings .trd-form-overlay .trd-signin { top: var(--tabs-height, 38px); }
 .trd-settings .trd-form-overlay .trd-signin form { padding: 20px; border-radius: 6px; background: var(--bs-body-bg, #1b1b1b);
     border: 1px solid rgba(128, 128, 128, 0.35); box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5); width: 420px; }
 .trd-settings details { border-bottom: 1px solid rgba(128, 128, 128, 0.15); padding: 6px 0; }
@@ -794,7 +799,7 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
     private captureHotkey (): Promise<string[] | null> {
         const overlay = document.createElement('div')
         overlay.className = 'trd-capture'
-        overlay.innerHTML = `<hotkey-input-modal>
+        overlay.innerHTML = `<div class="trd-form-dragbar"></div><hotkey-input-modal>
             <div class="modal-header"><h5>Press the key now</h5></div>
             <div class="modal-body"><div class="input"></div><div class="timeout"><div style="width: 0%"></div></div></div>
             <div class="modal-footer"><button class="btn btn-primary" type="button">Cancel</button></div>
