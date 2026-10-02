@@ -341,7 +341,9 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
             </section>
 
             <section data-topic="desktops">
-                <h4>Desktops behind SSH hosts</h4>
+                <h4>Desktops</h4>
+                <div class="trd-lead">Remote desktop profiles, and desktops added from SSH tabs.
+                    ${this.info('A desktop added from an SSH tab\'s menu belongs to that host. That is for hosts without a profile, such as an ssh typed in a terminal.')}</div>
                 <div class="trd-list" data-list="desktops"></div>
                 <div class="trd-add"><button class="btn btn-secondary btn-sm" data-action="desktop">Add a desktop…</button></div>
             </section>
@@ -417,7 +419,7 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
             import: () => this.desktop.importRdpFile(),
             hotkeys: () => this.showTabbySettings('hotkeys'),
             account: () => this.editAccount(null),
-            desktop: () => this.desktop.addDesktopIn(this.root),
+            desktop: () => this.newProfile(),
             profiles: () => this.showTabbySettings('profiles'),
             'osd-white': () => this.changeOsd({ color: '' }),
             'osd-try': () => {
@@ -530,19 +532,43 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
         if (!list) {
             return
         }
+        const accounts = this.desktop.accounts()
+        const accountOf = (id: string | undefined) => id ? accounts.find(a => a.id === id) : undefined
+        // Remote desktop profiles first (Tabby's editor), then the desktops added from SSH tabs (the plugin's form).
+        const profiles: any[] = (this.config.store.profiles ?? []).filter((p: any) => p?.type === RDP_PROFILE_TYPE && p.options?.host)
+        const groups: any[] = this.config.store.groups ?? []
+        const profileRows = profiles.map(p => {
+            const o = p.options
+            const address = `${o.host}:${o.port || 3389}`
+            const via = o.via ? (this.config.store.profiles ?? []).find((x: any) => x.id === o.via)?.name ?? 'an SSH profile' : null
+            const inherited = o.account === undefined ? groups.find(g => g.id === p.group)?.defaults?.[RDP_PROFILE_TYPE]?.options?.account : undefined
+            const account = accountOf(o.account || inherited)
+            const details = [
+                account ? `Signs in as ${esc(account.name)}` : o.username ? `Signs in as ${esc(o.username)}` : '',
+                o.kind && o.kind !== 'windows' ? esc(o.kind) : '',
+            ].filter(Boolean).join('<br>')
+            return this.row(esc(p.name ?? address), `${esc(address)}${via ? ` via ${esc(via)}` : ''}${details ? `<br>${details}` : ''}`, [
+                { label: 'Edit…', run: () => { this.editProfile(p.id) } },
+                { label: 'Remove…', danger: true, run: () => { this.removeProfile(p.id) } },
+            ])
+        })
         const desktops = this.desktop.configuredDesktops()
-        list.replaceChildren(...desktops.map((d, i) => {
+        const desktopRows = desktops.map((d, i) => {
             const address = `${d.host ?? '127.0.0.1'}:${d.port ?? 3389}`
-            const wake = d.wake?.vm ? ` · starts VM ${esc(d.wake.vm)}` : d.wake?.mac ? ` · wakes ${esc(d.wake.mac)}` : ''
-            const account = d.account ? this.desktop.accounts().find(a => a.id === d.account) : undefined
-            const who = account ? ` · account ${esc(account.name)}` : d.username ? ` · ${esc(d.username)}` : ''
-            return this.row(esc(d.name ?? address), `${esc(address)} behind ${esc(d.via)} · ${esc(d.kind ?? 'windows')}${who}${wake}`, [
+            const account = accountOf(d.account)
+            const details = [
+                account ? `Signs in as ${esc(account.name)}` : d.username ? `Signs in as ${esc(d.username)}` : '',
+                d.kind && d.kind !== 'windows' ? esc(d.kind) : '',
+                d.wake?.vm ? `Starts VM ${esc(d.wake.vm)} when off` : d.wake?.mac ? `Wakes ${esc(d.wake.mac)} when off` : '',
+            ].filter(Boolean).join('<br>')
+            return this.row(esc(d.name ?? address), `${esc(address)} behind ${esc(d.via)}${details ? `<br>${details}` : ''}`, [
                 { label: 'Edit…', run: () => { this.desktop.editDesktopIn(this.root, i, true) } },
                 { label: 'Remove…', danger: true, run: () => { this.desktop.confirmRemoveDesktop(i) } },
             ])
-        }), this.empty(desktops.length
-            ? 'Also in the host\'s SSH tab: right-click › Settings › Edit a desktop.'
-            : 'None yet. A Windows VM or another computer that an SSH host can reach. Also in that host\'s SSH tab: right-click › <b>Desktops › Add a desktop behind…</b>'))
+        })
+        list.replaceChildren(...profileRows, ...desktopRows, this.empty(profileRows.length + desktopRows.length
+            ? 'Profiles are also in Profiles &amp; connections; a desktop behind a host also in that host\'s SSH tab: right-click › Settings.'
+            : 'None yet. <b>Add a desktop…</b> makes a profile: an RDP server on your network, or one behind an SSH profile\'s host.'))
     }
 
     private renderAccounts (): void {
@@ -890,6 +916,28 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
         } catch {
             return null
         }
+    }
+
+    /** "Remove…" on a remote desktop profile: asks, then deletes it as Tabby's Profiles page would (saved account and certificate go too). */
+    private async removeProfile (id: string): Promise<void> {
+        const profiles = this.injector.get(ProfilesService)
+        const profile = (await profiles.getProfiles()).find(p => p.id === id)
+        if (!profile) {
+            return
+        }
+        const { response } = await this.platform.showMessageBox({
+            type: 'warning',
+            message: `Remove the profile "${profile.name}"?`,
+            detail: 'Its saved account and remembered certificate are forgotten too.',
+            buttons: ['Remove', 'Keep'],
+            defaultId: 1,
+            cancelId: 1,
+        })
+        if (response !== 0) {
+            return
+        }
+        await profiles.deleteProfile(profile)
+        await this.config.save()
     }
 
     /** Tabby's own profile editor on an existing profile, as its Profiles page opens it; saves what comes back. */

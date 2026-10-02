@@ -50,8 +50,8 @@ export function askDesktop (pane: HTMLElement, options: DesktopFormOptions): Pro
             <form autocomplete="off">
                 <div class="trd-signin-title"></div>
                 <div class="trd-signin-error"></div>
-                <input class="form-control" name="name" placeholder="Name, e.g. Windows VM" spellcheck="false">
-                <input class="form-control" name="via" list="trd-via-hosts" placeholder="Behind which SSH host: a profile's name, or its hostname" spellcheck="false">
+                <input class="form-control" name="name" placeholder="A name of your choice, e.g. Windows VM" spellcheck="false">
+                <input class="form-control" name="via" list="trd-via-hosts" placeholder="The SSH host it is behind: a profile's name, or its hostname" spellcheck="false">
                 <datalist id="trd-via-hosts"></datalist>
                 <input class="form-control" name="address" placeholder="Address as seen from the host, e.g. 127.0.0.1:3389" spellcheck="false">
                 <select class="form-control" name="kind">
@@ -142,7 +142,7 @@ export function askDesktop (pane: HTMLElement, options: DesktopFormOptions): Pro
                 return
             }
             if (options.hosts && !via.value.trim()) {
-                error.textContent = 'Say which SSH host it is behind.'
+                error.textContent = 'Which SSH host is it behind?'
                 via.focus()
                 return
             }
