@@ -44,7 +44,15 @@ const STYLE = `
 .trd-settings .trd-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 10px; }
 .trd-settings .trd-card { display: flex; flex-direction: column; gap: 8px; padding: 12px; border-radius: 6px;
     border: 1px solid rgba(128, 128, 128, 0.25); }
-.trd-settings .trd-card .trd-card-title { font-weight: 600; }
+.trd-settings .trd-card .trd-card-title { font-weight: 600; display: flex; align-items: center; gap: 6px; }
+.trd-settings h4 .trd-info, .trd-settings .trd-lead .trd-info { margin-left: 4px; vertical-align: middle; font-size: 13px; }
+.trd-settings .trd-info { position: relative; display: inline-flex; opacity: 0.55; cursor: help; outline: none; font-weight: normal; }
+.trd-settings .trd-info:hover, .trd-settings .trd-info:focus { opacity: 1; }
+.trd-settings .trd-info::after { content: attr(data-tip); position: absolute; left: 0; top: calc(100% + 6px); z-index: 20; width: 260px;
+    padding: 8px 10px; border-radius: 6px; font-size: 12px; font-weight: normal; line-height: 1.4; white-space: normal;
+    background: var(--theme-bg-more, #2a2a2a); color: var(--bs-body-color, #ddd); border: 1px solid rgba(128, 128, 128, 0.35);
+    box-shadow: 0 6px 24px rgba(0, 0, 0, 0.45); opacity: 0; visibility: hidden; transition: opacity 120ms; pointer-events: none; }
+.trd-settings .trd-info:hover::after, .trd-settings .trd-info:focus::after { opacity: 1; visibility: visible; }
 .trd-settings .trd-card .trd-card-text { flex: auto; font-size: 12px; opacity: 0.8; }
 .trd-settings .trd-card button { align-self: flex-start; }
 .trd-settings kbd { padding: 2px 7px; border-radius: 3px; font-size: 13px; background: rgba(128, 128, 128, 0.25);
@@ -197,22 +205,18 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
                 <h4>Getting started</h4>
                 <div class="trd-cards">
                     <div class="trd-card">
-                        <div class="trd-card-title">Over SSH</div>
-                        <div class="trd-card-text">In an SSH tab, press <span data-hotkey></span> or click <b>Desktop</b> in its
-                            toolbar. The host is set up the first time (GNOME, xrdp, or Windows with OpenSSH); nothing to
-                            install here, no ports to open.</div>
+                        <div class="trd-card-title">Over SSH ${this.info('The host is set up on the first connection: GNOME, xrdp, or Windows with OpenSSH. Nothing to install here, no ports to open.')}</div>
+                        <div class="trd-card-text">In an SSH tab, press <span data-hotkey></span> or click <b>Desktop</b>.</div>
                         <button class="btn btn-secondary btn-sm" data-action="ssh">Open a connection…</button>
                     </div>
                     <div class="trd-card">
-                        <div class="trd-card-title">On your network</div>
-                        <div class="trd-card-text">A remote desktop profile connects straight to an RDP server's address, in a
-                            tab of its own. Or type <code>user@host</code> in the profile selector.</div>
+                        <div class="trd-card-title">On your network ${this.info('The desktop opens in a tab of its own. For a quick connection, type user@host in the profile selector.')}</div>
+                        <div class="trd-card-text">A profile that connects straight to an RDP server.</div>
                         <button class="btn btn-secondary btn-sm" data-action="profile">New profile…</button>
                     </div>
                     <div class="trd-card">
-                        <div class="trd-card-title">From an .rdp file</div>
-                        <div class="trd-card-text">A file from Remote Desktop Connection or your admin becomes a profile: its
-                            address, user name and domain.</div>
+                        <div class="trd-card-title">From an .rdp file ${this.info('A file from Remote Desktop Connection, or from your admin. Its address, user name and domain make the profile; the password is asked for.')}</div>
+                        <div class="trd-card-text">The file becomes a profile.</div>
                         <button class="btn btn-secondary btn-sm" data-action="import">Import an .rdp file…</button>
                     </div>
                 </div>
@@ -320,9 +324,8 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
             </section>
 
             <section data-topic="keyboard">
-                <h4>Shortcuts</h4>
-                <div class="trd-lead">They work while the desktop has the keyboard, and are also listed in Tabby's <a data-action="hotkeys">Hotkeys</a>.
-                    While a desktop shows, Tabby's other shortcuts go to the desktop, except switching tabs and full screen.</div>
+                <h4>Shortcuts ${this.info('These work while the desktop has the keyboard. Tabby\'s other shortcuts go to the desktop then, except switching tabs and full screen.')}</h4>
+                <div class="trd-lead">Also listed in Tabby's <a data-action="hotkeys">Hotkeys</a>.</div>
                 <div class="trd-hotkeys" data-list="hotkeys"></div>
                 <h4 style="margin-top: 24px">Keys and tips</h4>
                 <table class="trd-keys"><tbody>
@@ -344,9 +347,8 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
 
             <section data-topic="accounts">
                 <h4>Accounts</h4>
-                <div class="trd-lead">One sign-in for several desktops. When its password changes, change it once here. A desktop
-                    picks its account in its profile's settings, or in the form that adds a desktop behind an SSH host; a
-                    profile group's defaults can pick one for all of its profiles.</div>
+                <div class="trd-lead">One sign-in for several desktops: when its password changes, change it once here.
+                    ${this.info('A desktop picks its account in its profile\'s settings, or in the form that adds a desktop behind an SSH host. A profile group\'s defaults can pick one for all of its profiles.')}</div>
                 <div class="trd-list" data-list="accounts"></div>
                 <div class="trd-add">
                     <button class="btn btn-secondary btn-sm" data-action="account">Add an account…</button>
@@ -426,6 +428,11 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
             this.zone.run(() => actions[el.dataset.action!]?.())
         }))
         this.refresh()
+    }
+
+    /** An ⓘ that shows `text` while hovered or focused: detail that the card itself needn't carry. */
+    private info (text: string): string {
+        return `<span class="trd-info" tabindex="0" role="note" data-tip="${esc(text)}"><i class="fas fa-info-circle"></i></span>`
     }
 
     private toggleLine (key: Toggle, title: string, description: string): string {
