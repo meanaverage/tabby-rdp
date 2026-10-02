@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+**Fixed**
+- **Paste to all desktops in a tab** pasted this computer's clipboard only on the desktop with the focus; the others
+  pasted whatever they had copied last. Since 0.3.2 only the focused desktop follows the clipboard, so the text or
+  picture is now sent to each desktop before its paste. The paste shortcut while typing into all desktops does the
+  same.
+
 ## 0.3.3
 
 **Fixed**

@@ -1454,18 +1454,18 @@ export class RemoteDesktopService {
 
     /**
      * Pastes on every connected desktop in the pane's tab: files copied here are offered to each first (see
-     * FileTransfer.pasteClipboardFiles); text and pictures are on their clipboards already. Then Ctrl+V on each, in
-     * whatever window is active there.
+     * FileTransfer.pasteClipboardFiles); text and pictures are sent to each, since only the desktop with the focus
+     * follows this computer's clipboard on its own. Then Ctrl+V on each, in whatever window is active there.
      */
     pasteToAll (pane: DesktopPane): number {
         const targets = [...this.sessions.get(pane) ? [{ pane, session: this.sessions.get(pane)! }] : [], ...this.othersInTab(pane)]
             .filter(({ session }) => session.state === 'connected' && !session.viewOnly && session.ui)
         for (const { session } of targets) {
-            // Each pastes once it has taken in the files (when there are files to offer), however long that takes it.
+            // Each pastes once it has taken in the new clipboard, however long that takes it.
             const offered = session.files?.pasteClipboardFiles() ?? false
-            ;(offered ? session.files!.offerAnswered() : Promise.resolve(true)).then(ok => {
+            ;(offered ? session.files!.offerAnswered() : this.sendClipboard(session)).then(ok => {
                 if (!ok) {
-                    session.log.push('paste to all desktops: the remote refused the files')
+                    session.log.push(`paste to all desktops: the remote refused the ${offered ? 'files' : 'clipboard'}`)
                     return
                 }
                 try {
@@ -1477,6 +1477,23 @@ export class RemoteDesktopService {
             })
         }
         return targets.length
+    }
+
+    /**
+     * Sends this computer's clipboard (text, a picture) to the session's desktop, whether it has the focus or not.
+     * Resolves once the remote has taken it in (true) or refused it (false); true as well when there was nothing to
+     * send, or no answer came: a paste then gets what that desktop has.
+     */
+    private async sendClipboard (session: DesktopSession): Promise<boolean> {
+        const answered = session.files?.clipboardAnswered() ?? new Promise<boolean>(resolve => setTimeout(() => resolve(true), 300))
+        try {
+            await session.ui.sendClipboardData()
+        } catch (e: any) {
+            // Nothing it can send (an empty clipboard, a kind it doesn't carry).
+            session.log.push(`paste to all desktops: clipboard not sent: ${e?.backtrace?.() ?? e?.message ?? e}`)
+            return true
+        }
+        return answered
     }
 
     /** Resolves when the pane's desktop has taken in the files just offered to it, so a paste then gets them. */

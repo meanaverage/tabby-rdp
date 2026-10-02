@@ -103,6 +103,18 @@ e.connect('changed', save); w.connect('destroy', Gtk.main_quit); w.show_all(); w
         pasted = (await logs()).trim()
     }
     check('paste to all: the clipboard pasted on both desktops', pasted === 'both42xpasted7|both42pasted7', pasted)
+    // The paste shortcut while typing into all: what's copied here goes to both (only the focused one follows the
+    // clipboard on its own).
+    await ev('H.inZone(() => RD.desktop.setBroadcast(H.a, true))')
+    await t.clipboard('keyed9')
+    await sleep(500)
+    await t.press('v', [t.platform === 'darwin' ? 'Meta' : 'Control'])
+    for (let i = 0; i < 20 && pasted !== 'both42xpasted7keyed9|both42pasted7keyed9'; i++) {
+        await sleep(250)
+        pasted = (await logs()).trim()
+    }
+    check('typing into all: the paste shortcut pastes the clipboard on both desktops', pasted === 'both42xpasted7keyed9|both42pasted7keyed9', pasted)
+    await ev('H.inZone(() => RD.desktop.setBroadcast(H.a, false))')
 
     // The other pane, whose console runs no ssh, still means the host: the ssh next door is not its (regression: it
     // was taken for this pane's, and Desktop there offered the other account's desktop, open next door).

@@ -2,7 +2,6 @@ import { Injectable, NgZone } from '@angular/core'
 import { AppService, HotkeysService } from 'tabby-core'
 import { RemoteDesktopService } from './desktop.service'
 import { DesktopKind } from './desktops'
-import { clipboardPaths } from './fileTransfer'
 import { desktopPaneOf, DesktopPane } from './targets'
 
 /**
@@ -160,8 +159,8 @@ export class DesktopKeyboard {
         // Paste with files copied here (Finder, …): offer them first, then paste once the remote has had a moment to
         // take the new clipboard (else it pastes what it had). The whole Ctrl+V goes then, whenever ⌘ is let go.
         const paste = event.code === 'KeyV' && !event.shiftKey && !event.altKey && (macShortcuts ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey)
-        if (paste && event.type === 'keydown' && !event.repeat && this.desktop.isBroadcast(pane) && clipboardPaths().length) {
-            // Typing into all desktops: the copied files go to all of them.
+        if (paste && event.type === 'keydown' && !event.repeat && this.desktop.isBroadcast(pane)) {
+            // Typing into all desktops: what's copied here goes to all of them (only this one has it so far).
             this.metaAlone = false
             event.stopImmediatePropagation()
             event.preventDefault()
