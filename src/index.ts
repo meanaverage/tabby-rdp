@@ -1,7 +1,7 @@
 import { Injector, NgModule } from '@angular/core'
 import {
     AppService, CommandProvider, ConfigProvider, HotkeyProvider, HotkeysService, ProfileProvider, TabContextMenuItemProvider,
-    TabRecoveryProvider,
+    TabRecoveryProvider, VaultService,
 } from 'tabby-core'
 import { SettingsTabProvider } from 'tabby-settings'
 import { TerminalDecorator } from 'tabby-terminal'
@@ -10,6 +10,7 @@ import { DeskTriggerDecorator } from './desk'
 import { HeaderControls } from './header'
 import { DesktopKeyboard } from './keyboard'
 import { RemoteDesktopHelp } from './help'
+import { useVault } from './signin'
 import { parseRdpFile } from './rdpFile'
 import {
     RDPCommands, RDPProfileOpener, RDPProfileSettingsComponent, RDPProfilesService, RDPTabComponent, RDPTabRecovery,
@@ -43,6 +44,8 @@ export default class RemoteDesktopModule {
     constructor (app: AppService, hotkeys: HotkeysService, desktop: RemoteDesktopService, header: HeaderControls, targets: RemoteTargets, keyboard: DesktopKeyboard, injector: Injector) {
         installStyle()
         header.install()
+        // Passwords go to Tabby's Vault while it is enabled (as Tabby's SSH passwords do), else to the system keychain.
+        try { useVault(injector.get(VaultService)) } catch { }
         injector.get(UpdateCheck).start()
         keyboard.install()
         // The plugin's hotkeys (see HOTKEYS in help.ts) act on the active tab's desktop.

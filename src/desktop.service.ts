@@ -21,7 +21,7 @@ import { prepareRemoteDesktop } from './remoteSetup'
 import { normalizeFingerprint, RDCleanPathProxy, startRDCleanPathProxy } from './rdcleanpath'
 import {
     askCredentials, Credentials, forgetCredentials, forgetCredentialsFor, loadCredentials, moveCredentialsFor, saveCredentials,
-    STYLE as SIGNIN_STYLE,
+    storeName, STYLE as SIGNIN_STYLE,
 } from './signin'
 import { isSSHTab } from './ssh'
 import { rdpAnswers, shutDownWhenIdle, waitForRdp, wakeDesktop } from './wake'
@@ -96,6 +96,8 @@ interface Endpoint {
     remember: boolean
     /** Where remembering saves them, when not under the desktop's own key: a saved account's keychain entry. */
     saveKey?: string
+    /** How the Vault lists them when saved under `saveKey`. */
+    saveLabel?: string
     /** The host's own desktop: the fingerprint of the certificate its setup made, the only one to accept. */
     certificate?: string
 }
@@ -632,7 +634,7 @@ export class RemoteDesktopService {
         const { response } = await this.platform.showMessageBox({
             type: 'warning',
             message: `Remove the account "${account.name}"?`,
-            detail: `${signInName(account)}. Its password is removed from the keychain. ` + (uses.length
+            detail: `${signInName(account)}. Its saved password is removed too. ` + (uses.length
                 ? `${uses.length === 1 ? 'One desktop uses' : `${uses.length} desktops use`} it and will ask for an account when connecting: ${uses.join(', ')}.`
                 : 'No desktop uses it.'),
             buttons: ['Remove', 'Keep'],
@@ -2124,9 +2126,9 @@ export class RemoteDesktopService {
             this.changed$.next()
             this.reconnects.delete(pane)  // connected again: a later drop starts over
             if (endpoint.remember) {
-                saveCredentials(endpoint.saveKey ?? session.key, credentials).then(
-                    () => session.log.push(endpoint.saveKey ? 'sign-in: saved as the account\'s password in the keychain' : 'sign-in: saved in the keychain'),
-                    e => session.log.push(`sign-in: keychain: ${e?.message ?? e}`))
+                saveCredentials(endpoint.saveKey ?? session.key, credentials, endpoint.saveLabel).then(
+                    () => session.log.push(`sign-in: saved ${endpoint.saveKey ? 'as the account\'s password ' : ''}in ${storeName()}`),
+                    e => session.log.push(`sign-in: ${storeName()}: ${e?.message ?? e}`))
             }
             if (session.visible) {
                 session.focusDesktop()

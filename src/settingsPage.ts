@@ -341,8 +341,8 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
             <section data-topic="accounts">
                 <h4>Accounts</h4>
                 <div class="trd-lead">A user name and password saved under a name, for desktops that share an account: choose
-                    it in a remote desktop profile, or in a desktop behind an SSH host. The password is kept in the system
-                    keychain, once, so a new password is entered once for all of them.</div>
+                    it in a remote desktop profile, or in a desktop behind an SSH host. The password is kept once, in Tabby's
+                    Vault when that is enabled and in the system keychain otherwise, so a new password is entered once for all of them.</div>
                 <div class="trd-list" data-list="accounts"></div>
                 <button class="btn btn-secondary btn-sm trd-add" data-action="account">Add an account…</button>
             </section>
