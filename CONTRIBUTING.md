@@ -39,7 +39,8 @@ Tabby loads plugins once, at start, so restart the sandbox after each build.
 
 The suites run against real machines; set up a Linux test host as described in [testbed/README.md](testbed/README.md),
 then `npm test` ([test/README.md](test/README.md)). Please run the suites your change touches, and add checks for new
-behavior. `npm test -- --packed` checks the plugin as npm would install it.
+behavior. `npm test -- --packed` checks the plugin as npm would install it. The suites and their harness are
+TypeScript; `npm run typecheck` checks the plugin and them (CI runs the build and `npm run typecheck:test`).
 
 ## IronRDP
 

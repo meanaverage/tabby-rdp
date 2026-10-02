@@ -79,7 +79,7 @@ login shell ◀─▶ PTY ◀─▶ session owner ──┤
   two views and each keystroke exactly once; the controller following input and focus; Ctrl-C, job control, UTF-8,
   colors and titles; the alternate screen and repaint on late attach; malformed clients, no network listener, another
   user refused; shell exit, SIGHUP on last detach, linger, and stale-socket cleanup.
-- `test/suites/desk.mjs` (`npm test -- desk`, with `TRD_TEST_BACKEND=native` or `tmux`): logins inside the session,
+- `test/suites/desk.ts` (`npm test -- desk`, with `TRD_TEST_BACKEND=native` or `tmux`): logins inside the session,
   `desk` to the desktop with the same session attached, typing reaching the shell once, RDP and SSH disconnects keeping
   the session, and turning `desk` off and on leaving `~/.bashrc` as it was.
 
