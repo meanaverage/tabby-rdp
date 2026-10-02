@@ -25,6 +25,8 @@ const TABS: { id: string, title: string, topics: HelpTopic[] }[] = [
 ]
 /** The tab shown last, so that the page comes back to it. */
 let lastTab = 'start'
+/** The desktop resolution the overlay preview stands for (the overlay's size depends on it). */
+let previewResolution = '1920x1080'
 
 const STYLE = `
 .trd-settings { display: block; }
@@ -109,6 +111,7 @@ const STYLE = `
 .trd-settings .trd-osd-preview { position: relative; aspect-ratio: 16 / 9; max-width: 520px; margin: 4px 0 14px; border-radius: 6px;
     overflow: hidden; background: linear-gradient(115deg, #e9edf1 0%, #cfd6dd 38%, #3a4048 62%, #1c1f24 100%); }
 .trd-settings .trd-osd-stage { position: absolute; top: 0; left: 0; width: 1280px; height: 720px; transform-origin: 0 0; }
+.trd-settings .trd-osd-resolution { position: absolute; left: 10px; bottom: 10px; width: auto; padding-right: 30px; font-size: 11px; opacity: 0.85; }
 .trd-settings .trd-osd-preview .trd-osd { opacity: 1; }
 .trd-settings .trd-color { display: flex; gap: 8px; align-items: center; }
 .trd-settings .trd-color input[type=color] { width: 40px; height: 28px; padding: 0; border: 0; background: none; }
@@ -160,11 +163,11 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
             document.head.appendChild(style)
         }
         this.render()
-        // The preview is a 1280×720 desktop, scaled down to fit the page.
+        // A known newer version may be stale by now (the page is where it shows): ask npm again.
+        this.injector.get(UpdateCheck).refresh()
+        // The preview is a desktop of the chosen resolution, scaled down to fit the page.
         const frame = this.root.querySelector<HTMLElement>('.trd-osd-preview')!
-        const scale = new ResizeObserver(() => {
-            frame.querySelector<HTMLElement>('.trd-osd-stage')!.style.transform = `scale(${frame.clientWidth / 1280})`
-        })
+        const scale = new ResizeObserver(() => this.scalePreview())
         scale.observe(frame)
         this.subscriptions.push({ unsubscribe: () => scale.disconnect() } as Subscription)
         this.subscriptions.push(
@@ -287,7 +290,13 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
                 <h4>Desktop name overlay</h4>
                 <div class="trd-lead">Names the desktop for a moment when it connects, when you switch to it, and when you click
                     into its pane, like a TV naming its input.</div>
-                <div class="trd-osd-preview"><div class="trd-osd-stage"><div class="trd-osd"></div></div></div>
+                <div class="trd-osd-preview"><div class="trd-osd-stage"><div class="trd-osd"></div></div>
+                    <select class="form-control form-control-sm trd-osd-resolution" data-preview-resolution title="The desktop resolution the preview stands for: the overlay's size on screen depends on it">
+                        <option value="1280x720">1280 × 720</option>
+                        <option value="1920x1080">1920 × 1080</option>
+                        <option value="2560x1440">2560 × 1440</option>
+                        <option value="3840x2160">3840 × 2160</option>
+                    </select></div>
                 <div class="form-line">
                     <div class="header"><div class="title">Show</div>
                         <div class="description">"When it helps": in split panes, and for a desktop other than the tab's own
@@ -406,6 +415,13 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
         this.root.querySelectorAll<HTMLElement>('[data-setting]').forEach(el => {
             el.addEventListener('change', () => this.zone.run(() => this.changeSetting(el)))
         })
+        const resolution = this.root.querySelector<HTMLSelectElement>('[data-preview-resolution]')!
+        resolution.value = previewResolution
+        resolution.addEventListener('change', () => {
+            previewResolution = resolution.value
+            this.scalePreview()
+            this.refresh()
+        })
         this.root.querySelectorAll<HTMLInputElement | HTMLSelectElement>('[data-osd]').forEach(el => {
             // The color picker reports while dragging (input) and when closed (change).
             el.addEventListener(el.type === 'color' ? 'input' : 'change', () => this.zone.run(() => {
@@ -441,6 +457,19 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
     /** An ⓘ that shows `text` while hovered or focused: detail that the card itself needn't carry. */
     private info (text: string): string {
         return `<span class="trd-info" tabindex="0" role="note" data-tip="${esc(text)}"><i class="fas fa-info-circle"></i></span>`
+    }
+
+    /** Sizes the preview's stage to the chosen resolution and scales it to the frame's width. */
+    private scalePreview (): void {
+        const frame = this.root.querySelector<HTMLElement>('.trd-osd-preview')
+        const stage = frame?.querySelector<HTMLElement>('.trd-osd-stage')
+        if (!frame || !stage) {
+            return
+        }
+        const [width, height] = previewResolution.split('x').map(Number)
+        stage.style.width = `${width}px`
+        stage.style.height = `${height}px`
+        stage.style.transform = `scale(${frame.clientWidth / width})`
     }
 
     private toggleLine (key: Toggle, title: string, description: string): string {
@@ -497,7 +526,7 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
         })
         const stage = this.root.querySelector<HTMLElement>('.trd-osd-stage .trd-osd')
         if (stage) {
-            renderOsd(stage, 'workstation', 'via jumphost · 1280×720', osd)
+            renderOsd(stage, 'workstation', `via jumphost · ${previewResolution.replace('x', '×')}`, osd)
         }
         const hotkey = this.help.toggleHotkey()
         this.root.querySelectorAll<HTMLElement>('[data-hotkey]').forEach(el => {
