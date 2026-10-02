@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.3.3
+
+**Fixed**
+- **H.264 video from a hostile remote desktop:** the server picks which parts of a video frame the plugin reads back
+  from the browser's decoder, and nothing limited how much. One region larger than the picture, or many overlapping
+  copies of the whole screen, could make it allocate enough memory to crash Tabby along with every tab in it. What a
+  frame reads back is now bounded by the screen it draws on (overlapping regions are read once, as the box around
+  them), and a frame that would still need more than 256 MiB is decoded without reading anything back (IronRDP
+  patch 8). H.264 is on by default, so this applies wherever the browser decodes the video.
+
+**Docs**
+- The README's table of upstream IronRDP changes lists the keyboard API (#2026), says the Progressive decoding fix is
+  covered by IronRDP #2010 and #1977, and says what each patch not submitted yet waits for.
+
 ## 0.3.2
 
 **New**
