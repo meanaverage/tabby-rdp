@@ -585,11 +585,17 @@ export class RemoteDesktopService {
         return accountsOf(this.config.store.remoteDesktop)
     }
 
-    /** The desktops that sign in with a saved account: configured ones behind SSH hosts, and RDP profiles. By name. */
-    accountUses (id: string): string[] {
-        const desktops = this.configuredDesktops().filter(d => d.account === id).map(d => String(d.name ?? desktopIdOf(d)))
-        const profiles = (this.config.store.profiles ?? []).filter((p: any) => p?.type === RDP_PROFILE_TYPE && p.options?.account === id)
-            .map((p: any) => String(p.name ?? p.options.host))
+    /**
+     * The desktops that sign in with a saved account: configured ones behind SSH hosts, and RDP profiles (their own
+     * choice, or their profile group's default when they make none). Profiles come with their id, for editing.
+     */
+    accountUses (id: string): { name: string, profileId?: string }[] {
+        const desktops = this.configuredDesktops().filter(d => d.account === id).map(d => ({ name: String(d.name ?? desktopIdOf(d)) }))
+        const groups: any[] = this.config.store.groups ?? []
+        const inherited = (p: any) => p.options?.account === undefined && groups.find(g => g.id === p.group)?.defaults?.[RDP_PROFILE_TYPE]?.options?.account === id
+        const profiles = (this.config.store.profiles ?? [])
+            .filter((p: any) => p?.type === RDP_PROFILE_TYPE && (p.options?.account === id || inherited(p)))
+            .map((p: any) => ({ name: String(p.name ?? p.options?.host ?? ''), profileId: p.id ? String(p.id) : undefined }))
         return [...desktops, ...profiles]
     }
 
@@ -635,7 +641,7 @@ export class RemoteDesktopService {
             type: 'warning',
             message: `Remove the account "${account.name}"?`,
             detail: `${signInName(account)}. Its saved password is removed too. ` + (uses.length
-                ? `${uses.length === 1 ? 'One desktop uses' : `${uses.length} desktops use`} it and will ask for an account when connecting: ${uses.join(', ')}.`
+                ? `${uses.length === 1 ? 'One desktop uses' : `${uses.length} desktops use`} it and will ask for an account when connecting: ${uses.map(u => u.name).join(', ')}.`
                 : 'No desktop uses it.'),
             buttons: ['Remove', 'Keep'],
             defaultId: 1,

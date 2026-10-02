@@ -80,7 +80,8 @@ const STYLE = `
 .trd-settings .trd-account-form .trd-account-error { grid-column: 1 / -1; color: #f08080; font-size: 12px; }
 .trd-settings .trd-account-form .trd-account-error:empty { display: none; }
 .trd-settings .trd-account-form .trd-account-buttons { grid-column: 1 / -1; display: flex; gap: 8px; justify-content: flex-end; }
-.trd-settings .trd-list + .trd-add { margin-top: 10px; }
+.trd-settings .trd-list + .trd-add { margin-top: 10px; display: flex; gap: 6px; align-items: center; }
+.trd-settings .trd-row a[data-profile] { cursor: pointer; text-decoration: underline; }
 .trd-settings details { border-bottom: 1px solid rgba(128, 128, 128, 0.15); padding: 6px 0; }
 .trd-settings details summary { cursor: pointer; }
 .trd-settings details > div { padding: 6px 0 4px 16px; font-size: 13px; opacity: 0.85; }
@@ -340,11 +341,14 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
 
             <section data-topic="accounts">
                 <h4>Accounts</h4>
-                <div class="trd-lead">A user name and password saved under a name, for desktops that share an account: choose
-                    it in a remote desktop profile, or in a desktop behind an SSH host. The password is kept once, in Tabby's
-                    Vault when that is enabled and in the system keychain otherwise, so a new password is entered once for all of them.</div>
+                <div class="trd-lead">One sign-in for several desktops. When its password changes, change it once here. A desktop
+                    picks its account in its profile's settings, or in the form that adds a desktop behind an SSH host; a
+                    profile group's defaults can pick one for all of its profiles.</div>
                 <div class="trd-list" data-list="accounts"></div>
-                <button class="btn btn-secondary btn-sm trd-add" data-action="account">Add an account…</button>
+                <div class="trd-add">
+                    <button class="btn btn-secondary btn-sm" data-action="account">Add an account…</button>
+                    <button class="btn btn-link btn-sm" data-action="profiles">Profiles &amp; connections…</button>
+                </div>
             </section>
 
             <section data-topic="certificates">
@@ -407,6 +411,7 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
             import: () => this.desktop.importRdpFile(),
             hotkeys: () => this.showTabbySettings('hotkeys'),
             account: () => this.editAccount(null),
+            profiles: () => this.showTabbySettings('profiles'),
             'osd-white': () => this.changeOsd({ color: '' }),
             'osd-try': () => {
                 if (!this.desktop.showOsdEverywhere()) {
@@ -536,12 +541,16 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
         const accounts = this.desktop.accounts()
         list.replaceChildren(...accounts.map(a => {
             const uses = this.desktop.accountUses(a.id)
-            const used = uses.length ? `Used by ${uses.map(esc).join(', ')}` : 'Not used by a desktop yet'
+            // A profile's name opens its settings (Tabby's editor); a desktop behind an SSH host is edited from its host's tab.
+            const used = uses.length
+                ? `Used by ${uses.map(u => u.profileId ? `<a data-profile="${esc(u.profileId)}">${esc(u.name)}</a>` : esc(u.name)).join(', ')}`
+                : 'Not used by a desktop yet'
             const row = this.row(esc(a.name), `<span>${esc(signInName(a))}</span><br><span>${used}</span><span data-password></span>`, [
                 { label: 'Edit…', run: () => this.editAccount(a) },
                 { label: 'Remove…', danger: true, run: () => { this.desktop.confirmRemoveAccount(a.id) } },
             ])
-            // Without a password in the keychain, the first desktop to connect asks for it and saves it.
+            row.querySelectorAll<HTMLElement>('[data-profile]').forEach(el => el.addEventListener('click', () => this.zone.run(() => this.editProfile(el.dataset.profile!))))
+            // Without a password saved, the first desktop to connect asks for it and saves it.
             this.desktop.accountHasPassword(a.id).then(has => {
                 const note = row.querySelector('[data-password]')
                 if (note && has === 'no') {
@@ -855,6 +864,34 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
         if (profile) {
             await profiles.openNewTabForProfile(profile)
         }
+    }
+
+    /** Tabby's own profile editor on an existing profile, as its Profiles page opens it; saves what comes back. */
+    private async editProfile (id: string): Promise<void> {
+        const profiles = this.injector.get(ProfilesService)
+        const profile = (await profiles.getProfiles()).find(p => p.id === id)
+        const provider = profile && profiles.providerForProfile(profile)
+        let modal: any = null
+        try {
+            const { NgbModal } = require('@ng-bootstrap/ng-bootstrap')
+            const { EditProfileModalComponent } = require('tabby-settings')
+            modal = provider && this.injector.get(NgbModal).open(EditProfileModalComponent, { size: 'lg' })
+        } catch {
+            modal = null
+        }
+        if (!modal || !profile || !provider) {
+            this.showTabbySettings('profiles')
+            return
+        }
+        modal.componentInstance.partialProfile = JSON.parse(JSON.stringify(profile))
+        modal.componentInstance.profileProvider = provider
+        const result = await modal.result.catch(() => null)
+        if (!result) {
+            return
+        }
+        result.type = provider.id
+        await profiles.writeProfile(result)
+        await this.config.save()
     }
 
     /** Tabby's own profile editor, for a new remote desktop profile; else its Profiles page. */
