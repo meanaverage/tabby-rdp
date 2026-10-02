@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.4.0
 
 **New**
 - **Saved accounts** ([#11](https://github.com/meanaverage/tabby-rdp/issues/11)): a user name and domain under a
