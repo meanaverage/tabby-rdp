@@ -43,6 +43,9 @@ const STYLE = `
 .trd-settings .nav-tabs .nav-link { cursor: pointer; }
 .trd-settings section { margin-bottom: 28px; scroll-margin-top: 12px; }
 .trd-settings section > h4 { font-size: 15px; margin-bottom: 10px; }
+.trd-settings section > h5 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; opacity: 0.6; margin: 22px 0 6px; }
+.trd-settings section > h5:first-of-type { margin-top: 4px; }
+.trd-settings .form-line .description a { cursor: pointer; text-decoration: underline; }
 .trd-settings .trd-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 10px; }
 .trd-settings .trd-card { display: flex; flex-direction: column; gap: 8px; padding: 12px; border-radius: 6px;
     border: 1px solid rgba(128, 128, 128, 0.25); }
@@ -231,6 +234,7 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
 
             <section data-topic="settings">
                 <h4>Settings</h4>
+                <h5>Picture</h5>
                 <div class="form-line">
                     <div class="header">
                         <div class="title">When the pane is resized</div>
@@ -255,12 +259,26 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
                         <option value="retina">Retina</option>
                     </select>
                 </div>
-                ${this.toggleLine('sound', 'Sound', 'Play the remote desktop\'s sound here. Applies on the next connection.')}
-                ${this.toggleLine('microphone', 'Microphone', 'Send your microphone while an app there records, with a red dot in the corner meanwhile. Applies on the next connection.')}
                 ${this.toggleLine('h264', 'Video decoding (H.264)', 'Decodes what the remote sends as video, hardware-accelerated where available. Applies on the next connection.')}
                 ${this.toggleLine('connectionStatus', 'Show connection status', 'A small line in the desktop\'s corner: throughput, frames per second, round trip, and how it\'s connected.')}
+
+                <h5>Sound</h5>
+                ${this.toggleLine('sound', 'Sound', 'Play the remote desktop\'s sound here. Applies on the next connection.')}
+                ${this.toggleLine('microphone', 'Microphone', 'Send your microphone while an app there records, with a red dot in the corner meanwhile. Applies on the next connection.')}
+
+                <h5>Keyboard</h5>
                 ${mac ? this.toggleLine('macShortcuts', 'Mac-style shortcuts', 'Use ⌘ as Ctrl on the desktop, so ⌘C copies and ⌘V pastes. Tap ⌘ on its own for the Windows key. When off, ⌘ is always the Windows key.') : ''}
-                ${this.toggleLine('checkUpdates', 'Tell me about new versions', 'Once a day, asks npm (registry.npmjs.org) for the latest tabby-rdp, and says so here and in the menus when there is one. Nothing is sent but the request. Tabby itself shows plugin upgrades only on its Plugins page.')}
+                <div class="form-line">
+                    <div class="header">
+                        <div class="title">Shortcuts</div>
+                        <div class="description">Switching between the desktop and the console, view only, screenshots and more: on the
+                            <a data-action="shortcuts">Getting started</a> tab, and in Tabby's Hotkeys.</div>
+                    </div>
+                    <div><span data-hotkey></span></div>
+                </div>
+
+                <h5>SSH hosts</h5>
+                ${this.toggleLine('desk', 'desk: bring the console along', `Type <code>desk</code> in an SSH console to show that same shell on the desktop. Installs a small helper and a login line on GNOME hosts the next time a desktop opens there; off removes them.`)}
                 ${this.toggleLine('discoverVMs', 'Find virtual machines on SSH hosts', 'Lists the host\'s libvirt VMs that have a desktop (RDP answering, or Windows and shut off) in its tab\'s menu, ready to open or start. Read-only: it runs virsh as you there, at most once a minute.')}
                 <div class="form-line">
                     <div class="header">
@@ -276,14 +294,9 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
                         <option value="60">After an hour</option>
                     </select>
                 </div>
-                ${this.toggleLine('desk', 'desk: bring the console along', `Type <code>desk</code> in an SSH console to show that same shell on the desktop. Installs a small helper and a login line on GNOME hosts the next time a desktop opens there; off removes them.`)}
-                <div class="form-line">
-                    <div class="header">
-                        <div class="title">Switch between desktop and console</div>
-                        <div class="description">Also the <b>Desktop</b> button in an SSH tab's toolbar and in Tabby's header.</div>
-                    </div>
-                    <div><span data-hotkey></span> <button class="btn btn-link btn-sm" data-action="hotkeys">Change…</button></div>
-                </div>
+
+                <h5>Updates</h5>
+                ${this.toggleLine('checkUpdates', 'Tell me about new versions', 'Once a day, asks npm (registry.npmjs.org) for the latest tabby-rdp, and says so here and in the menus when there is one. Nothing is sent but the request. Tabby itself shows plugin upgrades only on its Plugins page.')}
             </section>
 
             <section data-topic="osd">
@@ -438,6 +451,7 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
             profile: () => this.newProfile(),
             import: () => this.desktop.importRdpFile(),
             hotkeys: () => this.showTabbySettings('hotkeys'),
+            shortcuts: () => this.reveal('keyboard'),
             account: () => this.editAccount(null),
             desktop: () => this.newProfile(),
             profiles: () => this.showTabbySettings('profiles'),
