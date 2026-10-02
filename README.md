@@ -40,8 +40,8 @@ nothing is opened on the network, and nothing has to be installed on the remote 
 - **`desk`:** type `desk` in the console and the same shell, with its history and running programs, moves into a
   terminal on the desktop.
 
-Everything is in **Settings › Remote Desktop**: getting started, every setting with a line on what it does, the keys,
-the desktops and certificates the plugin keeps, and troubleshooting.
+Everything is in **Settings › Remote Desktop**, in tabs: getting started and the shortcuts, the settings, the name
+overlay, the desktops and certificates the plugin keeps, saved accounts, and troubleshooting.
 
 The remote desktop itself is [IronRDP](https://github.com/Devolutions/IronRDP)'s web client, running inside Tabby.
 Making it work with GNOME took fixes in IronRDP, which we contribute upstream ([below](#built-on-ironrdp)).
@@ -53,6 +53,7 @@ Making it work with GNOME took fixes in IronRDP, which we contribute upstream ([
 - [Features](#features)
 - [Windows and other desktops behind a host](#windows-and-other-desktops-behind-a-host)
 - [Remote desktop profiles](#remote-desktop-profiles)
+- [Saved accounts](#saved-accounts)
 - [Several desktops in one tab](#several-desktops-in-one-tab)
 - [VMs on a host](#vms-on-a-host)
 - [desk: the console on the desktop](#desk-the-console-on-the-desktop)
@@ -120,7 +121,8 @@ connecting again.
 | **Screenshots** | **Save a screenshot** in the desktop's menus saves the remote screen at its full resolution as a PNG in Downloads, and copies it to the clipboard. |
 | **Connection status** | Optionally, a small line in the corner of the desktop with the throughput each way, frames per second, the SSH round trip, and how it is connected (desktop, host, resolution, graphics mode, sharpness). |
 | **Reconnecting** | After sleep or a network change, the desktop reconnects by itself once the connection is back. |
-| **Sign-in** | GNOME desktops need none: the plugin manages their credentials. Windows and xrdp desktops ask for the account once and can remember it in the system keychain; **Sign in again…** in the menu replaces it. |
+| **Sign-in** | GNOME desktops need none: the plugin manages their credentials. Windows and xrdp desktops ask for the account once and can remember it, in Tabby's Vault when that is on and in the system keychain otherwise; **Sign in again…** in the menu replaces it. Desktops that share an account can use a [saved account](#saved-accounts), whose password is kept once. |
+| **Shortcuts** | Switching between the desktop and the console, view only, a screenshot, Ctrl+Alt+Del, typing into or pasting to all desktops of a tab, the connection status and Disconnect each have a hotkey, set on the settings page or in Tabby's Hotkeys. They work while the desktop has the keyboard; a key another hotkey has is refused. |
 | **Certificates** | GNOME desktops accept only the certificate the plugin made for them. Windows and xrdp desktops remember theirs on first use and ask before accepting a different one. |
 
 <p align="center"><img src="docs/images/files.png" width="760" alt="A file copied on the remote desktop, offered for saving"></p>
@@ -217,6 +219,25 @@ A direct connection is a plain TCP connection from this computer, encrypted with
 server's certificate is remembered on the first connection and checked on every later one, as for desktops behind a
 host (above).
 
+## Saved accounts
+
+Several desktops often share one account: a domain admin, a lab user. A saved account keeps that user name (and
+domain) under a name, with its password stored once, so when the password changes it is entered once for all of them.
+
+**Settings › Remote Desktop › Accounts** lists them, with the desktops that use each one (click a name to open its
+settings), and adds, edits and removes them. A desktop picks its account in its profile's **Account** field, or in the
+form that adds a desktop behind an SSH host; **New account…** there adds one on the spot. A profile group's defaults
+for **Remote desktop (RDP)** can pick an account for every profile in the group (**Profiles & connections**, the group's
+menu), which is how to give a whole group of servers one sign-in.
+
+Signing in with a saved account that has no password yet, or whose password a server refused, asks for it, and the
+form saves what you enter as the account's new password for every desktop. A refused password is not dropped by
+itself: one server refusing it doesn't make it wrong for the others. **Sign in again…** on such a desktop asks anew.
+
+The accounts' names and user names are in Tabby's config (`remoteDesktop.accounts`); the passwords are in Tabby's
+Vault when it is enabled (encrypted, and carried by Tabby's config sync), else in the system keychain. Removing an
+account removes its password and sets its desktops back to asking.
+
 ## Several desktops in one tab
 
 Split a tab (Tabby's **Split** in the tab's menu, or drag one tab onto another) and each pane can show a desktop: one
@@ -285,12 +306,14 @@ They are stored in Tabby's config under `remoteDesktop`:
 | Microphone (`microphone`) | Off | Send your microphone while an app on the remote desktop records. Applies on the next connection. |
 | Show connection status (`connectionStatus`) | Off | The indicator in the desktop's corner; fades when the pointer comes near. |
 | Mac shortcuts (`macShortcuts`) | On | macOS. Off: ⌘ is the Windows key. |
+| Shortcuts (`hotkeys.remote-desktop-*`) | ⌘⇧G / Ctrl+Shift+G for the switch; the rest unbound | Tabby's hotkeys: the switch between desktop and console, view only, screenshot, Ctrl+Alt+Del, type into all, paste to all, connection status, disconnect. Changed on the settings page (Getting started › Shortcuts) or in Settings › Hotkeys. |
+| Saved accounts (`accounts`) | None | `[{ id, name, username, domain }]`; see [Saved accounts](#saved-accounts). The passwords are not in the config. |
 | Bring the console along with `desk` (`desk`) | Off | Installs `desk` and a login line on each machine you open a desktop on; applies on the next connection there. |
 | Session backend (`sessionBackend`) | `native` | For `desk`: `native` (trd-pty) or `tmux`. Config file only. |
 | Find virtual machines on SSH hosts (`discoverVMs`) | On | Lists a host's libvirt VMs with a desktop in its menu ([VMs on a host](#vms-on-a-host)). |
 | Shut down VMs it started (`shutDownIdle`) | Never | 5, 15 or 60: minutes without a desktop open after which a VM the plugin started is shut down again ([VMs on a host](#vms-on-a-host)). |
 | Tell me about new versions (`checkUpdates`) | On | Once a day, asks npm for the latest tabby-rdp (nothing else is sent), and says so in a note, the menus and the settings page when there's a newer one: Tabby itself shows plugin upgrades only on its Plugins page. |
-| Desktop name overlay (`osd`) | When it helps | `show` (`auto`, `always`, `off`), `font`, `size`, `position`, `color` (empty: white) and `seconds`; the settings page previews it. |
+| Desktop name overlay (`osd`) | When it helps | `show` (`auto`, `always`, `off`), `font`, `size`, `position`, `color` (empty: white) and `seconds`; the settings page previews it, at a resolution you pick. |
 
 ## Requirements
 
