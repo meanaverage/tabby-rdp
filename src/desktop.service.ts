@@ -587,10 +587,10 @@ export class RemoteDesktopService {
 
     /**
      * The desktops that sign in with a saved account: configured ones behind SSH hosts, and RDP profiles (their own
-     * choice, or their profile group's default when they make none). Profiles come with their id, for editing.
+     * choice, or their profile group's default when they make none). Each comes with what opens its editor.
      */
-    accountUses (id: string): { name: string, profileId?: string }[] {
-        const desktops = this.configuredDesktops().filter(d => d.account === id).map(d => ({ name: String(d.name ?? desktopIdOf(d)) }))
+    accountUses (id: string): { name: string, profileId?: string, desktopIndex?: number }[] {
+        const desktops = this.configuredDesktops().flatMap((d, i) => d.account === id ? [{ name: String(d.name ?? desktopIdOf(d)), desktopIndex: i }] : [])
         const groups: any[] = this.config.store.groups ?? []
         const inherited = (p: any) => p.options?.account === undefined && groups.find(g => g.id === p.group)?.defaults?.[RDP_PROFILE_TYPE]?.options?.account === id
         const profiles = (this.config.store.profiles ?? [])
@@ -725,21 +725,29 @@ export class RemoteDesktopService {
      * sharpness along; a new user name drops the saved account, which was for the old one. Open sessions keep running.
      */
     async editDesktop (pane: DesktopPane, index: number): Promise<void> {
-        const old = this.configuredDesktops()[index]
-        if (!old) {
+        if (!this.configuredDesktops()[index]) {
             return
         }
         if (this.isVisible(pane)) {
             this.showConsole(pane)
         }
-        const entry = await askDesktop(pane.element.nativeElement, {
+        await this.editDesktopIn(pane.element.nativeElement, index)
+        pane.frontend?.focus()
+    }
+
+    /** "Edit a desktop" with the form over any element (a pane, or the settings page). */
+    async editDesktopIn (host: HTMLElement, index: number): Promise<void> {
+        const old = this.configuredDesktops()[index]
+        if (!old) {
+            return
+        }
+        const entry = await askDesktop(host, {
             title: `Edit ${old.name ?? desktopIdOf(old)} (behind ${old.via})`,
             action: 'Save',
             accounts: this.accounts(),
             entry: old,
             check: e => this.addressTaken(e, index),
         })
-        pane.frontend?.focus()
         // Compared with the entry as it is now: the config can change while the form shows.
         const list = this.configuredDesktops()
         if (!entry || list[index] !== old) {

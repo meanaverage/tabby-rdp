@@ -81,7 +81,10 @@ const STYLE = `
 .trd-settings .trd-account-form .trd-account-error:empty { display: none; }
 .trd-settings .trd-account-form .trd-account-buttons { grid-column: 1 / -1; display: flex; gap: 8px; justify-content: flex-end; }
 .trd-settings .trd-list + .trd-add { margin-top: 10px; display: flex; gap: 6px; align-items: center; }
-.trd-settings .trd-row a[data-profile] { cursor: pointer; text-decoration: underline; }
+.trd-settings .trd-row a[data-profile], .trd-settings .trd-row a[data-desktop] { cursor: pointer; text-decoration: underline; }
+.trd-settings .trd-form-overlay { position: fixed; inset: 0; z-index: 1050; background: rgba(0, 0, 0, 0.55); }
+.trd-settings .trd-form-overlay .trd-signin form { padding: 20px; border-radius: 6px; background: var(--bs-body-bg, #1b1b1b);
+    border: 1px solid rgba(128, 128, 128, 0.35); box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5); width: 420px; }
 .trd-settings details { border-bottom: 1px solid rgba(128, 128, 128, 0.15); padding: 6px 0; }
 .trd-settings details summary { cursor: pointer; }
 .trd-settings details > div { padding: 6px 0 4px 16px; font-size: 13px; opacity: 0.85; }
@@ -525,10 +528,11 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
             const account = d.account ? this.desktop.accounts().find(a => a.id === d.account) : undefined
             const who = account ? ` · account ${esc(account.name)}` : d.username ? ` · ${esc(d.username)}` : ''
             return this.row(esc(d.name ?? address), `${esc(address)} behind ${esc(d.via)} · ${esc(d.kind ?? 'windows')}${who}${wake}`, [
+                { label: 'Edit…', run: () => { this.desktop.editDesktopIn(this.root, i) } },
                 { label: 'Remove…', danger: true, run: () => { this.desktop.confirmRemoveDesktop(i) } },
             ])
         }), this.empty(desktops.length
-            ? 'To edit one, right-click its host\'s SSH tab › Settings › Edit a desktop.'
+            ? 'Also in the host\'s SSH tab: right-click › Settings › Edit a desktop.'
             : 'None yet. A Windows VM or another computer an SSH host can reach: right-click that host\'s SSH tab › <b>Desktops › Add a desktop behind…</b>'))
     }
 
@@ -541,15 +545,17 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
         const accounts = this.desktop.accounts()
         list.replaceChildren(...accounts.map(a => {
             const uses = this.desktop.accountUses(a.id)
-            // A profile's name opens its settings (Tabby's editor); a desktop behind an SSH host is edited from its host's tab.
+            // Each name opens its editor: Tabby's for a profile, the plugin's form for a desktop behind an SSH host.
             const used = uses.length
-                ? `Used by ${uses.map(u => u.profileId ? `<a data-profile="${esc(u.profileId)}">${esc(u.name)}</a>` : esc(u.name)).join(', ')}`
+                ? `Used by ${uses.map(u => u.profileId ? `<a data-profile="${esc(u.profileId)}">${esc(u.name)}</a>`
+                    : u.desktopIndex !== undefined ? `<a data-desktop="${u.desktopIndex}">${esc(u.name)}</a>` : esc(u.name)).join(', ')}`
                 : 'Not used by a desktop yet'
             const row = this.row(esc(a.name), `<span>${esc(signInName(a))}</span><br><span>${used}</span><span data-password></span>`, [
                 { label: 'Edit…', run: () => this.editAccount(a) },
                 { label: 'Remove…', danger: true, run: () => { this.desktop.confirmRemoveAccount(a.id) } },
             ])
             row.querySelectorAll<HTMLElement>('[data-profile]').forEach(el => el.addEventListener('click', () => this.zone.run(() => this.editProfile(el.dataset.profile!))))
+            row.querySelectorAll<HTMLElement>('[data-desktop]').forEach(el => el.addEventListener('click', () => this.zone.run(() => this.desktop.editDesktopIn(this.root, Number(el.dataset.desktop)))))
             // Without a password saved, the first desktop to connect asks for it and saves it.
             this.desktop.accountHasPassword(a.id).then(has => {
                 const note = row.querySelector('[data-password]')
@@ -866,19 +872,25 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
         }
     }
 
+    /** Tabby's profile editor (EditProfileModalComponent), opened in Angular's zone so that it is drawn at once; null without it. */
+    private openModal (): any {
+        try {
+            const { NgbModal } = require('@ng-bootstrap/ng-bootstrap')
+            const { EditProfileModalComponent } = require('tabby-settings')
+            return this.zone.run(() => this.injector.get(NgbModal).open(EditProfileModalComponent, { size: 'lg' }))
+        } catch {
+            return null
+        }
+    }
+
     /** Tabby's own profile editor on an existing profile, as its Profiles page opens it; saves what comes back. */
     private async editProfile (id: string): Promise<void> {
         const profiles = this.injector.get(ProfilesService)
         const profile = (await profiles.getProfiles()).find(p => p.id === id)
         const provider = profile && profiles.providerForProfile(profile)
-        let modal: any = null
-        try {
-            const { NgbModal } = require('@ng-bootstrap/ng-bootstrap')
-            const { EditProfileModalComponent } = require('tabby-settings')
-            modal = provider && this.injector.get(NgbModal).open(EditProfileModalComponent, { size: 'lg' })
-        } catch {
-            modal = null
-        }
+        // Opened inside Angular's zone: after the await above, the zone can be lost, and a modal opened outside it isn't
+        // drawn until the next click, which then lands outside it and closes it.
+        const modal = provider ? this.openModal() : null
         if (!modal || !profile || !provider) {
             this.showTabbySettings('profiles')
             return
@@ -899,14 +911,7 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
         const profiles = this.injector.get(ProfilesService)
         const template = (await profiles.getProfiles()).find(p => p.type === RDP_PROFILE_TYPE && p.isTemplate)
         const provider = template && profiles.providerForProfile(template)
-        let modal: any = null
-        try {
-            const { NgbModal } = require('@ng-bootstrap/ng-bootstrap')
-            const { EditProfileModalComponent } = require('tabby-settings')
-            modal = provider && this.injector.get(NgbModal).open(EditProfileModalComponent, { size: 'lg' })
-        } catch {
-            modal = null
-        }
+        const modal = provider ? this.openModal() : null
         if (!modal || !template || !provider) {
             this.showTabbySettings('profiles')
             return
