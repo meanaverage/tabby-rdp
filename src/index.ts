@@ -17,7 +17,7 @@ import {
 import { RemoteDesktopSettingsComponent, RemoteDesktopSettingsTab } from './settingsPage'
 import { UpdateCheck } from './updates'
 import { execRemote } from './ssh'
-import { desktopPaneOf, RemoteTargets } from './targets'
+import { DesktopPane, desktopPaneOf, RemoteTargets } from './targets'
 import {
     RemoteDesktopConfig, RemoteDesktopContextMenu, RemoteDesktopHotkeys, RemoteDesktopToolbarButton, TOGGLE_HOTKEY,
 } from './ui'
@@ -44,14 +44,27 @@ export default class RemoteDesktopModule {
         installStyle()
         header.install()
         injector.get(UpdateCheck).start()
-        keyboard.install(TOGGLE_HOTKEY)
+        keyboard.install()
+        // The plugin's hotkeys (see HOTKEYS in help.ts) act on the active tab's desktop.
+        const actions: Record<string, (pane: DesktopPane) => void> = {
+            [TOGGLE_HOTKEY]: pane => desktop.toggle(pane),
+            'remote-desktop-view-only': pane => desktop.setViewOnly(pane, !desktop.isViewOnly(pane)),
+            'remote-desktop-screenshot': pane => desktop.saveScreenshot(pane),
+            'remote-desktop-ctrl-alt-del': pane => keyboard.send(pane, { label: 'Ctrl+Alt+Del', codes: ['ControlLeft', 'AltLeft', 'Delete'] }),
+            'remote-desktop-type-into-all': pane => desktop.setBroadcast(pane, !desktop.isBroadcast(pane)),
+            'remote-desktop-paste-to-all': pane => desktop.pasteToAll(pane),
+            'remote-desktop-connection-status': () => desktop.updateSettings({ connectionStatus: !desktop.settings().connectionStatus }),
+            'remote-desktop-disconnect': pane => desktop.disconnect(pane),
+        }
         hotkeys.hotkey$.subscribe((id: string) => {
-            if (id !== TOGGLE_HOTKEY) {
+            const action = actions[id] as ((pane: DesktopPane) => void) | undefined
+            const pane = action && desktopPaneOf(app.activeTab)
+            if (!action || !pane) {
                 return
             }
-            const pane = desktopPaneOf(app.activeTab)
-            if (pane) {
-                desktop.toggle(pane)
+            // The switch works without a desktop open (it opens one); the rest act on an open desktop.
+            if (id === TOGGLE_HOTKEY || desktop.has(pane)) {
+                action(pane)
             }
         })
         // Handle for tests and troubleshooting from DevTools.

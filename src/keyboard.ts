@@ -60,7 +60,7 @@ export const SEND_KEYS: Record<DesktopKind, KeyCombo[]> = {
 
 /**
  * Routes the keyboard while a remote desktop has it:
- * - Tabby's hotkeys: only the desktop/console switch and TABBY_SHORTCUTS fire, and those don't reach the remote.
+ * - Tabby's hotkeys: only the plugin's own (`remote-desktop-*`) and TABBY_SHORTCUTS fire, and those don't reach the remote.
  * - Mac shortcuts (setting, on by default): ⌘ is sent as Ctrl, so ⌘C/⌘V/⌘Z/… do what they do on a Mac, and
  *   tapping ⌘ on its own is the Windows/Super key (Start, Activities). ⌃⌘+key is the Windows key with that key
  *   (Win+R, Win+E, …). Off: ⌘ is the Windows/Super key.
@@ -84,14 +84,14 @@ export class DesktopKeyboard {
         private zone: NgZone,
     ) { }
 
-    install (toggleHotkey: string): void {
+    install (): void {
         // Tabby matches hotkeys in a document listener; filter what it may match while a desktop covers the pane.
         const hotkeys = this.hotkeys as any
         const match = hotkeys.matchActiveHotkey?.bind(hotkeys)
         if (typeof match === 'function') {
             hotkeys.matchActiveHotkey = (partial?: boolean) => {
                 const id: string | null = match(partial)
-                if (id && this.coveredPane() && id !== toggleHotkey && !TABBY_SHORTCUTS.has(id) && !/^tab-\d+$/.test(id)) {
+                if (id && this.coveredPane() && !id.startsWith('remote-desktop-') && !TABBY_SHORTCUTS.has(id) && !/^tab-\d+$/.test(id)) {
                     return null
                 }
                 return id

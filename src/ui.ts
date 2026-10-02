@@ -5,7 +5,7 @@ import {
 } from 'tabby-core'
 import { BaseTerminalTabComponent, TerminalDecorator } from 'tabby-terminal'
 import { DesktopSettings, RemoteDesktopService } from './desktop.service'
-import { RemoteDesktopHelp, TOGGLE_HOTKEY } from './help'
+import { HOTKEYS, RemoteDesktopHelp, TOGGLE_HOTKEY } from './help'
 import { DesktopKeyboard, SEND_KEYS } from './keyboard'
 import { UpdateCheck } from './updates'
 import { isSSHTab } from './ssh'
@@ -17,14 +17,14 @@ export { TOGGLE_HOTKEY }
 @Injectable()
 export class RemoteDesktopHotkeys extends HotkeyProvider {
     async provide (): Promise<HotkeyDescription[]> {
-        return [{ id: TOGGLE_HOTKEY, name: 'Remote desktop: switch between desktop and console (SSH tabs and terminals running ssh)' }]
+        return HOTKEYS.map(h => ({ id: h.id, name: `Remote desktop: ${h.name}` }))
     }
 }
 
 @Injectable()
 export class RemoteDesktopConfig extends ConfigProvider {
     override defaults = {
-        hotkeys: { [TOGGLE_HOTKEY]: [] },
+        hotkeys: Object.fromEntries(HOTKEYS.map(h => [h.id, []])),
         remoteDesktop: {
             // Shareable session for SSH logins ('desk'): 'native' (trd-pty) or 'tmux' (earlier setup).
             sessionBackend: 'native',

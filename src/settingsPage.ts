@@ -1,12 +1,12 @@
 import { Component, ElementRef, HostBinding, Injectable, Injector, NgZone, OnDestroy, OnInit } from '@angular/core'
 import { Subscription } from 'rxjs'
-import { AppService, ConfigService, NotificationsService, PlatformService, ProfilesService } from 'tabby-core'
+import { AppService, ConfigService, HotkeyDescription, HotkeysService, NotificationsService, PlatformService, ProfilesService } from 'tabby-core'
 import { SettingsTabComponent, SettingsTabProvider } from 'tabby-settings'
 import { SavedAccount, signInName } from './accounts'
 import { DesktopSettings, RemoteDesktopService } from './desktop.service'
 import { DIRECT_KEY } from './desktops'
 import { OSD_FONTS, OSD_POSITIONS, OSD_SIZES, OSD_STYLE, OsdSettings, renderOsd } from './osd'
-import { esc, HelpTopic, RemoteDesktopHelp, SETTINGS_TAB_ID, TROUBLESHOOTING } from './help'
+import { esc, HelpTopic, HOTKEYS, RemoteDesktopHelp, SETTINGS_TAB_ID, TROUBLESHOOTING } from './help'
 import { installedVersion, UpdateCheck } from './updates'
 import { RDP_PROFILE_TYPE } from './targets'
 
@@ -32,6 +32,7 @@ const STYLE = `
 .trd-settings .trd-lead { margin-bottom: 18px; opacity: 0.75; }
 .trd-settings .trd-links { white-space: nowrap; }
 .trd-settings .trd-lead a { margin-left: 10px; }
+.trd-settings section .trd-lead a { margin-left: 0; cursor: pointer; text-decoration: underline; }
 .trd-settings .trd-update { display: flex; gap: 10px; align-items: center; margin-bottom: 18px; padding: 10px 12px; border-radius: 6px;
     border: 1px solid rgba(80, 150, 255, 0.45); background: rgba(80, 150, 255, 0.1); }
 .trd-settings .trd-update > div { flex: auto; }
@@ -47,8 +48,24 @@ const STYLE = `
 .trd-settings .trd-card .trd-card-title { font-weight: 600; }
 .trd-settings .trd-card .trd-card-text { flex: auto; font-size: 12px; opacity: 0.8; }
 .trd-settings .trd-card button { align-self: flex-start; }
-.trd-settings kbd { padding: 1px 5px; border-radius: 3px; font-size: 11px; background: rgba(128, 128, 128, 0.25);
+.trd-settings kbd { padding: 2px 7px; border-radius: 3px; font-size: 13px; background: rgba(128, 128, 128, 0.25);
     color: inherit; white-space: nowrap; }
+.trd-settings .trd-hotkeys .row { border-bottom: 1px solid rgba(128, 128, 128, 0.15); }
+.trd-settings .trd-hotkeys .trd-hotkey-name { font-size: 13px; }
+.trd-settings .trd-hotkeys .trd-conflict { font-size: 12px; color: var(--bs-danger, #e55); }
+.trd-settings .trd-hotkeys multi-hotkey-input { display: flex; flex-wrap: wrap; gap: 5px 0; font-size: 13px; }
+.trd-settings .trd-hotkeys multi-hotkey-input .item, .trd-settings .trd-hotkeys multi-hotkey-input .item .body { display: flex; cursor: pointer; }
+.trd-settings .trd-hotkeys multi-hotkey-input .add { cursor: pointer; }
+.trd-capture { position: fixed; inset: 0; z-index: 2000; display: flex; align-items: center; justify-content: center; background: rgba(0, 0, 0, 0.45); }
+.trd-capture hotkey-input-modal { display: block; width: 420px; max-width: calc(100% - 32px); border-radius: 6px; background: var(--bs-body-bg, #222);
+    border: 1px solid rgba(128, 128, 128, 0.35); box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5); }
+.trd-capture .modal-header, .trd-capture .modal-footer { padding: 12px 16px; }
+.trd-capture .modal-header h5 { margin: 0; }
+.trd-capture .modal-body { padding: 0 16px 10px; }
+.trd-capture .input { display: flex; align-items: center; }
+.trd-capture .input:empty::before { content: 'Press the key now'; opacity: 0.4; font-size: 14px; }
+.trd-capture .timeout { height: 3px; border-radius: 2px; overflow: hidden; }
+.trd-capture .timeout div { height: 100%; transition: width 25ms linear; }
 .trd-settings .trd-keys { width: 100%; font-size: 13px; }
 .trd-settings .trd-keys td { padding: 5px 0; vertical-align: top; border-bottom: 1px solid rgba(128, 128, 128, 0.15); }
 .trd-settings .trd-keys td:first-child { width: 38%; padding-right: 12px; }
@@ -117,6 +134,7 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
         private platform: PlatformService,
         private injector: Injector,
         private zone: NgZone,
+        private hotkeys: HotkeysService,
     ) { }
 
     ngOnInit (): void {
@@ -299,9 +317,12 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
             </section>
 
             <section data-topic="keyboard">
-                <h4>Keys and tips</h4>
+                <h4>Shortcuts</h4>
+                <div class="trd-lead">They work while the desktop has the keyboard, and are also listed in Tabby's <a data-action="hotkeys">Hotkeys</a>.
+                    While a desktop shows, Tabby's other shortcuts go to the desktop, except switching tabs and full screen.</div>
+                <div class="trd-hotkeys" data-list="hotkeys"></div>
+                <h4 style="margin-top: 24px">Keys and tips</h4>
                 <table class="trd-keys"><tbody>
-                    <tr><td data-hotkey-cell></td><td>Switch between the desktop and the SSH console. The desktop keeps running.</td></tr>
                     ${mac ? `
                     <tr><td>${k('⌘C')} ${k('⌘V')} ${k('⌘Z')} …</td><td>Work as on a Mac (sent as Ctrl).</td></tr>
                     <tr><td>Tap ${k('⌘')}</td><td>The Windows key (Start, or GNOME's Activities).</td></tr>
@@ -310,7 +331,6 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
                     <tr><td>Drop files on the desktop</td><td>Then paste them in Files or Explorer. Files copied there offer <b>Save to Downloads</b>.</td></tr>
                     <tr><td>Right-click › <b>View only</b></td><td>Watch without touching: no keys or clicks go to the desktop.</td></tr>
                     <tr><td>Right-click › <b>Save a screenshot</b></td><td>The full-resolution screen, to Downloads and the clipboard.</td></tr>
-                    <tr><td>Tabby's shortcuts</td><td>While a desktop shows, only switching tabs, full screen and the switch above stay Tabby's; the rest go to the desktop.</td></tr>
                 </tbody></table>
             </section>
 
@@ -453,11 +473,8 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
         this.root.querySelectorAll<HTMLElement>('[data-hotkey]').forEach(el => {
             el.innerHTML = hotkey ? k(hotkey) : '<i>(no shortcut)</i>'
         })
-        const cell = this.root.querySelector('[data-hotkey-cell]')
-        if (cell) {
-            cell.innerHTML = hotkey ? k(hotkey) : 'The <b>Desktop</b> button'
-        }
         this.renderDesktops()
+        this.renderHotkeys()
         this.renderAccounts()
         this.renderCertificates()
         this.renderSessions()
@@ -589,6 +606,178 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
         })
         list.appendChild(form)
         field(account ? 'password' : 'name').focus()
+    }
+
+    /** Every hotkey Tabby knows, by id, for naming what a binding of ours collides with. */
+    private hotkeyNames: Map<string, string> | null = null
+
+    /** The bindings of a hotkey id in the config, each as its strokes (a chord is several). */
+    private bindingsOf (id: string): string[][] {
+        const value = this.config.store.hotkeys?.[id]
+        return Array.isArray(value) ? value.map((b: string | string[]) => Array.isArray(b) ? b : [b]).filter((b: string[]) => b.length) : []
+    }
+
+    /** The other hotkeys bound to the same strokes (Tabby's and this plugin's), by id. */
+    private collisions (id: string, strokes: string[]): string[] {
+        const key = strokes.join(' ')
+        return Object.entries(this.config.store.hotkeys ?? {})
+            .filter(([other, value]) => other !== id && Array.isArray(value) && value.some((b: string | string[]) => (Array.isArray(b) ? b : [b]).join(' ') === key))
+            .map(([other]) => other)
+    }
+
+    private writeBindings (id: string, bindings: string[][]): void {
+        this.config.store.hotkeys[id] = bindings.map(b => b.length === 1 ? b[0] : b)
+        this.config.save()
+    }
+
+    /** The plugin's shortcuts with their bindings, as Tabby's Hotkeys page shows them: chips to change, × to remove, Add… */
+    private renderHotkeys (): void {
+        const list = this.root.querySelector('[data-list=hotkeys]')
+        if (!list) {
+            return
+        }
+        if (!this.hotkeyNames) {
+            this.hotkeyNames = new Map()
+            this.hotkeys.getHotkeyDescriptions().then((all: HotkeyDescription[]) => {
+                this.hotkeyNames = new Map(all.map(h => [h.id, h.name]))
+                this.renderHotkeys()
+            }, () => null)
+        }
+        const names = this.hotkeyNames
+        list.replaceChildren(...HOTKEYS.map(h => {
+            const bindings = this.bindingsOf(h.id)
+            const row = document.createElement('div')
+            row.className = 'row align-items-center'
+            row.innerHTML = '<div class="col-7 py-2 trd-hotkey-name"></div><div class="col-5 py-2"><multi-hotkey-input></multi-hotkey-input></div>'
+            row.querySelector('.trd-hotkey-name')!.textContent = h.name
+            const input = row.querySelector('multi-hotkey-input')!
+            const conflicts: string[] = []
+            bindings.forEach((strokes, i) => {
+                const taken = this.collisions(h.id, strokes)
+                conflicts.push(...taken.map(id => `${strokes.join(' ')} is also ${this.hotkeyName(id)}`))
+                const item = document.createElement('div')
+                item.className = 'item'
+                const body = document.createElement('div')
+                body.className = 'body'
+                body.title = 'Change'
+                body.append(...strokes.map(stroke => {
+                    const el = document.createElement('div')
+                    el.className = 'stroke'
+                    el.innerHTML = `<span${taken.length ? ' class="duplicate"' : ''}></span>`
+                    el.firstElementChild!.textContent = stroke
+                    return el
+                }))
+                body.addEventListener('mousedown', event => {
+                    if (event.button !== 0) return
+                    this.zone.run(async () => {
+                        const strokes = await this.captureFor(h.id)
+                        if (strokes) {
+                            const next = this.bindingsOf(h.id)
+                            next[i] = strokes
+                            this.writeBindings(h.id, next)
+                        }
+                    })
+                })
+                const remove = document.createElement('div')
+                remove.className = 'remove'
+                remove.title = 'Remove'
+                remove.textContent = '×'
+                remove.addEventListener('mousedown', event => {
+                    if (event.button !== 0) return
+                    this.zone.run(() => this.writeBindings(h.id, this.bindingsOf(h.id).filter((_, n) => n !== i)))
+                })
+                item.append(body, remove)
+                input.appendChild(item)
+            })
+            const add = document.createElement('div')
+            add.className = 'add'
+            add.textContent = 'Add…'
+            add.addEventListener('click', () => this.zone.run(async () => {
+                const strokes = await this.captureFor(h.id)
+                if (strokes) {
+                    this.writeBindings(h.id, [...this.bindingsOf(h.id), strokes])
+                }
+            }))
+            input.appendChild(add)
+            if (conflicts.length) {
+                const note = document.createElement('div')
+                note.className = 'col-12 pb-2 trd-conflict'
+                note.textContent = `${conflicts.join('; ')}: both would fire. Change one of them.`
+                row.appendChild(note)
+            }
+            return row
+        }))
+    }
+
+    /** A hotkey's name for a conflict note: one of ours by its short name, Tabby's as Tabby's Hotkeys page lists it. */
+    private hotkeyName (id: string): string {
+        const own = HOTKEYS.find(h => h.id === id)
+        return own ? `"${own.name}" (above or below)` : `Tabby's "${this.hotkeyNames?.get(id) ?? id}"`
+    }
+
+    /** Asks for a binding for one of our hotkeys, and refuses one that another hotkey has: both would fire. */
+    private async captureFor (id: string): Promise<string[] | null> {
+        const strokes = await this.captureHotkey()
+        if (!strokes) {
+            return null
+        }
+        const taken = this.collisions(id, strokes)
+        if (taken.length) {
+            this.injector.get(NotificationsService).error(`${strokes.join(' ')} is already ${taken.map(t => this.hotkeyName(t)).join(' and ')}. Choose another, or change that one first.`)
+            return null
+        }
+        return strokes
+    }
+
+    /**
+     * Tabby's "Press the key now" dialog, rebuilt in plain DOM over the page (Tabby's is not exported): the strokes
+     * pressed, taken a second after the last one. Resolves with them, or null on Cancel. Tabby's hotkeys are off
+     * meanwhile, so the keys pressed don't act.
+     */
+    private captureHotkey (): Promise<string[] | null> {
+        const overlay = document.createElement('div')
+        overlay.className = 'trd-capture'
+        overlay.innerHTML = `<hotkey-input-modal>
+            <div class="modal-header"><h5>Press the key now</h5></div>
+            <div class="modal-body"><div class="input"></div><div class="timeout"><div style="width: 0%"></div></div></div>
+            <div class="modal-footer"><button class="btn btn-primary" type="button">Cancel</button></div>
+        </hotkey-input-modal>`
+        const input = overlay.querySelector<HTMLElement>('.input')!
+        const bar = overlay.querySelector<HTMLElement>('.timeout div')!
+        document.body.appendChild(overlay)
+        this.hotkeys.clearCurrentKeystrokes()
+        this.hotkeys.disable()
+        const strokes: string[] = []
+        let last: number | null = null
+        return new Promise<string[] | null>(resolve => {
+            const keys = this.hotkeys.keyEvent$.subscribe(event => {
+                event.preventDefault()
+                event.stopPropagation()
+            })
+            const taken = this.hotkeys.keystroke$.subscribe(stroke => {
+                last = performance.now()
+                strokes.push(stroke)
+                const el = document.createElement('div')
+                el.className = 'stroke'
+                el.textContent = stroke
+                input.appendChild(el)
+            })
+            const timer = window.setInterval(() => {
+                if (last === null) return
+                const progress = Math.min(100, (performance.now() - last) / 10)
+                bar.style.width = `${progress}%`
+                if (progress === 100) done(strokes)
+            }, 25)
+            const done = (result: string[] | null) => {
+                clearInterval(timer)
+                keys.unsubscribe()
+                taken.unsubscribe()
+                this.hotkeys.enable()
+                overlay.remove()
+                resolve(result)
+            }
+            overlay.querySelector('button')!.addEventListener('click', () => done(null))
+        })
     }
 
     private renderCertificates (): void {
