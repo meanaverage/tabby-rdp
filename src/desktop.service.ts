@@ -20,7 +20,7 @@ import { parseRdpFile } from './rdpFile'
 import { prepareRemoteDesktop } from './remoteSetup'
 import { normalizeFingerprint, RDCleanPathProxy, startRDCleanPathProxy } from './rdcleanpath'
 import {
-    askCredentials, Credentials, forgetCredentials, forgetCredentialsFor, loadCredentials, moveCredentialsFor, saveCredentials,
+    askCredentials, Credentials, forgetCredentials, forgetCredentialsFor, hasCredentials, loadCredentials, moveCredentialsFor, saveCredentials,
     storeName, STYLE as SIGNIN_STYLE,
 } from './signin'
 import { isSSHTab } from './ssh'
@@ -619,9 +619,9 @@ export class RemoteDesktopService {
         return { id: entry.id, keychainError }
     }
 
-    /** Whether the keychain holds a password for the saved account. */
-    async accountHasPassword (id: string): Promise<boolean> {
-        return !!await loadCredentials(accountKey(id))
+    /** Whether a password is saved for the account; 'unknown' while the Vault is locked (it isn't unlocked for this). */
+    accountHasPassword (id: string): Promise<'yes' | 'no' | 'unknown'> {
+        return hasCredentials(accountKey(id))
     }
 
     /** "Remove…" on a saved account: asks first, naming the desktops that use it. Resolves true when removed. */

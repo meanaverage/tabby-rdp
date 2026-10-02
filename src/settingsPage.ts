@@ -544,7 +544,7 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
             // Without a password in the keychain, the first desktop to connect asks for it and saves it.
             this.desktop.accountHasPassword(a.id).then(has => {
                 const note = row.querySelector('[data-password]')
-                if (note && !has) {
+                if (note && has === 'no') {
                     note.innerHTML = '<br>No password saved: asked for on the next connection'
                 }
             }, () => null)

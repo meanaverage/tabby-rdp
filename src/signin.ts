@@ -100,6 +100,31 @@ export async function loadCredentials (key: string): Promise<Credentials | null>
 }
 
 /** `label`: how the Vault page lists it (a saved account's name); otherwise made from the key. */
+/**
+ * Whether credentials are saved under the key, without asking the user anything: a locked Vault stays locked (its
+ * entries can't be seen then: 'unknown'), where loadCredentials would prompt for the passphrase.
+ */
+export async function hasCredentials (key: string): Promise<'yes' | 'no' | 'unknown'> {
+    if (vaultOn()) {
+        try {
+            if (!vault.isOpen()) {
+                return 'unknown'
+            }
+            const contents = await vault.load()
+            if (contents?.secrets?.some((s: any) => s.type === VAULT_SECRET_TYPE && s.key?.key === key && parseCredentials(s.value))) {
+                return 'yes'
+            }
+        } catch {
+            return 'unknown'
+        }
+    }
+    try {
+        return parseCredentials(await answered<string | null>(keytar()?.getPassword(KEYCHAIN_SERVICE, key))) ? 'yes' : 'no'
+    } catch {
+        return 'unknown'
+    }
+}
+
 export async function saveCredentials (key: string, credentials: Credentials, label?: string): Promise<void> {
     if (vaultOn()) {
         await vault.addSecret({ type: VAULT_SECRET_TYPE, key: { ...vaultKey(key), description: label ?? vaultName(key) }, value: JSON.stringify(credentials) })
