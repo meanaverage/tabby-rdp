@@ -2,6 +2,7 @@ import { Component, ElementRef, HostBinding, Injectable, Injector, NgZone, OnDes
 import { Subscription } from 'rxjs'
 import { AppService, ConfigService, NotificationsService, PlatformService, ProfilesService } from 'tabby-core'
 import { SettingsTabComponent, SettingsTabProvider } from 'tabby-settings'
+import { SavedAccount, signInName } from './accounts'
 import { DesktopSettings, RemoteDesktopService } from './desktop.service'
 import { DIRECT_KEY } from './desktops'
 import { OSD_FONTS, OSD_POSITIONS, OSD_SIZES, OSD_STYLE, OsdSettings, renderOsd } from './osd'
@@ -42,6 +43,13 @@ const STYLE = `
 .trd-settings .trd-row > div { flex: auto; min-width: 0; }
 .trd-settings .trd-row .trd-sub { font-size: 12px; opacity: 0.7; overflow: hidden; text-overflow: ellipsis; }
 .trd-settings .trd-empty { font-size: 12px; opacity: 0.7; }
+.trd-settings .trd-account-form { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; padding: 12px; border-radius: 6px;
+    border: 1px solid rgba(128, 128, 128, 0.35); }
+.trd-settings .trd-account-form label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; margin: 0; }
+.trd-settings .trd-account-form .trd-account-error { grid-column: 1 / -1; color: #f08080; font-size: 12px; }
+.trd-settings .trd-account-form .trd-account-error:empty { display: none; }
+.trd-settings .trd-account-form .trd-account-buttons { grid-column: 1 / -1; display: flex; gap: 8px; justify-content: flex-end; }
+.trd-settings .trd-list + .trd-add { margin-top: 10px; }
 .trd-settings details { border-bottom: 1px solid rgba(128, 128, 128, 0.15); padding: 6px 0; }
 .trd-settings details summary { cursor: pointer; }
 .trd-settings details > div { padding: 6px 0 4px 16px; font-size: 13px; opacity: 0.85; }
@@ -295,6 +303,15 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
                 <div class="trd-list" data-list="desktops"></div>
             </section>
 
+            <section data-topic="accounts">
+                <h4>Accounts</h4>
+                <div class="trd-lead">A user name and password saved under a name, for desktops that share an account: choose
+                    it in a remote desktop profile, or in a desktop behind an SSH host. The password is kept in the system
+                    keychain, once, so a new password is entered once for all of them.</div>
+                <div class="trd-list" data-list="accounts"></div>
+                <button class="btn btn-secondary btn-sm trd-add" data-action="account">Add an account…</button>
+            </section>
+
             <section data-topic="certificates">
                 <h4>Remembered certificates</h4>
                 <div class="trd-list" data-list="certificates"></div>
@@ -328,6 +345,7 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
             profile: () => this.newProfile(),
             import: () => this.desktop.importRdpFile(),
             hotkeys: () => this.showTabbySettings('hotkeys'),
+            account: () => this.editAccount(null),
             'osd-white': () => this.changeOsd({ color: '' }),
             'osd-try': () => {
                 if (!this.desktop.showOsdEverywhere()) {
@@ -406,6 +424,7 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
             cell.innerHTML = hotkey ? k(hotkey) : 'The <b>Desktop</b> button'
         }
         this.renderDesktops()
+        this.renderAccounts()
         this.renderCertificates()
         this.renderSessions()
     }
@@ -440,12 +459,102 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
         list.replaceChildren(...desktops.map((d, i) => {
             const address = `${d.host ?? '127.0.0.1'}:${d.port ?? 3389}`
             const wake = d.wake?.vm ? ` · starts VM ${esc(d.wake.vm)}` : d.wake?.mac ? ` · wakes ${esc(d.wake.mac)}` : ''
-            return this.row(esc(d.name ?? address), `${esc(address)} behind ${esc(d.via)} · ${esc(d.kind ?? 'windows')}${d.username ? ` · ${esc(d.username)}` : ''}${wake}`, [
+            const account = d.account ? this.desktop.accounts().find(a => a.id === d.account) : undefined
+            const who = account ? ` · account ${esc(account.name)}` : d.username ? ` · ${esc(d.username)}` : ''
+            return this.row(esc(d.name ?? address), `${esc(address)} behind ${esc(d.via)} · ${esc(d.kind ?? 'windows')}${who}${wake}`, [
                 { label: 'Remove…', danger: true, run: () => { this.desktop.confirmRemoveDesktop(i) } },
             ])
         }), this.empty(desktops.length
             ? 'To edit one, right-click its host\'s SSH tab › Settings › Edit a desktop.'
             : 'None yet. A Windows VM or another computer an SSH host can reach: right-click that host\'s SSH tab › <b>Desktops › Add a desktop behind…</b>'))
+    }
+
+    private renderAccounts (): void {
+        const list = this.root.querySelector('[data-list=accounts]')
+        // The form holds what is being typed: a config change elsewhere doesn't rebuild the list under it.
+        if (!list || list.querySelector('.trd-account-form')) {
+            return
+        }
+        const accounts = this.desktop.accounts()
+        list.replaceChildren(...accounts.map(a => {
+            const uses = this.desktop.accountUses(a.id)
+            const used = uses.length ? `Used by ${uses.map(esc).join(', ')}` : 'Not used by a desktop yet'
+            const row = this.row(esc(a.name), `<span>${esc(signInName(a))}</span><br><span>${used}</span><span data-password></span>`, [
+                { label: 'Edit…', run: () => this.editAccount(a) },
+                { label: 'Remove…', danger: true, run: () => { this.desktop.confirmRemoveAccount(a.id) } },
+            ])
+            // Without a password in the keychain, the first desktop to connect asks for it and saves it.
+            this.desktop.accountHasPassword(a.id).then(has => {
+                const note = row.querySelector('[data-password]')
+                if (note && !has) {
+                    note.innerHTML = '<br>No password saved: asked for on the next connection'
+                }
+            }, () => null)
+            return row
+        }), ...accounts.length ? [] : [this.empty('None yet. Without one, each desktop asks for its account and can remember it for itself.')])
+    }
+
+    /** The form under the list, for a new account or `account`. */
+    private editAccount (account: SavedAccount | null): void {
+        const list = this.root.querySelector('[data-list=accounts]')
+        if (!list) {
+            return
+        }
+        list.querySelector('.trd-account-form')?.remove()
+        const form = document.createElement('form')
+        form.className = 'trd-account-form'
+        form.autocomplete = 'off'
+        form.innerHTML = `
+            <label>Name<input class="form-control" name="name" spellcheck="false" placeholder="e.g. Domain A admin"></label>
+            <label>User name<input class="form-control" name="username" spellcheck="false" placeholder="e.g. adm.user, or DOMAIN\\user"></label>
+            <label>Domain<input class="form-control" name="domain" spellcheck="false" placeholder="Optional"></label>
+            <label>Password<input class="form-control" name="password" type="password" autocomplete="new-password"></label>
+            <div class="trd-account-error"></div>
+            <div class="trd-account-buttons">
+                <button type="button" class="btn btn-secondary btn-sm" name="cancel">Cancel</button>
+                <button type="submit" class="btn btn-primary btn-sm"></button>
+            </div>`
+        const field = (name: string) => form.querySelector(`[name="${name}"]`) as HTMLInputElement
+        const error = form.querySelector('.trd-account-error')!
+        field('name').value = account?.name ?? ''
+        field('username').value = account?.username ?? ''
+        field('domain').value = account?.domain ?? ''
+        field('password').placeholder = account ? 'Leave empty to keep the saved one' : 'Optional; asked on the first connection'
+        form.querySelector('button[type=submit]')!.textContent = account ? 'Save' : 'Add'
+        const close = () => {
+            form.remove()
+            this.renderAccounts()
+        }
+        field('cancel').addEventListener('click', close)
+        form.addEventListener('keydown', event => {
+            if (event.key === 'Escape') {
+                close()
+            }
+        })
+        form.addEventListener('submit', event => {
+            event.preventDefault()
+            const username = field('username').value.trim()
+            const name = field('name').value.trim()
+            if (!username) {
+                error.textContent = 'Give it a user name.'
+                field('username').focus()
+                return
+            }
+            if (this.desktop.accounts().some(a => a.id !== account?.id && a.name.toLowerCase() === (name || username).toLowerCase())) {
+                error.textContent = 'Another account has this name.'
+                field('name').focus()
+                return
+            }
+            this.zone.run(async () => {
+                const saved = await this.desktop.saveAccount({ id: account?.id, name, username, domain: field('domain').value.trim() }, field('password').value)
+                close()
+                if (saved.keychainError) {
+                    this.injector.get(NotificationsService).error(`The password wasn't saved: ${saved.keychainError}`)
+                }
+            })
+        })
+        list.appendChild(form)
+        field(account ? 'password' : 'name').focus()
     }
 
     private renderCertificates (): void {

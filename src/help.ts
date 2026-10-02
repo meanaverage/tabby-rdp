@@ -9,7 +9,7 @@ export const TOGGLE_HOTKEY = 'remote-desktop-toggle'
 export const SETTINGS_TAB_ID = 'remote-desktop'
 
 /** Sections of the settings page that help can open at. */
-export type HelpTopic = 'start' | 'settings' | 'osd' | 'keyboard' | 'desktops' | 'certificates' | 'troubleshooting'
+export type HelpTopic = 'start' | 'settings' | 'osd' | 'keyboard' | 'desktops' | 'accounts' | 'certificates' | 'troubleshooting'
 
 /** A troubleshooting entry: `match` picks it for a message shown over a desktop ("What does this mean?"). */
 export interface HelpEntry {

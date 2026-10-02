@@ -1,3 +1,4 @@
+import { SavedAccount, signInName } from './accounts'
 import { ExtraDesktopConfig } from './desktops'
 import { wakeFromText } from './wake'
 
@@ -25,6 +26,8 @@ export interface DesktopFormOptions {
     action: string
     /** The entry being edited (fields filled in from it, `via` kept), or the new entry's `via`. */
     entry: ExtraDesktopConfig
+    /** The saved accounts to offer (Settings › Remote Desktop › Accounts). */
+    accounts?: SavedAccount[]
     /** Refuses an entry with a message (e.g. the address is taken), or null to accept it. */
     check?: (entry: ExtraDesktopConfig) => string | null
 }
@@ -49,6 +52,7 @@ export function askDesktop (pane: HTMLElement, options: DesktopFormOptions): Pro
                     <option value="xrdp">xrdp (Linux: KDE, XFCE, MATE, …)</option>
                     <option value="gnome">GNOME Remote Desktop (needs the graphics pipeline)</option>
                 </select>
+                <select class="form-control" name="account" title="Saved accounts are added in Settings › Remote Desktop › Accounts"></select>
                 <input class="form-control" name="username" placeholder="User name (optional; asked when connecting)" spellcheck="false">
                 <input class="form-control" name="domain" placeholder="Domain (optional)" spellcheck="false">
                 <input class="form-control" name="wake" placeholder="Start it when off (optional): libvirt VM name, or MAC address" title="A libvirt VM on the host, started with virsh; or a MAC address to wake over the network from the host" spellcheck="false">
@@ -70,6 +74,20 @@ export function askDesktop (pane: HTMLElement, options: DesktopFormOptions): Pro
     field('username').value = initial.username ?? ''
     field('domain').value = initial.domain ?? ''
     field('wake').value = wakeTextOf(initial)
+    // A saved account in place of a user name and domain of its own. Without any saved, the choice isn't shown.
+    const account = field<HTMLSelectElement>('account')
+    const accounts = options.accounts ?? []
+    account.append(new Option('Ask for the account when connecting', ''), ...accounts.map(a => new Option(`Sign in with ${a.name} (${signInName(a)})`, a.id)))
+    if (initial.account && !accounts.some(a => a.id === initial.account)) {
+        account.append(new Option('(a saved account that no longer exists)', initial.account))
+    }
+    account.value = initial.account ?? ''
+    account.hidden = account.options.length < 2
+    const ownAccount = () => {
+        field('username').hidden = field('domain').hidden = !!account.value
+    }
+    account.addEventListener('change', ownAccount)
+    ownAccount()
 
     if (getComputedStyle(pane).position === 'static') {
         pane.style.position = 'relative'
@@ -127,9 +145,10 @@ export function askDesktop (pane: HTMLElement, options: DesktopFormOptions): Pro
                 kind: kind === 'gnome' || kind === 'xrdp' ? kind : 'windows',
                 username: username || undefined,
                 domain: domain || undefined,
+                account: account.value || undefined,
                 wake,
             }
-            for (const key of ['username', 'domain', 'wake'] as const) {
+            for (const key of ['username', 'domain', 'account', 'wake'] as const) {
                 if (entry[key] === undefined) {
                     delete entry[key]
                 }

@@ -11,6 +11,7 @@ import { AudioPlayer } from './audio'
 import { ConnectionStatus, STYLE as STATS_STYLE } from './connectionStatus'
 import { Microphone } from './microphone'
 import { askDesktop } from './desktopForm'
+import { accountKey, accountsOf, newAccountId, SavedAccount, signInName } from './accounts'
 import { FileTransfer, STYLE as FILES_STYLE, uniquePath } from './fileTransfer'
 import { desktopIdOf, DesktopSpec, desktopsFor, DIRECT_KEY, ExtraDesktopConfig, OWN_DESKTOP, OwnDesktopFound, sessionKey } from './desktops'
 import { RemoteDesktopHelp } from './help'
@@ -93,6 +94,8 @@ interface Endpoint {
     port: number
     credentials: Credentials
     remember: boolean
+    /** Where remembering saves them, when not under the desktop's own key: a saved account's keychain entry. */
+    saveKey?: string
     /** The host's own desktop: the fingerprint of the certificate its setup made, the only one to accept. */
     certificate?: string
 }
@@ -470,10 +473,14 @@ export class RemoteDesktopService {
      * Forgets the saved account of the pane's desktop and connects again, with the sign-in form. For xrdp above all:
      * with a wrong password it shows its own login window rather than refusing, so the form never comes back.
      */
+    private askAgain = new WeakSet<DesktopPane>()
+
     async signInAgain (pane: DesktopPane): Promise<void> {
         const session = this.sessions.get(pane)
         if (session && this.signsIn(session.spec)) {
             await forgetCredentials(session.key)
+            // With a saved account, the form asks for its password anew (the saved one stays until then).
+            this.askAgain.add(pane)
             await this.reopen(pane, session.spec)
         }
     }
@@ -571,6 +578,97 @@ export class RemoteDesktopService {
 
     private lastUsed = new Map<string, string>()
 
+    /** `remoteDesktop.accounts`: the saved accounts desktops can sign in with (see accounts.ts). */
+    accounts (): SavedAccount[] {
+        return accountsOf(this.config.store.remoteDesktop)
+    }
+
+    /** The desktops that sign in with a saved account: configured ones behind SSH hosts, and RDP profiles. By name. */
+    accountUses (id: string): string[] {
+        const desktops = this.configuredDesktops().filter(d => d.account === id).map(d => String(d.name ?? desktopIdOf(d)))
+        const profiles = (this.config.store.profiles ?? []).filter((p: any) => p?.type === RDP_PROFILE_TYPE && p.options?.account === id)
+            .map((p: any) => String(p.name ?? p.options.host))
+        return [...desktops, ...profiles]
+    }
+
+    /**
+     * Adds a saved account (no id) or changes one. `password`: the new one for the keychain; undefined keeps what is
+     * there. A new user name or domain without a new password drops the old password: it was for the old account.
+     * Returns the account's id, and the keychain's complaint if the password couldn't be saved.
+     */
+    async saveAccount (account: Omit<SavedAccount, 'id'> & { id?: string }, password?: string): Promise<{ id: string, keychainError?: string }> {
+        const list = this.accounts()
+        const old = list.find(a => a.id === account.id)
+        const entry: SavedAccount = {
+            id: old?.id ?? newAccountId(list),
+            name: account.name.trim() || signInName(account),
+            username: account.username.trim(),
+            ...account.domain?.trim() ? { domain: account.domain.trim() } : {},
+        }
+        this.config.store.remoteDesktop.accounts = old ? list.map(a => a === old ? entry : a) : [...list, entry]
+        this.config.save()
+        this.changed$.next()
+        let keychainError: string | undefined
+        if (password !== undefined && password !== '') {
+            await saveCredentials(accountKey(entry.id), { username: signInName(entry), password }).catch(e => { keychainError = String(e?.message ?? e) })
+        } else if (old && signInName(old) !== signInName(entry)) {
+            await forgetCredentials(accountKey(entry.id))
+        }
+        return { id: entry.id, keychainError }
+    }
+
+    /** Whether the keychain holds a password for the saved account. */
+    async accountHasPassword (id: string): Promise<boolean> {
+        return !!await loadCredentials(accountKey(id))
+    }
+
+    /** "Remove…" on a saved account: asks first, naming the desktops that use it. Resolves true when removed. */
+    async confirmRemoveAccount (id: string): Promise<boolean> {
+        const account = this.accounts().find(a => a.id === id)
+        if (!account) {
+            return false
+        }
+        const uses = this.accountUses(id)
+        const { response } = await this.platform.showMessageBox({
+            type: 'warning',
+            message: `Remove the account "${account.name}"?`,
+            detail: `${signInName(account)}. Its password is removed from the keychain. ` + (uses.length
+                ? `${uses.length === 1 ? 'One desktop uses' : `${uses.length} desktops use`} it and will ask for an account when connecting: ${uses.join(', ')}.`
+                : 'No desktop uses it.'),
+            buttons: ['Remove', 'Keep'],
+            defaultId: 1,
+            cancelId: 1,
+        })
+        if (response !== 0) {
+            return false
+        }
+        await this.removeAccount(id)
+        return true
+    }
+
+    /** Removes a saved account and its password; desktops that used it go back to asking. */
+    async removeAccount (id: string): Promise<void> {
+        const store = this.config.store.remoteDesktop
+        store.accounts = this.accounts().filter(a => a.id !== id)
+        if (this.configuredDesktops().some(d => d.account === id)) {
+            store.desktops = this.configuredDesktops().map(d => {
+                if (d.account !== id) {
+                    return d
+                }
+                const { account: _account, ...rest } = d
+                return rest
+            })
+        }
+        for (const profile of this.config.store.profiles ?? []) {
+            if (profile?.type === RDP_PROFILE_TYPE && profile.options?.account === id) {
+                profile.options.account = ''
+            }
+        }
+        this.config.save()
+        this.changed$.next()
+        await forgetCredentials(accountKey(id))
+    }
+
     /** `remoteDesktop.desktops`: the desktops configured behind SSH hosts. */
     configuredDesktops (): ExtraDesktopConfig[] {
         const list = this.config.store.remoteDesktop?.desktops
@@ -592,6 +690,7 @@ export class RemoteDesktopService {
         const entry = await askDesktop(pane.element.nativeElement, {
             title: `Add a desktop reached through ${target.label}`,
             action: 'Add and open',
+            accounts: this.accounts(),
             entry: { via: hostname, host: '127.0.0.1', port: 3389 },
             check: e => this.addressTaken(e, -1),
         })
@@ -628,6 +727,7 @@ export class RemoteDesktopService {
         const entry = await askDesktop(pane.element.nativeElement, {
             title: `Edit ${old.name ?? desktopIdOf(old)} (behind ${old.via})`,
             action: 'Save',
+            accounts: this.accounts(),
             entry: old,
             check: e => this.addressTaken(e, index),
         })
@@ -641,7 +741,7 @@ export class RemoteDesktopService {
         this.config.store.remoteDesktop.desktops = list
         this.config.save()
         this.changed$.next()
-        const accountChanged = (old.username ?? '') !== (entry.username ?? '') || (old.domain ?? '') !== (entry.domain ?? '')
+        const accountChanged = (old.username ?? '') !== (entry.username ?? '') || (old.domain ?? '') !== (entry.domain ?? '') || (old.account ?? '') !== (entry.account ?? '')
         await this.desktopEdited(desktopIdOf(old), desktopIdOf(entry), accountChanged, false)
     }
 
@@ -1575,23 +1675,34 @@ export class RemoteDesktopService {
             spec.port = endpoint.port
             spec.username ??= endpoint.username
         }
-        const saved = retryError ? null : await loadCredentials(session.key)
+        // A saved account (Settings): its user name, and its password from the keychain. One that has none yet, or that
+        // this desktop just refused, is asked for here and saved for every desktop that uses the account.
+        const account = spec.account ? this.accounts().find(a => a.id === spec.account) : undefined
+        if (spec.account && !account) {
+            session.log.push('sign-in: its saved account no longer exists; asking')
+        }
+        const again = this.askAgain.delete(pane)
+        const saved = retryError || again ? null : await loadCredentials(account ? accountKey(account.id) : session.key)
         if (saved) {
-            return { host: spec.host, port: spec.port, credentials: saved, remember: false }
+            if (account) {
+                session.log.push(`sign-in: the saved account "${account.name}"`)
+            }
+            return { host: spec.host, port: spec.port, credentials: account ? { username: signInName(account), password: saved.password } : saved, remember: false }
         }
         session.status('')
         const asked = askCredentials(session.overlay, {
             // The host's own desktops (its own, or its xrdp besides GNOME) and direct ones need no "via".
             title: spec.id === OWN_DESKTOP || target.direct || spec.kind === 'xrdp' && spec.host === '127.0.0.1' ? `Sign in to ${spec.name}` : `Sign in to ${spec.name} (via ${target.label})`,
-            username: spec.username,
+            username: account ? signInName(account) : spec.username,
             error: retryError,
             canRemember: true,
+            account: account?.name,
         }, session.disposed)
         if (session.visible) {
             setTimeout(() => session.visible && session.focusDesktop())
         }
         const entered = await asked
-        return entered && { host: spec.host, port: spec.port, credentials: entered, remember: entered.remember }
+        return entered && { host: spec.host, port: spec.port, credentials: entered, remember: entered.remember, saveKey: account && accountKey(account.id) }
     }
 
     private async connect (pane: DesktopPane, target: RemoteTarget, spec: DesktopSpec, session: DesktopSession): Promise<void> {
@@ -1648,6 +1759,8 @@ export class RemoteDesktopService {
                     return
                 }
                 if (outcome.signInFailed && this.signsIn(spec) && attempt < 5 && alive()) {
+                    // The desktop's own saved account goes. A shared one stays until a new password is entered: this
+                    // desktop refusing it doesn't make it wrong for the others.
                     await forgetCredentials(session.key)
                     retryError = outcome.signInFailed
                     endpoint = null
@@ -2011,8 +2124,8 @@ export class RemoteDesktopService {
             this.changed$.next()
             this.reconnects.delete(pane)  // connected again: a later drop starts over
             if (endpoint.remember) {
-                saveCredentials(session.key, credentials).then(
-                    () => session.log.push('sign-in: saved in the keychain'),
+                saveCredentials(endpoint.saveKey ?? session.key, credentials).then(
+                    () => session.log.push(endpoint.saveKey ? 'sign-in: saved as the account\'s password in the keychain' : 'sign-in: saved in the keychain'),
                     e => session.log.push(`sign-in: keychain: ${e?.message ?? e}`))
             }
             if (session.visible) {

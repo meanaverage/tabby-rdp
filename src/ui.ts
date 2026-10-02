@@ -48,6 +48,9 @@ export class RemoteDesktopConfig extends ConfigProvider {
             microphone: false,
             // More desktops behind SSH hosts (e.g. a Windows VM whose RDP port the host forwards); see desktops.ts.
             desktops: [],
+            // Saved accounts desktops can sign in with: [{ id, name, username, domain }]; passwords are in the keychain
+            // (see accounts.ts).
+            accounts: [],
             // Sharpness for particular desktops, overriding `sharpness`: [{ desktop: <session key>, sharpness }].
             desktopSharpness: [],
             // Certificates of desktops behind hosts, trusted on first use: [{ desktop: <session key>, sha256 }].

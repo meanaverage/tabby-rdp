@@ -105,7 +105,11 @@ export const STYLE = `
  */
 export function askCredentials (
     layer: HTMLElement,
-    options: { title: string, username?: string, error?: string, canRemember: boolean },
+    options: {
+        title: string, username?: string, error?: string, canRemember: boolean,
+        /** Signing in with a saved account: its name. The user name is the account's, and remembering updates it. */
+        account?: string,
+    },
     abort: Promise<void>,
 ): Promise<(Credentials & { remember: boolean }) | null> {
     const box = document.createElement('div')
@@ -127,6 +131,12 @@ export function askCredentials (
     box.querySelector('.trd-signin-title')!.textContent = options.title
     box.querySelector('.trd-signin-error')!.textContent = options.error ?? ''
     field('username').value = options.username ?? ''
+    if (options.account) {
+        // The account's user name is changed where the account is (Settings), for every desktop that uses it.
+        field('username').readOnly = true
+        field('username').title = `The saved account "${options.account}"`
+        form.querySelector('.trd-signin-remember')!.lastChild!.textContent = ` Save as the password of "${options.account}"`
+    }
     if (!options.canRemember) {
         field('remember').checked = false
         form.querySelector<HTMLElement>('.trd-signin-remember')!.style.display = 'none'
