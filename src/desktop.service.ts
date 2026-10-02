@@ -12,6 +12,7 @@ import { ConnectionStatus, STYLE as STATS_STYLE } from './connectionStatus'
 import { Microphone } from './microphone'
 import { askDesktop } from './desktopForm'
 import { accountKey, accountsOf, newAccountId, SavedAccount, signInName } from './accounts'
+import { NewAccountInput, STYLE as ACCOUNT_FORM_STYLE } from './accountForm'
 import { FileTransfer, STYLE as FILES_STYLE, uniquePath } from './fileTransfer'
 import { desktopIdOf, DesktopSpec, desktopsFor, DIRECT_KEY, ExtraDesktopConfig, OWN_DESKTOP, OwnDesktopFound, sessionKey } from './desktops'
 import { RemoteDesktopHelp } from './help'
@@ -625,6 +626,15 @@ export class RemoteDesktopService {
         return { id: entry.id, keychainError }
     }
 
+    /** A desktop form's "New account…": saves it and hands it back for the form's list. */
+    private async addAccountFromForm (input: NewAccountInput): Promise<SavedAccount> {
+        const { id, keychainError } = await this.saveAccount({ name: input.name, username: input.username, domain: input.domain }, input.password)
+        if (keychainError) {
+            throw new Error(keychainError)
+        }
+        return this.accounts().find(a => a.id === id)!
+    }
+
     /** Whether a password is saved for the account; 'unknown' while the Vault is locked (it isn't unlocked for this). */
     accountHasPassword (id: string): Promise<'yes' | 'no' | 'unknown'> {
         return hasCredentials(accountKey(id))
@@ -699,6 +709,7 @@ export class RemoteDesktopService {
             title: `Add a desktop reached through ${target.label}`,
             action: 'Add and open',
             accounts: this.accounts(),
+            addAccount: input => this.addAccountFromForm(input),
             entry: { via: hostname, host: '127.0.0.1', port: 3389 },
             check: e => this.addressTaken(e, -1),
         })
@@ -753,6 +764,7 @@ export class RemoteDesktopService {
             title: `Edit ${old.name ?? desktopIdOf(old)}${askVia ? '' : ` (behind ${old.via})`}`,
             action: 'Save',
             accounts: this.accounts(),
+            addAccount: input => this.addAccountFromForm(input),
             hosts: askVia ? await this.sshHosts() : undefined,
             entry: old,
             check: e => this.addressTaken(e, index),
@@ -2205,7 +2217,7 @@ export function installStyle (): void {
     }
     styleInstalled = true
     const style = document.createElement('style')
-    style.textContent = STYLE + SIGNIN_STYLE + FILES_STYLE + STATS_STYLE + OSD_STYLE + DRAGBAR_STYLE
+    style.textContent = STYLE + SIGNIN_STYLE + FILES_STYLE + STATS_STYLE + OSD_STYLE + DRAGBAR_STYLE + ACCOUNT_FORM_STYLE
     document.head.appendChild(style)
     keepWindowDraggable()
 }

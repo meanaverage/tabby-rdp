@@ -8,6 +8,7 @@ import { RemoteDesktopService } from './desktop.service'
 import { formatAddress, parseAddress } from './desktopForm'
 import { RemoteDesktopHelp } from './help'
 import { signInName } from './accounts'
+import { newAccountOption } from './accountForm'
 import { desktopIdOf, DIRECT_KEY } from './desktops'
 import { forgetCredentials } from './signin'
 import { isConnected, isSSHTab } from './ssh'
@@ -179,7 +180,7 @@ export class RDPProfileSettingsComponent implements ProfileSettingsComponent<RDP
                 <label>Account</label>
                 <select class="form-control" name="account"></select>
                 <div class="text-muted small">A saved account's password is kept once, for every desktop that signs in with it.
-                    Saved accounts are added in Settings › Remote Desktop › Accounts.</div>
+                    Add one here with "New account…", or in Settings › Remote Desktop › Accounts.</div>
             </div>
             <div class="mb-3" data-own-account>
                 <label>User name</label>
@@ -208,18 +209,25 @@ export class RDPProfileSettingsComponent implements ProfileSettingsComponent<RDP
             const kind = field<HTMLSelectElement>('kind').value
             o.kind = kind === 'gnome' || kind === 'xrdp' ? kind : 'windows'
         })
-        const accounts = this.injector.get(RemoteDesktopService).accounts()
+        const desktop = this.injector.get(RemoteDesktopService)
+        const accounts = desktop.accounts()
         const saved = field<HTMLSelectElement>('account')
-        saved.append(new Option('Ask for the account when connecting', ''), ...accounts.map(a => new Option(`${a.name} (${signInName(a)})`, a.id)))
+        const label = (a: { name: string, username: string, domain?: string }) => `${a.name} (${signInName(a)})`
+        saved.append(new Option('Ask for the account when connecting', ''), ...accounts.map(a => new Option(label(a), a.id)))
         if (o.account && !accounts.some(a => a.id === o.account)) {
             saved.append(new Option('(a saved account that no longer exists)', o.account))
         }
         saved.value = o.account ?? ''
         const ownAccount = () => root.querySelectorAll<HTMLElement>('[data-own-account]').forEach(el => { el.hidden = !!saved.value })
-        saved.addEventListener('change', () => {
-            o.account = saved.value
-            ownAccount()
-        })
+        // "New account…" at the end: a small form right here, so the profile being edited isn't left.
+        newAccountOption(saved, label, async input => {
+            const { id, keychainError } = await desktop.saveAccount({ name: input.name, username: input.username, domain: input.domain }, input.password)
+            if (keychainError) {
+                throw new Error(keychainError)
+            }
+            return desktop.accounts().find(a => a.id === id)!
+        }, id => { o.account = id })
+        saved.addEventListener('change', ownAccount)
         ownAccount()
         field('username').addEventListener('input', () => { o.username = field('username').value.trim() })
         field('domain').addEventListener('input', () => { o.domain = field('domain').value.trim() })

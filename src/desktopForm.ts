@@ -1,4 +1,5 @@
 import { SavedAccount, signInName } from './accounts'
+import { newAccountOption, NewAccountInput } from './accountForm'
 import { ExtraDesktopConfig } from './desktops'
 import { wakeFromText } from './wake'
 
@@ -28,6 +29,8 @@ export interface DesktopFormOptions {
     entry: ExtraDesktopConfig
     /** The saved accounts to offer (Settings › Remote Desktop › Accounts). */
     accounts?: SavedAccount[]
+    /** Saves a new account typed into the form's "New account…" (RemoteDesktopService.saveAccount); without it, no such choice. */
+    addAccount?: (input: NewAccountInput) => Promise<SavedAccount>
     /**
      * Asks which SSH host the desktop is behind (from the settings page, where no SSH tab says): the SSH profiles'
      * names and hosts to suggest. Without it, the entry's `via` is kept as it is.
@@ -94,11 +97,15 @@ export function askDesktop (pane: HTMLElement, options: DesktopFormOptions): Pro
         account.append(new Option('(a saved account that no longer exists)', initial.account))
     }
     account.value = initial.account ?? ''
-    account.hidden = account.options.length < 2
     const ownAccount = () => {
-        field('username').hidden = field('domain').hidden = !!account.value
+        field('username').hidden = field('domain').hidden = !!account.value && account.value !== '__new__'
     }
     account.addEventListener('change', ownAccount)
+    if (options.addAccount) {
+        newAccountOption(account, a => `Sign in with ${a.name} (${signInName(a)})`, options.addAccount, () => null)
+    } else {
+        account.hidden = account.options.length < 2
+    }
     ownAccount()
 
     if (getComputedStyle(pane).position === 'static') {
@@ -163,7 +170,7 @@ export function askDesktop (pane: HTMLElement, options: DesktopFormOptions): Pro
                 kind: kind === 'gnome' || kind === 'xrdp' ? kind : 'windows',
                 username: username || undefined,
                 domain: domain || undefined,
-                account: account.value || undefined,
+                account: account.value && account.value !== '__new__' ? account.value : undefined,
                 wake,
             }
             for (const key of ['username', 'domain', 'account', 'wake'] as const) {
