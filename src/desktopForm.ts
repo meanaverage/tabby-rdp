@@ -1,3 +1,5 @@
+import { SavedAccount, signInName } from './accounts'
+import { newAccountOption, NewAccountInput } from './accountForm'
 import { ExtraDesktopConfig } from './desktops'
 import { wakeFromText } from './wake'
 
@@ -25,6 +27,15 @@ export interface DesktopFormOptions {
     action: string
     /** The entry being edited (fields filled in from it, `via` kept), or the new entry's `via`. */
     entry: ExtraDesktopConfig
+    /** The saved accounts to offer (Settings › Remote Desktop › Accounts). */
+    accounts?: SavedAccount[]
+    /** Saves a new account typed into the form's "New account…" (RemoteDesktopService.saveAccount); without it, no such choice. */
+    addAccount?: (input: NewAccountInput) => Promise<SavedAccount>
+    /**
+     * Asks which SSH host the desktop is behind (from the settings page, where no SSH tab says): the SSH profiles'
+     * names and hosts to suggest. Without it, the entry's `via` is kept as it is.
+     */
+    hosts?: string[]
     /** Refuses an entry with a message (e.g. the address is taken), or null to accept it. */
     check?: (entry: ExtraDesktopConfig) => string | null
 }
@@ -38,17 +49,21 @@ export function askDesktop (pane: HTMLElement, options: DesktopFormOptions): Pro
     const overlay = document.createElement('div')
     overlay.className = 'trd-overlay trd-form-overlay'
     overlay.innerHTML = `
+        <div class="trd-form-dragbar"></div>
         <div class="trd-signin">
             <form autocomplete="off">
                 <div class="trd-signin-title"></div>
                 <div class="trd-signin-error"></div>
-                <input class="form-control" name="name" placeholder="Name, e.g. Windows VM" spellcheck="false">
+                <input class="form-control" name="name" placeholder="A name of your choice, e.g. Windows VM" spellcheck="false">
+                <input class="form-control" name="via" list="trd-via-hosts" placeholder="The SSH host it is behind: a profile's name, or its hostname" spellcheck="false">
+                <datalist id="trd-via-hosts"></datalist>
                 <input class="form-control" name="address" placeholder="Address as seen from the host, e.g. 127.0.0.1:3389" spellcheck="false">
                 <select class="form-control" name="kind">
                     <option value="windows">Windows (or another RDP server)</option>
                     <option value="xrdp">xrdp (Linux: KDE, XFCE, MATE, …)</option>
                     <option value="gnome">GNOME Remote Desktop (needs the graphics pipeline)</option>
                 </select>
+                <select class="form-control" name="account" title="Saved accounts are added in Settings › Remote Desktop › Accounts"></select>
                 <input class="form-control" name="username" placeholder="User name (optional; asked when connecting)" spellcheck="false">
                 <input class="form-control" name="domain" placeholder="Domain (optional)" spellcheck="false">
                 <input class="form-control" name="wake" placeholder="Start it when off (optional): libvirt VM name, or MAC address" title="A libvirt VM on the host, started with virsh; or a MAC address to wake over the network from the host" spellcheck="false">
@@ -65,11 +80,33 @@ export function askDesktop (pane: HTMLElement, options: DesktopFormOptions): Pro
     const error = form.querySelector('.trd-signin-error')!
     const initial = options.entry
     field('name').value = initial.name ?? ''
+    const via = field('via')
+    via.value = initial.via ?? ''
+    via.hidden = !options.hosts
+    form.querySelector('datalist')!.append(...(options.hosts ?? []).map(h => new Option(h)))
     field('address').value = formatAddress(initial.host ?? '127.0.0.1', Number(initial.port ?? 3389))
     field<HTMLSelectElement>('kind').value = initial.kind === 'gnome' || initial.kind === 'xrdp' ? initial.kind : 'windows'
     field('username').value = initial.username ?? ''
     field('domain').value = initial.domain ?? ''
     field('wake').value = wakeTextOf(initial)
+    // A saved account in place of a user name and domain of its own. Without any saved, the choice isn't shown.
+    const account = field<HTMLSelectElement>('account')
+    const accounts = options.accounts ?? []
+    account.append(new Option('Ask for the account when connecting', ''), ...accounts.map(a => new Option(`Sign in with ${a.name} (${signInName(a)})`, a.id)))
+    if (initial.account && !accounts.some(a => a.id === initial.account)) {
+        account.append(new Option('(a saved account that no longer exists)', initial.account))
+    }
+    account.value = initial.account ?? ''
+    const ownAccount = () => {
+        field('username').hidden = field('domain').hidden = !!account.value && account.value !== '__new__'
+    }
+    account.addEventListener('change', ownAccount)
+    if (options.addAccount) {
+        newAccountOption(account, a => `Sign in with ${a.name} (${signInName(a)})`, options.addAccount, () => null)
+    } else {
+        account.hidden = account.options.length < 2
+    }
+    ownAccount()
 
     if (getComputedStyle(pane).position === 'static') {
         pane.style.position = 'relative'
@@ -112,6 +149,11 @@ export function askDesktop (pane: HTMLElement, options: DesktopFormOptions): Pro
                 field('address').focus()
                 return
             }
+            if (options.hosts && !via.value.trim()) {
+                error.textContent = 'Which SSH host is it behind?'
+                via.focus()
+                return
+            }
             const username = field('username').value.trim()
             const domain = field('domain').value.trim()
             const kind = field<HTMLSelectElement>('kind').value
@@ -121,15 +163,17 @@ export function askDesktop (pane: HTMLElement, options: DesktopFormOptions): Pro
             // Other keys of an edited entry (hand-written ones) are kept.
             const entry: ExtraDesktopConfig = {
                 ...initial,
+                ...options.hosts ? { via: via.value.trim() } : {},
                 name,
                 host: address.host,
                 port: address.port,
                 kind: kind === 'gnome' || kind === 'xrdp' ? kind : 'windows',
                 username: username || undefined,
                 domain: domain || undefined,
+                account: account.value && account.value !== '__new__' ? account.value : undefined,
                 wake,
             }
-            for (const key of ['username', 'domain', 'wake'] as const) {
+            for (const key of ['username', 'domain', 'account', 'wake'] as const) {
                 if (entry[key] === undefined) {
                     delete entry[key]
                 }

@@ -1,5 +1,43 @@
 # Changelog
 
+## 0.4.0
+
+**New**
+- **Saved accounts** ([#11](https://github.com/meanaverage/tabby-rdp/issues/11)): a user name and domain under a
+  name, with the password kept once, for desktops that share an account. Chosen in a remote desktop profile's
+  **Account** field or in the form for a desktop behind an SSH host (**New account…** there adds one), or for a whole
+  profile group through the group's defaults. Listed, added, edited and removed in **Settings › Remote Desktop ›
+  Accounts**, which names the desktops using each account. A password a server refuses is asked for again and saved
+  for every desktop; **Sign in again…** asks anew.
+- **Passwords in Tabby's Vault** when it is enabled, as Tabby keeps SSH passwords: encrypted, and carried by config
+  sync. The system keychain as before otherwise, and still read for what was saved before the Vault was turned on.
+- **Configurable shortcuts** ([#15](https://github.com/meanaverage/tabby-rdp/issues/15)): view only, a screenshot,
+  Ctrl+Alt+Del, typing into all desktops of a tab, pasting to all of them, the connection status and Disconnect join
+  the desktop/console switch as Tabby hotkeys, set on the settings page in the look of Tabby's Hotkeys page (or
+  there). A key another hotkey already has is refused, and collisions made elsewhere are shown.
+- **The settings page in tabs** — Getting started, Settings, Overlay, Desktops, Accounts, Troubleshooting — as
+  Tabby's Profiles & connections page is, with the settings grouped (Picture, Sound, Keyboard, SSH hosts, Updates)
+  and the detail behind ⓘ tooltips. The Desktops tab lists remote desktop profiles as well as desktops behind SSH
+  hosts, and adds, edits and removes both; profiles the plugin makes go into a "Remote desktops" group.
+- **A clearer reason when a connection fails** before it is up ("10.3.0.5:3389 did not answer"), in place of
+  IronRDP's "general error (code 1)".
+- The **name overlay preview** says which desktop resolution it stands for, and lets you pick one
+  ([#16](https://github.com/meanaverage/tabby-rdp/issues/16)).
+
+**Fixed**
+- **The window could not be moved by its tab bar while a dialog was open**
+  ([#19](https://github.com/meanaverage/tabby-rdp/issues/19)), the plugin's and Tabby's alike. Each dialog keeps a
+  strip the height of the tab bar draggable. Submitted to Tabby as well.
+- **A stale update notice** in a Tabby left open across several releases
+  ([#17](https://github.com/meanaverage/tabby-rdp/issues/17)): opening the settings page with an update known asks
+  npm again.
+- Opening the settings page no longer prompts for the Vault passphrase.
+
+**Docs**
+- README: saved accounts, shortcuts, and where passwords are kept. Tabby's Vault page labels the plugin's secrets
+  generically until Tabby ships [#11765](https://github.com/Eugeny/tabby/pull/11765)
+  ([#18](https://github.com/meanaverage/tabby-rdp/issues/18)).
+
 ## 0.3.4
 
 **Fixed**

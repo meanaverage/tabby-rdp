@@ -1,4 +1,8 @@
-/** Sign-in for desktops that use their own accounts (Windows): a form in the desktop layer, and the keychain. */
+/**
+ * Sign-in for desktops that use their own accounts (Windows): a form in the desktop layer, and where passwords are
+ * kept: Tabby's Vault when it is enabled (encrypted, part of the config, as Tabby's SSH passwords), else the system
+ * keychain.
+ */
 import { DIRECT_KEY } from './desktops'
 
 export interface Credentials {
@@ -7,6 +11,33 @@ export interface Credentials {
 }
 
 const KEYCHAIN_SERVICE = 'tabby-rdp'
+/** The Vault secret type of a desktop's or account's password; its key is `{ key, name }` (see vaultKey). */
+export const VAULT_SECRET_TYPE = 'rdp:password'
+
+/** Tabby's Vault (tabby-core's VaultService), handed in at startup; passwords go there while it is enabled. */
+let vault: any = null
+export function useVault (service: any): void {
+    vault = service
+}
+function vaultOn (): boolean {
+    try {
+        return !!vault?.isEnabled()
+    } catch {
+        return false
+    }
+}
+/** Where passwords are kept right now, for messages. */
+export function storeName (): string {
+    return vaultOn() ? 'Tabby\'s Vault' : 'the keychain'
+}
+/** How a Vault entry is found: by the same key as the keychain's; its `description` is only for a listing. */
+function vaultKey (key: string): { key: string } {
+    return { key }
+}
+function vaultName (key: string): string {
+    const [who, address] = key.split('#', 2)
+    return who === 'account' ? `saved account` : who === DIRECT_KEY ? `${address} (direct)` : address ? `${address} behind ${who}` : who
+}
 
 // The system keychain can keep a call waiting indefinitely: on Linux, a locked or missing keyring waits for an unlock
 // prompt, which a session without a keyring prompter never shows. Give up after a while. A call that never returns
@@ -38,10 +69,8 @@ function answered<T> (call: Promise<T> | undefined): Promise<T | undefined> {
     })
 }
 
-/** Saved credentials for a desktop (keyed by its session key), or null. */
-export async function loadCredentials (key: string): Promise<Credentials | null> {
+function parseCredentials (saved: string | null | undefined): Credentials | null {
     try {
-        const saved = await answered<string | null>(keytar()?.getPassword(KEYCHAIN_SERVICE, key))
         const parsed = saved ? JSON.parse(saved) : null
         return parsed?.username && typeof parsed.password === 'string' ? { username: parsed.username, password: parsed.password } : null
     } catch {
@@ -49,14 +78,89 @@ export async function loadCredentials (key: string): Promise<Credentials | null>
     }
 }
 
-export async function saveCredentials (key: string, credentials: Credentials): Promise<void> {
+/**
+ * Saved credentials for a desktop (keyed by its session key) or an account (`account#<id>`), or null. With the Vault
+ * on, the keychain is still read for what was saved before it was turned on.
+ */
+export async function loadCredentials (key: string): Promise<Credentials | null> {
+    if (vaultOn()) {
+        try {
+            const secret = await vault.getSecret(VAULT_SECRET_TYPE, vaultKey(key))
+            const found = parseCredentials(secret?.value)
+            if (found) {
+                return found
+            }
+        } catch { }
+    }
+    try {
+        return parseCredentials(await answered<string | null>(keytar()?.getPassword(KEYCHAIN_SERVICE, key)))
+    } catch {
+        return null
+    }
+}
+
+/** `label`: how the Vault page lists it (a saved account's name); otherwise made from the key. */
+/**
+ * Whether credentials are saved under the key, without asking the user anything: a locked Vault stays locked (its
+ * entries can't be seen then: 'unknown'), where loadCredentials would prompt for the passphrase.
+ */
+export async function hasCredentials (key: string): Promise<'yes' | 'no' | 'unknown'> {
+    if (vaultOn()) {
+        try {
+            if (!vault.isOpen()) {
+                return 'unknown'
+            }
+            const contents = await vault.load()
+            if (contents?.secrets?.some((s: any) => s.type === VAULT_SECRET_TYPE && s.key?.key === key && parseCredentials(s.value))) {
+                return 'yes'
+            }
+        } catch {
+            return 'unknown'
+        }
+    }
+    try {
+        return parseCredentials(await answered<string | null>(keytar()?.getPassword(KEYCHAIN_SERVICE, key))) ? 'yes' : 'no'
+    } catch {
+        return 'unknown'
+    }
+}
+
+export async function saveCredentials (key: string, credentials: Credentials, label?: string): Promise<void> {
+    if (vaultOn()) {
+        await vault.addSecret({ type: VAULT_SECRET_TYPE, key: { ...vaultKey(key), description: label ?? vaultName(key) }, value: JSON.stringify(credentials) })
+        // Not in two places: what the keychain had for it goes.
+        try { await answered(keytar()?.deletePassword(KEYCHAIN_SERVICE, key)) } catch { }
+        return
+    }
     await answered(keytar()?.setPassword(KEYCHAIN_SERVICE, key, JSON.stringify(credentials)))
 }
 
 export async function forgetCredentials (key: string): Promise<void> {
+    if (vaultOn()) {
+        try { await vault.removeSecret(VAULT_SECRET_TYPE, vaultKey(key)) } catch { }
+    }
     try {
         await answered(keytar()?.deletePassword(KEYCHAIN_SERVICE, key))
     } catch { }
+}
+
+/** Every saved entry's key and value, from the Vault (when on) and the keychain. */
+async function allCredentials (): Promise<{ account: string, password: string }[]> {
+    const entries: { account: string, password: string }[] = []
+    if (vaultOn()) {
+        try {
+            const contents = await vault.load()
+            for (const secret of contents?.secrets ?? []) {
+                if (secret.type === VAULT_SECRET_TYPE && typeof secret.key?.key === 'string') {
+                    entries.push({ account: secret.key.key, password: secret.value })
+                }
+            }
+        } catch { }
+    }
+    try {
+        entries.push(...await answered<{ account: string, password: string }[]>(keytar()?.findCredentials(KEYCHAIN_SERVICE)) ?? [])
+    } catch { }
+    return entries
 }
 
 /** Whether a saved account is for a desktop at this address behind some SSH host (not a direct one: `rdp#<id>`). */
@@ -66,27 +170,24 @@ function isBehindHost (account: string, desktopId: string): boolean {
 
 /** Forgets saved accounts for a desktop on any SSH host (session keys ending in `#<id>`). */
 export async function forgetCredentialsFor (desktopId: string): Promise<void> {
-    try {
-        const k = keytar()
-        for (const { account } of await answered<{ account: string }[]>(k?.findCredentials(KEYCHAIN_SERVICE)) ?? []) {
-            if (isBehindHost(account, desktopId)) {
-                await answered(k.deletePassword(KEYCHAIN_SERVICE, account))
-            }
+    for (const { account } of await allCredentials()) {
+        if (isBehindHost(account, desktopId)) {
+            await forgetCredentials(account)
         }
-    } catch { }
+    }
 }
 
 /** A desktop's address changed: its saved accounts (session keys ending in `#<from>`) move to the new address. */
 export async function moveCredentialsFor (fromId: string, toId: string): Promise<void> {
-    try {
-        const k = keytar()
-        for (const { account, password } of await answered<{ account: string, password: string }[]>(k?.findCredentials(KEYCHAIN_SERVICE)) ?? []) {
-            if (isBehindHost(account, fromId)) {
-                await answered(k.setPassword(KEYCHAIN_SERVICE, `${account.slice(0, -fromId.length)}${toId}`, password))
-                await answered(k.deletePassword(KEYCHAIN_SERVICE, account))
-            }
+    for (const { account, password } of await allCredentials()) {
+        const credentials = parseCredentials(password)
+        if (isBehindHost(account, fromId) && credentials) {
+            try {
+                await saveCredentials(`${account.slice(0, -fromId.length)}${toId}`, credentials)
+                await forgetCredentials(account)
+            } catch { }
         }
-    } catch { }
+    }
 }
 
 export const STYLE = `
@@ -105,7 +206,11 @@ export const STYLE = `
  */
 export function askCredentials (
     layer: HTMLElement,
-    options: { title: string, username?: string, error?: string, canRemember: boolean },
+    options: {
+        title: string, username?: string, error?: string, canRemember: boolean,
+        /** Signing in with a saved account: its name. The user name is the account's, and remembering updates it. */
+        account?: string,
+    },
     abort: Promise<void>,
 ): Promise<(Credentials & { remember: boolean }) | null> {
     const box = document.createElement('div')
@@ -116,7 +221,7 @@ export function askCredentials (
             <div class="trd-signin-error"></div>
             <input class="form-control" name="username" placeholder="User name (or DOMAIN\\user)" spellcheck="false">
             <input class="form-control" name="password" type="password" placeholder="Password">
-            <label class="trd-signin-remember"><input type="checkbox" name="remember" checked> Remember in the keychain</label>
+            <label class="trd-signin-remember"><input type="checkbox" name="remember" checked> Remember</label>
             <div class="trd-signin-buttons">
                 <button type="button" class="btn btn-secondary" name="cancel">Cancel</button>
                 <button type="submit" class="btn btn-primary">Connect</button>
@@ -125,8 +230,15 @@ export function askCredentials (
     const form = box.querySelector('form')!
     const field = (name: string) => form.querySelector(`[name="${name}"]`) as HTMLInputElement
     box.querySelector('.trd-signin-title')!.textContent = options.title
+    form.querySelector('.trd-signin-remember')!.lastChild!.textContent = ` Remember in ${storeName()}`
     box.querySelector('.trd-signin-error')!.textContent = options.error ?? ''
     field('username').value = options.username ?? ''
+    if (options.account) {
+        // The account's user name is changed where the account is (Settings), for every desktop that uses it.
+        field('username').readOnly = true
+        field('username').title = `The saved account "${options.account}"`
+        form.querySelector('.trd-signin-remember')!.lastChild!.textContent = ` Save as the password of "${options.account}" (in ${storeName()})`
+    }
     if (!options.canRemember) {
         field('remember').checked = false
         form.querySelector<HTMLElement>('.trd-signin-remember')!.style.display = 'none'

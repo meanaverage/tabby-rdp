@@ -32,6 +32,8 @@ export interface DesktopSpec {
     port: number
     username?: string
     domain?: string
+    /** A saved account's id (see accounts.ts): signs in with it, in place of `username` and `domain`. */
+    account?: string
     /** How to start it when it doesn't answer (a VM on the SSH host, or Wake-on-LAN). */
     wake?: WakeSpec
     /** A VM found on the SSH host (see vms.ts), not configured: whether it was running or off when found. */
@@ -49,6 +51,7 @@ export interface DesktopSpec {
  *           port: 3389
  *           kind: windows          # or xrdp, or gnome
  *           username: alice
+ *           account: k3f9x2ab      # or a saved account's id, in place of username and domain
  *           wake: { vm: win11 }    # optional: start it when it's off; or { mac: "aa:bb:cc:dd:ee:ff" }
  */
 export interface ExtraDesktopConfig {
@@ -59,6 +62,7 @@ export interface ExtraDesktopConfig {
     kind?: string
     username?: string
     domain?: string
+    account?: string
     wake?: { vm?: string, mac?: string, broadcast?: string, port?: number }
 }
 
@@ -88,6 +92,7 @@ export function specOf (extra: ExtraDesktopConfig): DesktopSpec | null {
         port,
         username: extra.username ? String(extra.username) : undefined,
         domain: extra.domain ? String(extra.domain) : undefined,
+        account: extra.account ? String(extra.account) : undefined,
         wake: parseWake(extra.wake),
     }
 }

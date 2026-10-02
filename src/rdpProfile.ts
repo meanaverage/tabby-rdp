@@ -7,6 +7,8 @@ import { BaseTerminalTabComponent, TerminalDecorator } from 'tabby-terminal'
 import { RemoteDesktopService } from './desktop.service'
 import { formatAddress, parseAddress } from './desktopForm'
 import { RemoteDesktopHelp } from './help'
+import { signInName } from './accounts'
+import { newAccountOption } from './accountForm'
 import { desktopIdOf, DIRECT_KEY } from './desktops'
 import { forgetCredentials } from './signin'
 import { isConnected, isSSHTab } from './ssh'
@@ -25,6 +27,8 @@ export interface RDPProfile extends ConnectableProfile {
         /** Optional; the sign-in form asks. DOMAIN\user works too. */
         username: string
         domain: string
+        /** A saved account's id (see accounts.ts) to sign in with, in place of the user name and domain; or ''. */
+        account: string
         /** An SSH profile's id to go through, or '' to connect directly. */
         via: string
     }
@@ -149,7 +153,7 @@ export class RDPProfileSettingsComponent implements ProfileSettingsComponent<RDP
 
     ngOnInit (): void {
         const o = this.profile.options
-        const account = () => `${o.username ?? ''}\n${o.domain ?? ''}`
+        const account = () => `${o.username ?? ''}\n${o.domain ?? ''}\n${o.account ?? ''}`
         // No id for a new profile (no address yet): it has nothing saved to take along.
         this.before = { id: o.host ? desktopIdOf(o) : '', account: account(), via: o.via ?? '' }
         const root = this.element.nativeElement
@@ -173,10 +177,16 @@ export class RDPProfileSettingsComponent implements ProfileSettingsComponent<RDP
                 </select>
             </div>
             <div class="mb-3">
+                <label>Account</label>
+                <select class="form-control" name="account"></select>
+                <div class="text-muted small">A saved account's password is kept once, for every desktop that signs in with it.
+                    Add one here with "New account…", or in Settings › Remote Desktop › Accounts.</div>
+            </div>
+            <div class="mb-3" data-own-account>
                 <label>User name</label>
                 <input class="form-control" name="username" spellcheck="false" placeholder="Optional; asked when connecting. DOMAIN\\user works too">
             </div>
-            <div class="mb-3">
+            <div class="mb-3" data-own-account>
                 <label>Domain</label>
                 <input class="form-control" name="domain" spellcheck="false" placeholder="Optional">
             </div>`
@@ -199,6 +209,26 @@ export class RDPProfileSettingsComponent implements ProfileSettingsComponent<RDP
             const kind = field<HTMLSelectElement>('kind').value
             o.kind = kind === 'gnome' || kind === 'xrdp' ? kind : 'windows'
         })
+        const desktop = this.injector.get(RemoteDesktopService)
+        const accounts = desktop.accounts()
+        const saved = field<HTMLSelectElement>('account')
+        const label = (a: { name: string, username: string, domain?: string }) => `${a.name} (${signInName(a)})`
+        saved.append(new Option('Ask for the account when connecting', ''), ...accounts.map(a => new Option(label(a), a.id)))
+        if (o.account && !accounts.some(a => a.id === o.account)) {
+            saved.append(new Option('(a saved account that no longer exists)', o.account))
+        }
+        saved.value = o.account ?? ''
+        const ownAccount = () => root.querySelectorAll<HTMLElement>('[data-own-account]').forEach(el => { el.hidden = !!saved.value })
+        // "New account…" at the end: a small form right here, so the profile being edited isn't left.
+        newAccountOption(saved, label, async input => {
+            const { id, keychainError } = await desktop.saveAccount({ name: input.name, username: input.username, domain: input.domain }, input.password)
+            if (keychainError) {
+                throw new Error(keychainError)
+            }
+            return desktop.accounts().find(a => a.id === id)!
+        }, id => { o.account = id })
+        saved.addEventListener('change', ownAccount)
+        ownAccount()
         field('username').addEventListener('input', () => { o.username = field('username').value.trim() })
         field('domain').addEventListener('input', () => { o.domain = field('domain').value.trim() })
 
@@ -229,7 +259,7 @@ export class RDPProfileSettingsComponent implements ProfileSettingsComponent<RDP
             }
             return
         }
-        const accountChanged = `${o.username ?? ''}\n${o.domain ?? ''}` !== account
+        const accountChanged = `${o.username ?? ''}\n${o.domain ?? ''}\n${o.account ?? ''}` !== account
         this.injector.get(RemoteDesktopService).desktopEdited(id, desktopIdOf(o), accountChanged, !via).catch(() => null)
     }
 }
@@ -242,7 +272,7 @@ export class RDPProfilesService extends QuickConnectProfileProvider<RDPProfile> 
     override name = 'Remote desktop (RDP)'
     override settingsComponent = RDPProfileSettingsComponent
     override configDefaults = {
-        options: { host: '', port: 3389, kind: 'windows', username: '', domain: '', via: '' },
+        options: { host: '', port: 3389, kind: 'windows', username: '', domain: '', account: '', via: '' },
         clearServiceMessagesOnConnect: false,
     }
 
@@ -257,7 +287,7 @@ export class RDPProfilesService extends QuickConnectProfileProvider<RDPProfile> 
             type: RDP_PROFILE_TYPE,
             name: 'Remote desktop (RDP)',
             icon: 'fas fa-desktop',
-            options: { host: '', port: 3389, kind: 'windows', username: '', domain: '', via: '' },
+            options: { host: '', port: 3389, kind: 'windows', username: '', domain: '', account: '', via: '' },
             isBuiltin: true,
             isTemplate: true,
         }]

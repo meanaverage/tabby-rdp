@@ -45,7 +45,48 @@ await suite('help', async t => {
     check('Settings opens at Remote Desktop', !!(await t.waitFor('return H.settingsTab()?.activeTab === "remote-desktop" && !!H.page()', 5)))
     check('it is in the sidebar', await ev('return [...document.querySelectorAll("settings-tab .nav-link")].some(a => a.textContent.trim() === "Remote Desktop")'))
     const sections = await ev<string[]>('return [...H.page().querySelectorAll("[data-topic]")].map(s => s.dataset.topic)')
-    check('its sections', ['start', 'settings', 'keyboard', 'desktops', 'certificates', 'troubleshooting'].every(s => sections.includes(s)), sections)
+    check('its sections', ['start', 'settings', 'keyboard', 'desktops', 'accounts', 'certificates', 'troubleshooting'].every(s => sections.includes(s)), sections)
+
+    // The tabs along the top (as Tabby's Profiles & connections page has): one body shows at a time, help opens the right one.
+    const tabs = await ev<string[]>('return [...H.page().querySelectorAll("[data-tab]")].map(a => a.textContent)')
+    check('tabs: Getting started, Settings, Overlay, Desktops, Accounts, Troubleshooting', tabs.join('|') === 'Getting started|Settings|Overlay|Desktops|Accounts|Troubleshooting', tabs)
+    await ev('H.page().querySelector("[data-tab=accounts]").click()')
+    check('clicking a tab shows its body alone', await ev('return [...H.page().querySelectorAll("[data-body]")].filter(b => !b.hidden).map(b => b.dataset.body).join() === "accounts"'))
+    await ev('RD.help.open("certificates")')
+    check('help opens the tab holding a section', !!(await t.waitFor('return [...H.page().querySelectorAll("[data-body]")].filter(b => !b.hidden).map(b => b.dataset.body).join() === "desktops"', 3)))
+
+    // Shortcuts: the plugin's hotkeys with Tabby's chips; a binding another hotkey has is refused; the switch has its default.
+    await ev('RD.help.open("keyboard")')
+    const rows = await ev<string[]>('return [...H.page().querySelectorAll("[data-list=hotkeys] .trd-hotkey-name")].map(e => e.textContent)')
+    check('the shortcuts listed', rows.length === 8 && rows[0] === 'Switch between the desktop and the console', rows)
+    const chips = await ev<string[]>('return [...H.page().querySelector("[data-list=hotkeys] .row").querySelectorAll(".stroke, .add")].map(e => e.textContent.trim())')
+    check('the switch shows its binding as a chip, with Add…', chips.length === 2 && /G$/.test(chips[0]) && chips[1] === 'Add…', chips)
+    await ev('H.config.store.hotkeys["remote-desktop-view-only"] = H.config.store.hotkeys["remote-desktop-toggle"]; H.config.save()')
+    t.onCleanup(() => ev('H.config.store.hotkeys["remote-desktop-view-only"] = []; H.config.save()'))
+    check('a collision made elsewhere is shown in red', !!(await t.waitFor('return H.page().querySelectorAll("[data-list=hotkeys] .duplicate").length === 2 && /also/.test(H.page().querySelector("[data-list=hotkeys] .trd-conflict")?.textContent ?? "")', 3)))
+    await ev('H.config.store.hotkeys["remote-desktop-view-only"] = []; H.config.save()')
+
+    // Accounts: added from the page, listed with its sign-in name, used by nothing yet; removed with its password.
+    await ev('RD.help.open("accounts")')
+    await ev('H.page().querySelector("[data-action=account]").click()')
+    check('Add an account… opens the form', !!(await t.waitFor('return !!H.page().querySelector(".trd-account-form")', 2)))
+    await ev(`const f = H.page().querySelector(".trd-account-form"); f.querySelector("[name=name]").value = "Lab admin"; f.querySelector("[name=username]").value = "labadmin"; f.querySelector("[name=domain]").value = "LAB"; f.requestSubmit()`)
+    check('saved in the config', !!(await t.waitFor('return H.config.store.remoteDesktop.accounts?.some(a => a.name === "Lab admin" && a.username === "labadmin" && a.domain === "LAB" && /^[a-z0-9]{8}$/.test(a.id))', 3)), await ev('return H.config.store.remoteDesktop.accounts'))
+    t.onCleanup(() => ev('H.config.store.remoteDesktop.accounts = (H.config.store.remoteDesktop.accounts ?? []).filter(a => a.name !== "Lab admin"); H.config.save()'))
+    const accountRow = await t.waitFor<string>('return [...H.page().querySelectorAll("[data-list=accounts] .trd-row")].find(r => /Lab admin/.test(r.textContent))?.innerText ?? null', 3)
+    check('listed with its sign-in name, unused', /LAB\\labadmin/.test(accountRow ?? '') && /Not used/.test(accountRow ?? ''), accountRow)
+    check('the account dropdown of a desktop form offers it', await ev('return RD.desktop.accounts().some(a => a.name === "Lab admin")'))
+
+    // Desktops: profiles and desktops behind hosts in one list; Add a desktop… is Tabby's profile editor.
+    await ev('RD.help.open("desktops")')
+    await ev('H.page().querySelector("[data-action=desktop]").click()')
+    check('Add a desktop… opens Tabby\'s profile editor for a remote desktop profile', !!(await t.waitFor('return !!document.querySelector(".modal rdp-profile-settings")', 4)))
+    const accountOptions = await ev<string[]>('return [...document.querySelector(".modal rdp-profile-settings [name=account]").options].map(o => o.text)')
+    check('its Account field offers the saved account and New account…', accountOptions.some(o => /Lab admin/.test(o)) && accountOptions.at(-1) === 'New account…', accountOptions)
+    // The strip over the dialog, where the tab bar is (hit-tested at the corner: a small window's dialog covers the middle).
+    check('the window stays draggable by its tab bar', await ev('const bar = document.querySelector(".modal > .trd-form-dragbar"); const el = document.elementFromPoint(4, 4); return !!bar && getComputedStyle(bar).webkitAppRegion === "drag" && el === bar'))
+    await ev('RD.injector.get(require("@ng-bootstrap/ng-bootstrap").NgbModal).dismissAll()')
+    await sleep(300)
 
     // Settings, both ways.
     await ev('const c = H.page().querySelector("[data-setting=sound]"); c.click()')

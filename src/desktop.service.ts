@@ -11,6 +11,8 @@ import { AudioPlayer } from './audio'
 import { ConnectionStatus, STYLE as STATS_STYLE } from './connectionStatus'
 import { Microphone } from './microphone'
 import { askDesktop } from './desktopForm'
+import { accountKey, accountsOf, newAccountId, SavedAccount, signInName } from './accounts'
+import { NewAccountInput, STYLE as ACCOUNT_FORM_STYLE } from './accountForm'
 import { FileTransfer, STYLE as FILES_STYLE, uniquePath } from './fileTransfer'
 import { desktopIdOf, DesktopSpec, desktopsFor, DIRECT_KEY, ExtraDesktopConfig, OWN_DESKTOP, OwnDesktopFound, sessionKey } from './desktops'
 import { RemoteDesktopHelp } from './help'
@@ -19,8 +21,8 @@ import { parseRdpFile } from './rdpFile'
 import { prepareRemoteDesktop } from './remoteSetup'
 import { normalizeFingerprint, RDCleanPathProxy, startRDCleanPathProxy } from './rdcleanpath'
 import {
-    askCredentials, Credentials, forgetCredentials, forgetCredentialsFor, loadCredentials, moveCredentialsFor, saveCredentials,
-    STYLE as SIGNIN_STYLE,
+    askCredentials, Credentials, forgetCredentials, forgetCredentialsFor, hasCredentials, loadCredentials, moveCredentialsFor, saveCredentials,
+    storeName, STYLE as SIGNIN_STYLE,
 } from './signin'
 import { isSSHTab } from './ssh'
 import { rdpAnswers, shutDownWhenIdle, waitForRdp, wakeDesktop } from './wake'
@@ -93,6 +95,10 @@ interface Endpoint {
     port: number
     credentials: Credentials
     remember: boolean
+    /** Where remembering saves them, when not under the desktop's own key: a saved account's keychain entry. */
+    saveKey?: string
+    /** How the Vault lists them when saved under `saveKey`. */
+    saveLabel?: string
     /** The host's own desktop: the fingerprint of the certificate its setup made, the only one to accept. */
     certificate?: string
 }
@@ -470,10 +476,14 @@ export class RemoteDesktopService {
      * Forgets the saved account of the pane's desktop and connects again, with the sign-in form. For xrdp above all:
      * with a wrong password it shows its own login window rather than refusing, so the form never comes back.
      */
+    private askAgain = new WeakSet<DesktopPane>()
+
     async signInAgain (pane: DesktopPane): Promise<void> {
         const session = this.sessions.get(pane)
         if (session && this.signsIn(session.spec)) {
             await forgetCredentials(session.key)
+            // With a saved account, the form asks for its password anew (the saved one stays until then).
+            this.askAgain.add(pane)
             await this.reopen(pane, session.spec)
         }
     }
@@ -571,6 +581,112 @@ export class RemoteDesktopService {
 
     private lastUsed = new Map<string, string>()
 
+    /** `remoteDesktop.accounts`: the saved accounts desktops can sign in with (see accounts.ts). */
+    accounts (): SavedAccount[] {
+        return accountsOf(this.config.store.remoteDesktop)
+    }
+
+    /**
+     * The desktops that sign in with a saved account: configured ones behind SSH hosts, and RDP profiles (their own
+     * choice, or their profile group's default when they make none). Each comes with what opens its editor.
+     */
+    accountUses (id: string): { name: string, profileId?: string, desktopIndex?: number }[] {
+        const desktops = this.configuredDesktops().flatMap((d, i) => d.account === id ? [{ name: String(d.name ?? desktopIdOf(d)), desktopIndex: i }] : [])
+        const groups: any[] = this.config.store.groups ?? []
+        const inherited = (p: any) => p.options?.account === undefined && groups.find(g => g.id === p.group)?.defaults?.[RDP_PROFILE_TYPE]?.options?.account === id
+        const profiles = (this.config.store.profiles ?? [])
+            .filter((p: any) => p?.type === RDP_PROFILE_TYPE && (p.options?.account === id || inherited(p)))
+            .map((p: any) => ({ name: String(p.name ?? p.options?.host ?? ''), profileId: p.id ? String(p.id) : undefined }))
+        return [...desktops, ...profiles]
+    }
+
+    /**
+     * Adds a saved account (no id) or changes one. `password`: the new one for the keychain; undefined keeps what is
+     * there. A new user name or domain without a new password drops the old password: it was for the old account.
+     * Returns the account's id, and the keychain's complaint if the password couldn't be saved.
+     */
+    async saveAccount (account: Omit<SavedAccount, 'id'> & { id?: string }, password?: string): Promise<{ id: string, keychainError?: string }> {
+        const list = this.accounts()
+        const old = list.find(a => a.id === account.id)
+        const entry: SavedAccount = {
+            id: old?.id ?? newAccountId(list),
+            name: account.name.trim() || signInName(account),
+            username: account.username.trim(),
+            ...account.domain?.trim() ? { domain: account.domain.trim() } : {},
+        }
+        this.config.store.remoteDesktop.accounts = old ? list.map(a => a === old ? entry : a) : [...list, entry]
+        this.config.save()
+        this.changed$.next()
+        let keychainError: string | undefined
+        if (password !== undefined && password !== '') {
+            await saveCredentials(accountKey(entry.id), { username: signInName(entry), password }).catch(e => { keychainError = String(e?.message ?? e) })
+        } else if (old && signInName(old) !== signInName(entry)) {
+            await forgetCredentials(accountKey(entry.id))
+        }
+        return { id: entry.id, keychainError }
+    }
+
+    /** A desktop form's "New account…": saves it and hands it back for the form's list. */
+    private async addAccountFromForm (input: NewAccountInput): Promise<SavedAccount> {
+        const { id, keychainError } = await this.saveAccount({ name: input.name, username: input.username, domain: input.domain }, input.password)
+        if (keychainError) {
+            throw new Error(keychainError)
+        }
+        return this.accounts().find(a => a.id === id)!
+    }
+
+    /** Whether a password is saved for the account; 'unknown' while the Vault is locked (it isn't unlocked for this). */
+    accountHasPassword (id: string): Promise<'yes' | 'no' | 'unknown'> {
+        return hasCredentials(accountKey(id))
+    }
+
+    /** "Remove…" on a saved account: asks first, naming the desktops that use it. Resolves true when removed. */
+    async confirmRemoveAccount (id: string): Promise<boolean> {
+        const account = this.accounts().find(a => a.id === id)
+        if (!account) {
+            return false
+        }
+        const uses = this.accountUses(id)
+        const { response } = await this.platform.showMessageBox({
+            type: 'warning',
+            message: `Remove the account "${account.name}"?`,
+            detail: `${signInName(account)}. Its saved password is removed too. ` + (uses.length
+                ? `${uses.length === 1 ? 'One desktop uses' : `${uses.length} desktops use`} it and will ask for an account when connecting: ${uses.map(u => u.name).join(', ')}.`
+                : 'No desktop uses it.'),
+            buttons: ['Remove', 'Keep'],
+            defaultId: 1,
+            cancelId: 1,
+        })
+        if (response !== 0) {
+            return false
+        }
+        await this.removeAccount(id)
+        return true
+    }
+
+    /** Removes a saved account and its password; desktops that used it go back to asking. */
+    async removeAccount (id: string): Promise<void> {
+        const store = this.config.store.remoteDesktop
+        store.accounts = this.accounts().filter(a => a.id !== id)
+        if (this.configuredDesktops().some(d => d.account === id)) {
+            store.desktops = this.configuredDesktops().map(d => {
+                if (d.account !== id) {
+                    return d
+                }
+                const { account: _account, ...rest } = d
+                return rest
+            })
+        }
+        for (const profile of this.config.store.profiles ?? []) {
+            if (profile?.type === RDP_PROFILE_TYPE && profile.options?.account === id) {
+                profile.options.account = ''
+            }
+        }
+        this.config.save()
+        this.changed$.next()
+        await forgetCredentials(accountKey(id))
+    }
+
     /** `remoteDesktop.desktops`: the desktops configured behind SSH hosts. */
     configuredDesktops (): ExtraDesktopConfig[] {
         const list = this.config.store.remoteDesktop?.desktops
@@ -592,6 +708,8 @@ export class RemoteDesktopService {
         const entry = await askDesktop(pane.element.nativeElement, {
             title: `Add a desktop reached through ${target.label}`,
             action: 'Add and open',
+            accounts: this.accounts(),
+            addAccount: input => this.addAccountFromForm(input),
             entry: { via: hostname, host: '127.0.0.1', port: 3389 },
             check: e => this.addressTaken(e, -1),
         })
@@ -618,20 +736,39 @@ export class RemoteDesktopService {
      * sharpness along; a new user name drops the saved account, which was for the old one. Open sessions keep running.
      */
     async editDesktop (pane: DesktopPane, index: number): Promise<void> {
-        const old = this.configuredDesktops()[index]
-        if (!old) {
+        if (!this.configuredDesktops()[index]) {
             return
         }
         if (this.isVisible(pane)) {
             this.showConsole(pane)
         }
-        const entry = await askDesktop(pane.element.nativeElement, {
-            title: `Edit ${old.name ?? desktopIdOf(old)} (behind ${old.via})`,
+        await this.editDesktopIn(pane.element.nativeElement, index)
+        pane.frontend?.focus()
+    }
+
+    /** What a desktop's `via` can name: the SSH profiles' names and hosts (see viaMatches), for the form to suggest. */
+    private async sshHosts (): Promise<string[]> {
+        const profiles = await this.profiles.getProfiles().catch(() => [])
+        const names = profiles.filter((p: any) => p.type === 'ssh' && !p.isTemplate)
+            .flatMap((p: any) => [p.name?.replace(/\s*\(\.ssh\/config\)$/, ''), p.options?.host].filter(Boolean))
+        return [...new Set<string>(names)].sort((a, b) => a.localeCompare(b))
+    }
+
+    /** "Edit a desktop" with the form over any element (a pane, or the settings page). */
+    async editDesktopIn (host: HTMLElement, index: number, askVia = false): Promise<void> {
+        const old = this.configuredDesktops()[index]
+        if (!old) {
+            return
+        }
+        const entry = await askDesktop(host, {
+            title: `Edit ${old.name ?? desktopIdOf(old)}${askVia ? '' : ` (behind ${old.via})`}`,
             action: 'Save',
+            accounts: this.accounts(),
+            addAccount: input => this.addAccountFromForm(input),
+            hosts: askVia ? await this.sshHosts() : undefined,
             entry: old,
             check: e => this.addressTaken(e, index),
         })
-        pane.frontend?.focus()
         // Compared with the entry as it is now: the config can change while the form shows.
         const list = this.configuredDesktops()
         if (!entry || list[index] !== old) {
@@ -641,7 +778,7 @@ export class RemoteDesktopService {
         this.config.store.remoteDesktop.desktops = list
         this.config.save()
         this.changed$.next()
-        const accountChanged = (old.username ?? '') !== (entry.username ?? '') || (old.domain ?? '') !== (entry.domain ?? '')
+        const accountChanged = (old.username ?? '') !== (entry.username ?? '') || (old.domain ?? '') !== (entry.domain ?? '') || (old.account ?? '') !== (entry.account ?? '')
         await this.desktopEdited(desktopIdOf(old), desktopIdOf(entry), accountChanged, false)
     }
 
@@ -706,6 +843,22 @@ export class RemoteDesktopService {
     }
 
     /**
+     * The profile group for remote desktop profiles the plugin makes itself (an .rdp import, "New profile…" on the
+     * settings page): "Remote desktops", made the first time. Profiles made on Tabby's Profiles page go where the user
+     * puts them.
+     */
+    async remoteDesktopGroup (): Promise<string> {
+        const groups = await this.profiles.getProfileGroups({ includeNonUserGroup: false })
+        const existing = groups.find(g => g.name === 'Remote desktops')
+        if (existing?.id) {
+            return existing.id
+        }
+        const group = { name: 'Remote desktops', profiles: [] } as any
+        await this.profiles.newProfileGroup(group, { genId: true })
+        return group.id
+    }
+
+    /**
      * Adds a "Remote desktop (RDP)" profile from a .rdp file's contents (address, user name, domain; see rdpFile.ts)
      * and opens it; or opens the profile that already has that address and user. Returns the profile, or null.
      */
@@ -726,6 +879,7 @@ export class RemoteDesktopService {
             type: RDP_PROFILE_TYPE,
             name: fileName.replace(/^.*[\\/]/, '').replace(/\.rdp$/i, '') || parsed.host,
             icon: 'fas fa-desktop',
+            group: await this.remoteDesktopGroup(),
             options: { host: parsed.host, port: parsed.port, kind: 'windows', username: parsed.username ?? '', domain: parsed.domain ?? '', via: '' },
         }
         await this.profiles.newProfile(profile)
@@ -1575,23 +1729,34 @@ export class RemoteDesktopService {
             spec.port = endpoint.port
             spec.username ??= endpoint.username
         }
-        const saved = retryError ? null : await loadCredentials(session.key)
+        // A saved account (Settings): its user name, and its password from the keychain. One that has none yet, or that
+        // this desktop just refused, is asked for here and saved for every desktop that uses the account.
+        const account = spec.account ? this.accounts().find(a => a.id === spec.account) : undefined
+        if (spec.account && !account) {
+            session.log.push('sign-in: its saved account no longer exists; asking')
+        }
+        const again = this.askAgain.delete(pane)
+        const saved = retryError || again ? null : await loadCredentials(account ? accountKey(account.id) : session.key)
         if (saved) {
-            return { host: spec.host, port: spec.port, credentials: saved, remember: false }
+            if (account) {
+                session.log.push(`sign-in: the saved account "${account.name}"`)
+            }
+            return { host: spec.host, port: spec.port, credentials: account ? { username: signInName(account), password: saved.password } : saved, remember: false }
         }
         session.status('')
         const asked = askCredentials(session.overlay, {
             // The host's own desktops (its own, or its xrdp besides GNOME) and direct ones need no "via".
             title: spec.id === OWN_DESKTOP || target.direct || spec.kind === 'xrdp' && spec.host === '127.0.0.1' ? `Sign in to ${spec.name}` : `Sign in to ${spec.name} (via ${target.label})`,
-            username: spec.username,
+            username: account ? signInName(account) : spec.username,
             error: retryError,
             canRemember: true,
+            account: account?.name,
         }, session.disposed)
         if (session.visible) {
             setTimeout(() => session.visible && session.focusDesktop())
         }
         const entered = await asked
-        return entered && { host: spec.host, port: spec.port, credentials: entered, remember: entered.remember }
+        return entered && { host: spec.host, port: spec.port, credentials: entered, remember: entered.remember, saveKey: account && accountKey(account.id) }
     }
 
     private async connect (pane: DesktopPane, target: RemoteTarget, spec: DesktopSpec, session: DesktopSession): Promise<void> {
@@ -1648,6 +1813,8 @@ export class RemoteDesktopService {
                     return
                 }
                 if (outcome.signInFailed && this.signsIn(spec) && attempt < 5 && alive()) {
+                    // The desktop's own saved account goes. A shared one stays until a new password is entered: this
+                    // desktop refusing it doesn't make it wrong for the others.
                     await forgetCredentials(session.key)
                     retryError = outcome.signInFailed
                     endpoint = null
@@ -2011,9 +2178,9 @@ export class RemoteDesktopService {
             this.changed$.next()
             this.reconnects.delete(pane)  // connected again: a later drop starts over
             if (endpoint.remember) {
-                saveCredentials(session.key, credentials).then(
-                    () => session.log.push('sign-in: saved in the keychain'),
-                    e => session.log.push(`sign-in: keychain: ${e?.message ?? e}`))
+                saveCredentials(endpoint.saveKey ?? session.key, credentials, endpoint.saveLabel).then(
+                    () => session.log.push(`sign-in: saved ${endpoint.saveKey ? 'as the account\'s password ' : ''}in ${storeName()}`),
+                    e => session.log.push(`sign-in: ${storeName()}: ${e?.message ?? e}`))
             }
             if (session.visible) {
                 session.focusDesktop()
@@ -2050,6 +2217,39 @@ export function installStyle (): void {
     }
     styleInstalled = true
     const style = document.createElement('style')
-    style.textContent = STYLE + SIGNIN_STYLE + FILES_STYLE + STATS_STYLE + OSD_STYLE
+    style.textContent = STYLE + SIGNIN_STYLE + FILES_STYLE + STATS_STYLE + OSD_STYLE + DRAGBAR_STYLE + ACCOUNT_FORM_STYLE
     document.head.appendChild(style)
+    keepWindowDraggable()
+}
+
+/** A strip the height of the tab bar that stays a window drag region over a dialog (the plugin's, and Tabby's). */
+const DRAGBAR_STYLE = `
+.trd-form-dragbar { display: none; }
+.modal > .trd-form-dragbar { display: block; position: fixed; left: 0; right: 0; top: 0; height: var(--tabs-height, 38px); -webkit-app-region: drag; }
+`
+
+/**
+ * Tabby's dialogs (ng-bootstrap modals) cover the whole window, tab bar included, with nothing marked as a drag
+ * region, so the window can't be moved while one shows. Each gets a strip where the tab bar is; the dialog box itself
+ * is below it. The plugin's own dialogs do the same (see settingsPage.ts).
+ */
+function keepWindowDraggable (): void {
+    const strip = (modal: Element) => {
+        if (!modal.querySelector(':scope > .trd-form-dragbar')) {
+            const bar = document.createElement('div')
+            bar.className = 'trd-form-dragbar'
+            modal.prepend(bar)
+        }
+    }
+    // ng-bootstrap appends each dialog (ngb-modal-window.modal) to the body itself: only the body's children are watched.
+    document.querySelectorAll('body > .modal').forEach(strip)
+    new MutationObserver(records => {
+        for (const record of records) {
+            record.addedNodes.forEach(node => {
+                if (node instanceof Element && node.classList.contains('modal')) {
+                    strip(node)
+                }
+            })
+        }
+    }).observe(document.body, { childList: true })
 }

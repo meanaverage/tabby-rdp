@@ -5,11 +5,26 @@ import { SettingsTabComponent } from 'tabby-settings'
 
 export const TOGGLE_HOTKEY = 'remote-desktop-toggle'
 
+/**
+ * The plugin's hotkeys (Settings › Hotkeys, and the Remote Desktop page), all `remote-desktop-*`: they fire while a
+ * desktop has the keyboard too (see DesktopKeyboard). Only the switch has a default binding.
+ */
+export const HOTKEYS: { id: string, name: string }[] = [
+    { id: TOGGLE_HOTKEY, name: 'Switch between the desktop and the console' },
+    { id: 'remote-desktop-view-only', name: 'View only (on or off)' },
+    { id: 'remote-desktop-screenshot', name: 'Save a screenshot' },
+    { id: 'remote-desktop-ctrl-alt-del', name: 'Send Ctrl+Alt+Del' },
+    { id: 'remote-desktop-type-into-all', name: 'Type into all desktops in the tab (on or off)' },
+    { id: 'remote-desktop-paste-to-all', name: 'Paste to all desktops in the tab' },
+    { id: 'remote-desktop-connection-status', name: 'Show connection status (on or off)' },
+    { id: 'remote-desktop-disconnect', name: 'Disconnect the desktop' },
+]
+
 /** The plugin's page in Tabby's settings (see settingsPage.ts). */
 export const SETTINGS_TAB_ID = 'remote-desktop'
 
 /** Sections of the settings page that help can open at. */
-export type HelpTopic = 'start' | 'settings' | 'osd' | 'keyboard' | 'desktops' | 'certificates' | 'troubleshooting'
+export type HelpTopic = 'start' | 'settings' | 'osd' | 'keyboard' | 'desktops' | 'accounts' | 'certificates' | 'troubleshooting'
 
 /** A troubleshooting entry: `match` picks it for a message shown over a desktop ("What does this mean?"). */
 export interface HelpEntry {

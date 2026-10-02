@@ -74,6 +74,16 @@ export class UpdateCheck {
         return this.available
     }
 
+    /**
+     * Asks again now, when a version is known already: the settings page is where it's shown, and a Tabby left open for
+     * days would otherwise offer the version it found first, not the latest (meanaverage/tabby-rdp#17).
+     */
+    refresh (): void {
+        if (this.available && this.enabled) {
+            this.check().catch(() => null)
+        }
+    }
+
     /** Settings › Plugins, where Tabby's Upgrade button is. */
     upgrade (): void {
         this.help.openSettings('plugins')
