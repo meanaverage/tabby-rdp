@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+**New**
+- **.rdp files** ([#27](https://github.com/meanaverage/tabby-rdp/issues/27)): an import applies the file's display
+  scale (`desktopscalefactor` 150 or more becomes the desktop's Retina sharpness), keeps its gateway host for later,
+  and says which of its other settings the plugin doesn't apply (sound left on the remote or off, a fixed window
+  size, drive, printer, smart card or USB redirection, several monitors, RemoteApp, an RD Gateway), instead of
+  ignoring them silently.
+
 ## 0.4.1
 
 Fixes from a review of 0.4.0.

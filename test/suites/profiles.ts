@@ -160,6 +160,9 @@ await suite('profiles', async t => {
     const utf8 = await ev<{ host: string, port: number } | null>(`return RD.parseRdpFile(Buffer.from('full address:s:[fe80::1]\\nserver port:i:3391\\n'))`)
     check('.rdp (UTF-8): an IPv6 address, the port from "server port"', utf8?.host === 'fe80::1' && utf8.port === 3391, utf8)
     check('.rdp without an address: refused', await ev(`return RD.parseRdpFile(Buffer.from('audiomode:i:0\\n')) === null`))
+    const extras = await ev<{ sharpness?: string, gateway?: string, ignored: string[] }>(`return RD.parseRdpFile(Buffer.from('full address:s:pc.example\\ndesktopscalefactor:i:200\\naudiomode:i:2\\nredirectdrives:i:1\\nuse multimon:i:1\\nscreen mode id:i:1\\ndesktopwidth:i:1600\\ndesktopheight:i:900\\ngatewayhostname:s:gw.example\\nredirectclipboard:i:1\\n'))`)
+    check('.rdp: a high scale factor is Retina, the gateway kept, the rest noted as not applied', extras?.sharpness === 'retina' && extras.gateway === 'gw.example'
+        && extras.ignored.length === 5 && extras.ignored.some(n => /sound off/.test(n)) && extras.ignored.some(n => /1600×900/.test(n)) && extras.ignored.some(n => /gw\.example/.test(n)), extras)
     const menu = await ev<string[]>(`return (await H.menu(H.pane)).find(i => i.label === 'Settings').submenu.map(i => i.label)`)
     check('the settings menu offers "Import an .rdp file…"', menu.includes('Import an .rdp file…'), menu)
     check('so does the command palette', await ev(`const { CommandProvider } = require('tabby-core')
