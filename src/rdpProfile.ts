@@ -10,6 +10,7 @@ import { RemoteDesktopHelp } from './help'
 import { signInName } from './accounts'
 import { newAccountOption } from './accountForm'
 import { desktopIdOf, DIRECT_KEY } from './desktops'
+import { parseGateway } from './gateway'
 import { forgetCredentials } from './signin'
 import { isConnected, isSSHTab } from './ssh'
 import { RDP_PROFILE_TYPE, RemoteTargets } from './targets'
@@ -31,6 +32,10 @@ export interface RDPProfile extends ConnectableProfile {
         account: string
         /** An SSH profile's id to go through, or '' to connect directly. */
         via: string
+        /** An RD Gateway's address (`host` or `host:port`) to reach the server through, or ''; `host` is then as the gateway sees it. */
+        gateway: string
+        /** A saved account's id to sign in to the gateway with, or '' for the desktop's own sign-in. */
+        gatewayAccount: string
     }
 }
 
@@ -189,6 +194,17 @@ export class RDPProfileSettingsComponent implements ProfileSettingsComponent<RDP
             <div class="mb-3" data-own-account>
                 <label>Domain</label>
                 <input class="form-control" name="domain" spellcheck="false" placeholder="Optional">
+            </div>
+            <div class="mb-3">
+                <label>RD Gateway</label>
+                <input class="form-control" name="gateway" spellcheck="false" placeholder="Optional: a Remote Desktop Gateway, e.g. rdgw.example.com">
+                <div class="text-danger small" data-for="gateway"></div>
+                <div class="text-muted small">The desktop is then reached through the gateway (HTTPS, port 443 unless given), and the address above is as the gateway sees it.</div>
+            </div>
+            <div class="mb-3" data-gateway-account>
+                <label>Gateway account</label>
+                <select class="form-control" name="gatewayAccount"></select>
+                <div class="text-muted small">A gateway that takes another account than the desktop: a saved account for it.</div>
             </div>`
         const field = <T extends HTMLInputElement | HTMLSelectElement = HTMLInputElement>(name: string) => root.querySelector(`[name="${name}"]`) as T
         field('address').value = o.host ? formatAddress(o.host, o.port || 3389) : ''
@@ -232,6 +248,27 @@ export class RDPProfileSettingsComponent implements ProfileSettingsComponent<RDP
         field('username').addEventListener('input', () => { o.username = field('username').value.trim() })
         field('domain').addEventListener('input', () => { o.domain = field('domain').value.trim() })
 
+        // The gateway, and its account where that isn't the desktop's (offered once there is a gateway and a saved account).
+        const gateway = field('gateway')
+        const gatewayAccount = field<HTMLSelectElement>('gatewayAccount')
+        gateway.value = o.gateway ?? ''
+        gatewayAccount.append(new Option('The same as the desktop\'s', ''), ...accounts.map(a => new Option(label(a), a.id)))
+        if (o.gatewayAccount && !accounts.some(a => a.id === o.gatewayAccount)) {
+            gatewayAccount.append(new Option('(a saved account that no longer exists)', o.gatewayAccount))
+        }
+        gatewayAccount.value = o.gatewayAccount ?? ''
+        const gatewayChanged = () => {
+            const text = gateway.value.trim()
+            root.querySelector('[data-for=gateway]')!.textContent = text && !parseGateway(text) ? 'A name or address, with :port if it isn\'t 443.' : ''
+            root.querySelector<HTMLElement>('[data-gateway-account]')!.hidden = !text || gatewayAccount.options.length < 2
+        }
+        gateway.addEventListener('input', () => {
+            o.gateway = gateway.value.trim()
+            gatewayChanged()
+        })
+        gatewayAccount.addEventListener('change', () => { o.gatewayAccount = gatewayAccount.value })
+        gatewayChanged()
+
         const via = field<HTMLSelectElement>('via')
         via.addEventListener('change', () => { o.via = via.value })
         this.injector.get(ProfilesService).getProfiles().then(profiles => {
@@ -272,7 +309,7 @@ export class RDPProfilesService extends QuickConnectProfileProvider<RDPProfile> 
     override name = 'Remote desktop (RDP)'
     override settingsComponent = RDPProfileSettingsComponent
     override configDefaults = {
-        options: { host: '', port: 3389, kind: 'windows', username: '', domain: '', account: '', via: '' },
+        options: { host: '', port: 3389, kind: 'windows', username: '', domain: '', account: '', via: '', gateway: '', gatewayAccount: '' },
         clearServiceMessagesOnConnect: false,
     }
 
@@ -287,7 +324,7 @@ export class RDPProfilesService extends QuickConnectProfileProvider<RDPProfile> 
             type: RDP_PROFILE_TYPE,
             name: 'Remote desktop (RDP)',
             icon: 'fas fa-desktop',
-            options: { host: '', port: 3389, kind: 'windows', username: '', domain: '', account: '', via: '' },
+            options: { host: '', port: 3389, kind: 'windows', username: '', domain: '', account: '', via: '', gateway: '', gatewayAccount: '' },
             isBuiltin: true,
             isTemplate: true,
         }]
@@ -318,8 +355,11 @@ export class RDPProfilesService extends QuickConnectProfileProvider<RDPProfile> 
             return ''
         }
         const address = formatAddress(o.host, o.port || 3389)
-        const via = o.via ? (this.config.store.profiles ?? []).find((p: any) => p.id === o.via)?.name ?? 'an SSH profile' : null
-        return via ? `${address} via ${via}` : address
+        const via = [
+            ...o.gateway ? [`the gateway ${o.gateway}`] : [],
+            ...o.via ? [(this.config.store.profiles ?? []).find((p: any) => p.id === o.via)?.name ?? 'an SSH profile'] : [],
+        ]
+        return via.length ? `${address} via ${via.join(', via ')}` : address
     }
 
     /** `[user@]host[:port]`, typed in Tabby's profile selector. */

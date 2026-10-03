@@ -113,6 +113,7 @@ connecting again.
 | **Files** | Copy files or folders in Finder and press ⌘V on the desktop, or drop them onto it, or use **Remote Desktop › Send files…** in the pane's menu; they paste in Files or Explorer. Files copied on the remote offer **Save to Downloads**. |
 | **Shared folders** | Folders from this computer as drives on the remote desktop (`\\tsclient\<name>` in Explorer), read-write or read-only, for working with files in place: [below](#shared-folders). Windows (and xrdp with FUSE). |
 | **Several desktops in one tab** | Paste to all of them, type into all of them, and see which is which: [below](#several-desktops-in-one-tab). |
+| **RD Gateway** | Desktops behind a Remote Desktop Gateway: the profile names the gateway, and the connection goes through it over HTTPS: [below](#through-an-rd-gateway). |
 | **VMs on a host** | The host's VMs with a desktop, ready to open: [below](#vms-on-a-host). |
 | **Sound** | The remote desktop's sound plays locally. |
 | **Microphone** | Optional (off by default): an app on the remote desktop that records, such as a call, gets your microphone. It is only captured while the app records, with an indicator in the corner of the desktop. |
@@ -216,11 +217,39 @@ profiles:
       kind: windows             # or xrdp, or gnome
       username: alice           # optional
       via: ''                   # or the id of an SSH profile to go through
+      gateway: ''               # or an RD Gateway to go through: rdgw.example.com, or host:port
+      gatewayAccount: ''        # or a saved account's id, for a gateway that takes another account
 ```
 
 A direct connection is a plain TCP connection from this computer, encrypted with TLS like any RDP client's. The
 server's certificate is remembered on the first connection and checked on every later one, as for desktops behind a
 host (above).
+
+### Through an RD Gateway
+
+Where desktops sit behind a Remote Desktop Gateway (the HTTPS front door many companies put before their Windows
+machines), give the profile the gateway's address in **RD Gateway**: `rdgw.example.com`, or `host:port` when it
+isn't on 443. The profile's address is then the desktop as the gateway sees it (`pc17.corp.example`). The connection
+goes to the gateway over HTTPS, signs in there, and the gateway connects it on; the desktop then asks for its own
+sign-in as usual, inside that tunnel.
+
+- **One sign-in by default.** The account you enter for the desktop also signs in to the gateway, as with Remote
+  Desktop Connection's "use my RD Gateway credentials for the remote computer". A gateway that takes another account:
+  pick a [saved account](#saved-accounts) under **Gateway account**; its password is asked for once and kept with the
+  account.
+- **A refused sign-in says who refused it.** When it was the gateway (a wrong password, or its policy doesn't let the
+  account in), the form comes back saying so, and nothing has gone to the desktop. A desktop the gateway's policy
+  doesn't let the account reach, or that the gateway can't reach, is an error with that reason.
+- **The gateway's certificate** is accepted when it is valid for the gateway's name (issued by an authority this
+  computer trusts), and otherwise remembered on first use like a desktop's; either way a later change to one that
+  isn't valid stops the connection, before the sign-in goes out, until you trust the new one. Remembered ones are
+  listed under Settings › Remote Desktop › Certificates.
+- **Behind an SSH host too.** A desktop added behind an SSH host takes a gateway the same way (the **RD Gateway**
+  field of its form): the gateway is then reached from that host.
+
+It speaks the gateway's WebSocket transport (Windows Server 2012 R2 and later) and signs in with a user name and
+password (NTLM, bound to the gateway's TLS certificate as gateways require by default). Smart cards, sign-in pages
+and one-time codes at the gateway are not supported.
 
 ## Saved accounts
 
@@ -451,6 +480,9 @@ npm run build:ironrdp        # rebuild vendor/ from IronRDP and ironrdp/patches:
   far as that xrdp version supports them), sound through the PipeWire or PulseAudio module. Live resize needs xrdp
   0.10 or newer; with 0.9 (Ubuntu 24.04), the desktop keeps its size, scaled to fit, or choose **Reconnect at the new
   size**. xrdp's standard RDP security without TLS (`security_layer=rdp`) isn't supported. `desk` needs GNOME.
+- **RD Gateways** are signed in to with a user name and password; ones that ask for a smart card, a sign-in page or
+  a one-time code, or that only take Kerberos, can't be used. Gateways before Windows Server 2012 R2 (no WebSocket
+  transport) can't either. A desktop behind a gateway isn't started when it is off.
 - **Waking a desktop** over the network (Wake-on-LAN) starts it but never shuts it down again; for VMs, see
   [Shut down VMs it started](#vms-on-a-host).
 

@@ -44,6 +44,13 @@ export interface DesktopSpec {
      * desktop with an address of its own. The sign-in is the host's.
      */
     hyperv?: string
+    /**
+     * An RD Gateway's address (`host` or `host:port`, see gateway.ts) to reach the desktop through: `host` is then as
+     * the gateway sees it, and the gateway as the SSH host (or this computer, for a direct desktop) sees it.
+     */
+    gateway?: string
+    /** A saved account's id to sign in to the gateway with; without it, the desktop's own sign-in is the gateway's too. */
+    gatewayAccount?: string
 }
 
 /**
@@ -62,6 +69,11 @@ export interface DesktopSpec {
  *         - name: Build VM
  *           via: hyperv-host       # a Windows SSH host running Hyper-V
  *           hyperv: 5f05e000-...   # the VM's id (Get-VM): its console through the host, started when it's off
+ *         - name: Office PC
+ *           via: myhost
+ *           host: pc17.corp.example # as the gateway sees it
+ *           gateway: rdgw.example.com   # an RD Gateway (port 443, or host:port), as seen from the SSH host
+ *           gatewayAccount: k3f9x2ab    # optional: a saved account for the gateway, when not the desktop's sign-in
  */
 export interface ExtraDesktopConfig {
     name?: string
@@ -74,6 +86,8 @@ export interface ExtraDesktopConfig {
     account?: string
     wake?: { vm?: string, mac?: string, broadcast?: string, port?: number, hyperv?: string }
     hyperv?: string
+    gateway?: string
+    gatewayAccount?: string
 }
 
 export const OWN_DESKTOP = 'own'
@@ -102,6 +116,7 @@ export function specOf (extra: ExtraDesktopConfig): DesktopSpec | null {
         return null
     }
     const host = String(extra.host || '127.0.0.1')
+    const gateway = typeof extra.gateway === 'string' ? extra.gateway.trim() : ''
     return {
         id: `${host}:${port}`,
         name: extra.name ? String(extra.name) : `${host}:${port}`,
@@ -112,6 +127,7 @@ export function specOf (extra: ExtraDesktopConfig): DesktopSpec | null {
         domain: extra.domain ? String(extra.domain) : undefined,
         account: extra.account ? String(extra.account) : undefined,
         wake: parseWake(extra.wake),
+        ...gateway ? { gateway, gatewayAccount: extra.gatewayAccount ? String(extra.gatewayAccount) : undefined } : {},
     }
 }
 

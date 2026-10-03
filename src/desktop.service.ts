@@ -4,6 +4,7 @@ import { AppService, ConfigService, NotificationsService, PlatformService, Profi
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
+import { Duplex } from 'stream'
 import { pathToFileURL } from 'url'
 import { DesktopPane, desktopPaneOf, isRDPTab, RDP_PROFILE_TYPE, RemoteTarget, RemoteTargets } from './targets'
 import { consoleScript, DeskRequest, MACHINE_ID_COMMAND } from './deskScript'
@@ -28,6 +29,7 @@ import {
 import { isSSHTab } from './ssh'
 import { desktopUp, shutDownWhenIdle, waitForRdp, wakeDesktop } from './wake'
 import { hyperVState } from './hyperv'
+import { Gateway, GatewaySignInError, openThroughGateway, parseGateway } from './gateway'
 import { scanVMs, vmSpec } from './vms'
 
 /** How long a desktop that was started (`wake`) gets to answer. */
@@ -109,6 +111,19 @@ interface Endpoint {
     certificate?: string
     /** A Hyper-V VM's console: the kind of session the guest takes right now (see hyperv.ts). */
     hyperv?: 'enhanced' | 'basic'
+    /** The desktop's RD Gateway takes a saved account of its own: that sign-in (see gatewayAccountFor). */
+    gatewayAccount?: GatewaySignIn
+}
+
+/** A saved account's sign-in to an RD Gateway, where that isn't the desktop's own. */
+interface GatewaySignIn {
+    credentials: Credentials
+    domain?: string
+    /** Entered just now, to be kept as the account's password once the gateway takes it. */
+    remember: boolean
+    saveKey: string
+    saveLabel: string
+    saveFor: string
 }
 
 /** A server certificate the proxy refused (see checkCertificate). */
@@ -118,6 +133,8 @@ interface CertificateProblem {
     actual: string
     /** The host's own desktop: its certificate is the plugin's, so a different one is never to be accepted. */
     pinned: boolean
+    /** The desktop's RD Gateway's certificate rather than the desktop's: the gateway's address, and what it is remembered under. */
+    gateway?: { address: string, key: string }
 }
 
 /** A SHA-256 fingerprint on two lines of 16 bytes, so it fits a narrow pane. */
@@ -238,6 +255,8 @@ class DesktopSession {
     pinnedCertificate: string | null = null
     /** Set when the proxy refused the server's certificate on the current connection attempt. */
     certificateProblem: CertificateProblem | null = null
+    /** Set when the desktop's RD Gateway refused the sign-in on the current connection attempt: what it said. */
+    gatewayRefused: string | null = null
     /** The connection-status indicator, made the first time it shows. */
     indicator: ConnectionStatus | null = null
     /** How the pictures come (for the indicator): the graphics pipeline, bitmaps, or IronRDP's choice. */
@@ -637,15 +656,16 @@ export class RemoteDesktopService {
     }
 
     /**
-     * The desktops that sign in with a saved account: configured ones behind SSH hosts, and RDP profiles (their own
-     * choice, or their profile group's default when they make none). Each comes with what opens its editor.
+     * The desktops that sign in with a saved account, or sign in to their RD Gateway with it: configured ones behind
+     * SSH hosts, and RDP profiles (their own choice, or their profile group's default when they make none). Each comes
+     * with what opens its editor.
      */
     accountUses (id: string): { name: string, profileId?: string, desktopIndex?: number }[] {
-        const desktops = this.configuredDesktops().flatMap((d, i) => d.account === id ? [{ name: String(d.name ?? desktopIdOf(d)), desktopIndex: i }] : [])
+        const desktops = this.configuredDesktops().flatMap((d, i) => d.account === id || d.gatewayAccount === id ? [{ name: String(d.name ?? desktopIdOf(d)), desktopIndex: i }] : [])
         const groups: any[] = this.config.store.groups ?? []
         const inherited = (p: any) => p.options?.account === undefined && groups.find(g => g.id === p.group)?.defaults?.[RDP_PROFILE_TYPE]?.options?.account === id
         const profiles = (this.config.store.profiles ?? [])
-            .filter((p: any) => p?.type === RDP_PROFILE_TYPE && (p.options?.account === id || inherited(p)))
+            .filter((p: any) => p?.type === RDP_PROFILE_TYPE && (p.options?.account === id || p.options?.gatewayAccount === id || inherited(p)))
             .map((p: any) => ({ name: String(p.name ?? p.options?.host ?? ''), profileId: p.id ? String(p.id) : undefined }))
         return [...desktops, ...profiles]
     }
@@ -733,18 +753,25 @@ export class RemoteDesktopService {
     async removeAccount (id: string): Promise<void> {
         const store = this.config.store.remoteDesktop
         store.accounts = this.accounts().filter(a => a.id !== id)
-        if (this.configuredDesktops().some(d => d.account === id)) {
+        if (this.configuredDesktops().some(d => d.account === id || d.gatewayAccount === id)) {
             store.desktops = this.configuredDesktops().map(d => {
-                if (d.account !== id) {
-                    return d
+                const rest = { ...d }
+                if (rest.account === id) {
+                    delete rest.account
                 }
-                const { account: _account, ...rest } = d
+                // A gateway that signed in with it takes the desktop's sign-in from now on.
+                if (rest.gatewayAccount === id) {
+                    delete rest.gatewayAccount
+                }
                 return rest
             })
         }
         for (const profile of this.config.store.profiles ?? []) {
             if (profile?.type === RDP_PROFILE_TYPE && profile.options?.account === id) {
                 profile.options.account = ''
+            }
+            if (profile?.type === RDP_PROFILE_TYPE && profile.options?.gatewayAccount === id) {
+                profile.options.gatewayAccount = ''
             }
         }
         // A profile group's default for remote desktop profiles, too.
@@ -1894,7 +1921,12 @@ export class RemoteDesktopService {
         let woken = false
         let startupRetries = 0
         let endpoint: Endpoint | null = null
+        let gatewayError: string | undefined
         try {
+            const gateway = spec.gateway ? parseGateway(spec.gateway) : null
+            if (spec.gateway && !gateway) {
+                throw new Error(`"${spec.gateway}" isn't a gateway's address (a name or address, or name:port)`)
+            }
             if (spec.wake) {
                 const woke = await this.wakeIfDown(pane, target, spec, session, automatic)
                 if (woke === null) {
@@ -1925,8 +1957,24 @@ export class RemoteDesktopService {
                 endpoint = asked
                 session.remote = target
                 session.pinnedCertificate = asked.certificate ?? null
+                // A gateway with a saved account of its own: its password, asked for when there is none or it was refused.
+                if (gateway && spec.gatewayAccount && !asked.gatewayAccount) {
+                    const signIn = await this.gatewayAccountFor(spec, session, gateway, gatewayError)
+                    if (!alive()) {
+                        return
+                    }
+                    if (signIn === null) {
+                        session.state = 'ended'
+                        this.changed$.next()
+                        this.cancelReconnect(pane)
+                        session.status('Sign-in cancelled.', [{ label: 'Sign in', run: () => this.reopen(pane, spec) }])
+                        return
+                    }
+                    asked.gatewayAccount = signIn
+                }
+                // The proxy outlives an attempt: it reads the sign-in of the attempt it serves.
                 session.proxy ??= await startRDCleanPathProxy(
-                    () => target.openTcp(asked.host, asked.port),
+                    () => gateway ? this.throughGateway(target, spec, session, gateway, endpoint!) : target.openTcp(asked.host, asked.port),
                     fingerprint => this.checkCertificate(session, fingerprint),
                     m => session.log.push(m),
                     { autologon: spec.kind === 'xrdp' })
@@ -1937,6 +1985,12 @@ export class RemoteDesktopService {
                         continue
                     }
                     return
+                }
+                if (outcome.gatewayRefused && asked.gatewayAccount && attempt < 5 && alive()) {
+                    // The gateway's own account was refused: asked for again, the desktop's sign-in kept.
+                    gatewayError = outcome.signInFailed
+                    asked.gatewayAccount = undefined
+                    continue
                 }
                 if (outcome.signInFailed && this.signsIn(spec) && attempt < 5 && alive()) {
                     // The desktop's own saved account goes. A shared one stays until a new password is entered: this
@@ -1976,6 +2030,98 @@ export class RemoteDesktopService {
                 this.afterEnd(pane, target, spec, session, { connected: false, error: e?.message ?? String(e) })
             }
         }
+    }
+
+    /**
+     * The sign-in to a desktop's RD Gateway with the saved account it names: the account's password from the keychain,
+     * or asked for (when none is saved, or `retryError`: the gateway just refused it). Undefined when that account no
+     * longer exists (the desktop's own sign-in is then tried); null when the form was cancelled.
+     */
+    private async gatewayAccountFor (spec: DesktopSpec, session: DesktopSession, gateway: Gateway, retryError?: string): Promise<GatewaySignIn | undefined | null> {
+        const account = this.accounts().find(a => a.id === spec.gatewayAccount)
+        if (!account) {
+            session.log.push('gateway: its saved account no longer exists; signing in with the desktop\'s')
+            return undefined
+        }
+        const signIn = { domain: account.domain, saveKey: accountKey(account.id), saveLabel: `saved account ${account.name}`, saveFor: signInName(account) }
+        const saved = retryError ? null : await loadCredentials(signIn.saveKey)
+        if (saved && saved.username === signInName(account)) {
+            session.log.push(`gateway: the saved account "${account.name}"`)
+            return { ...signIn, credentials: { username: signInName(account), password: saved.password }, remember: false }
+        }
+        session.status('')
+        const asked = askCredentials(session.overlay, {
+            title: `Sign in to the gateway ${gateway.host}, to reach ${spec.name}`,
+            username: signInName(account),
+            error: retryError,
+            canRemember: true,
+            account: account.name,
+        }, session.disposed)
+        if (session.visible) {
+            setTimeout(() => session.visible && session.focusDesktop())
+        }
+        const entered = await asked
+        return entered && { ...signIn, credentials: entered, remember: entered.remember }
+    }
+
+    /**
+     * The proxy's stream to a desktop behind an RD Gateway (see gateway.ts): to the gateway as the SSH host (or this
+     * computer) reaches it, signed in with the gateway's own account or else the desktop's, then on to the desktop.
+     */
+    private async throughGateway (target: RemoteTarget, spec: DesktopSpec, session: DesktopSession, gateway: Gateway, endpoint: Endpoint): Promise<Duplex> {
+        session.gatewayRefused = null
+        const own = endpoint.gatewayAccount
+        const credentials = own?.credentials ?? endpoint.credentials
+        session.log.push(`gateway: ${gateway.host}:${gateway.port}, signing in with ${own ? 'its saved account' : 'the desktop\'s sign-in'}`)
+        try {
+            const stream = await openThroughGateway(
+                () => target.openTcp(gateway.host, gateway.port), gateway,
+                { username: credentials.username, password: credentials.password, domain: (own ? own.domain : endpoint.domain ?? spec.domain) || undefined },
+                { host: endpoint.host, port: endpoint.port },
+                (fingerprint, valid) => this.checkGatewayCertificate(session, gateway, fingerprint, valid),
+                { log: m => session.log.push(m), clientName: os.hostname() })
+            // Entered a moment ago and taken by the gateway: kept, while the account is still what it was signed in as.
+            if (own?.remember) {
+                own.remember = false
+                const accountNow = this.accounts().find(a => accountKey(a.id) === own.saveKey)
+                if (accountNow && signInName(accountNow) === own.saveFor) {
+                    saveCredentials(own.saveKey, own.credentials, own.saveLabel).then(
+                        () => session.log.push(`gateway: saved as the account's password in ${storeName()}`),
+                        e => session.log.push(`gateway: ${storeName()}: ${e?.message ?? e}`))
+                }
+            }
+            return stream
+        } catch (e: any) {
+            if (e instanceof GatewaySignInError) {
+                session.gatewayRefused = e.message
+            }
+            throw e
+        }
+    }
+
+    /**
+     * A gateway's certificate, before the sign-in goes to it. One that is valid for the gateway's name by this
+     * computer's certificate authorities is accepted (a gateway on the internet has one); any other is trusted on
+     * first use, like a desktop's. Either way it is remembered, by the gateway's address: after a valid one, an invalid
+     * one is a change to decide on, not a first use.
+     */
+    private checkGatewayCertificate (session: DesktopSession, gateway: Gateway, raw: string, valid: boolean): void {
+        const fingerprint = normalizeFingerprint(raw)
+        const address = `${gateway.host}:${gateway.port}`
+        const key = `gateway#${address}`
+        const known = this.trustedCertificate(key)
+        if (valid || !known) {
+            if (known !== fingerprint) {
+                this.trustCertificate(key, fingerprint)
+            }
+            session.log.push(`gateway certificate: SHA-256 ${fingerprint}, ${valid ? `valid for ${gateway.host}` : 'remembered (first connection)'}`)
+            return
+        }
+        if (fingerprint !== known) {
+            session.certificateProblem = { expected: known, actual: fingerprint, pinned: false, gateway: { address, key } }
+            throw new Error(`the gateway's certificate SHA-256 ${fingerprint} is not the one remembered (${known})`)
+        }
+        session.log.push(`gateway certificate: SHA-256 ${fingerprint}, as remembered`)
     }
 
     /**
@@ -2080,13 +2226,15 @@ export class RemoteDesktopService {
                 `Something other than GNOME Remote Desktop may be listening on port ${endpoint.port}.`)
             return false
         }
+        // The desktop's, or its gateway's.
+        const whose = problem.gateway ? `${spec.name}'s gateway ${problem.gateway.address}` : spec.name
         if (!session.visible) {
-            this.notifications.notice(`The certificate of ${spec.name}${target.direct ? '' : ` (via ${target.label})`} has changed. Open that desktop to decide.`)
+            this.notifications.notice(`The certificate of ${whose}${target.direct ? '' : ` (via ${target.label})`} has changed. Open that desktop to decide.`)
         }
         const trusted = await new Promise<boolean>(resolve => {
-            session.status(`The certificate of ${spec.name} has changed since it was last used. Nothing has been sent to it.\n\n` +
+            session.status(`The certificate of ${whose} has changed since it was last used. Nothing has been sent to it.\n\n` +
                 `${fingerprints}\n\nReinstalling the machine or renewing its certificate changes it. If neither happened, ` +
-                `something else may be answering at ${spec.host}:${spec.port}.`, [
+                `something else may be answering at ${problem.gateway?.address ?? `${spec.host}:${spec.port}`}.`, [
                 { label: 'Trust the new certificate', run: () => resolve(true) },
                 { label: 'Cancel', run: () => resolve(false) },
             ], true)
@@ -2099,8 +2247,8 @@ export class RemoteDesktopService {
             stop('Not connected: the new certificate was not trusted.')
             return false
         }
-        this.trustCertificate(session.authKey, problem.actual)
-        session.log.push(`certificate: SHA-256 ${problem.actual}, trusted instead of ${problem.expected}`)
+        this.trustCertificate(problem.gateway?.key ?? session.authKey, problem.actual)
+        session.log.push(`${problem.gateway ? 'gateway ' : ''}certificate: SHA-256 ${problem.actual}, trusted instead of ${problem.expected}`)
         return true
     }
 
@@ -2183,10 +2331,11 @@ export class RemoteDesktopService {
     /** One RDP connection attempt, until it ends. */
     private async run (
         pane: DesktopPane, target: RemoteTarget, spec: DesktopSpec, session: DesktopSession, rdp: any, endpoint: Endpoint,
-    ): Promise<{ connected: boolean, signInFailed?: string, error?: string, reason?: string, certificate?: CertificateProblem }> {
+    ): Promise<{ connected: boolean, signInFailed?: string, gatewayRefused?: boolean, error?: string, reason?: string, certificate?: CertificateProblem }> {
         const credentials = endpoint.credentials
         const alive = () => this.sessions.get(pane) === session
         session.certificateProblem = null
+        session.gatewayRefused = null
         const el = document.createElement('iron-remote-desktop') as any
         try {
             el.setAttribute('scale', this.screenScale() === 3 ? 'real' : 'fit')
@@ -2294,6 +2443,11 @@ export class RemoteDesktopService {
                 // The proxy refused the server's certificate, before CredSSP (see checkCertificate).
                 if (session.certificateProblem) {
                     return { connected: false, certificate: session.certificateProblem }
+                }
+                // Its gateway refused the sign-in, before anything went to the desktop.
+                if (session.gatewayRefused) {
+                    session.log.push(`gateway: ${session.gatewayRefused}`)
+                    return { connected: false, signInFailed: session.gatewayRefused, gatewayRefused: true }
                 }
                 // IronErrorKind: 1 WrongPassword, 2 LogonFailure.
                 const kind = typeof e?.kind === 'function' ? e.kind() : undefined
