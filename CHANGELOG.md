@@ -37,6 +37,11 @@
   (sound left on the remote or off, a fixed window size, its own drives (shared folders are a setting here), printer,
   smart card or USB redirection, several monitors, RemoteApp, an account of its own or a smart card at the gateway),
   instead of ignoring them silently.
+- **Send text as typed** ([#31](https://github.com/meanaverage/tabby-rdp/issues/31)), a setting: the characters the
+  keyboard produces go to the desktop rather than key positions, so dead keys and a layout the remote doesn't have
+  come out right; keys with Ctrl, Alt or ⌘ still go by position, so shortcuts keep working. Off by default. Windows
+  types any character; a GNOME desktop only those its own layout has. Input methods (Chinese, Japanese, Korean) need
+  more than this and stay open in #31.
 
 **Fixed** (from a review of the code)
 - **Save to Downloads** couldn't be led elsewhere by the remote's file names alone, but could by a link already in

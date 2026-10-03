@@ -36,6 +36,8 @@ export class RemoteDesktopConfig extends ConfigProvider {
             desk: false,
             // macOS: ⌘ acts as Ctrl on the remote desktop (false: ⌘ is the Windows/Super key).
             macShortcuts: true,
+            // Send the characters typed (Unicode) rather than key positions: dead keys, layouts the remote lacks.
+            unicodeKeys: false,
             // Play the remote desktop's sound (applies on the next connect).
             sound: true,
             // H.264 in the graphics pipeline, decoded by the browser, where it can (applies on the next connect).
@@ -292,6 +294,12 @@ export function settingsMenu (desktop: RemoteDesktopService, pane?: DesktopPane 
             label: 'Show connection status on the desktop (throughput, frames per second, round trip)',
             checked: current.connectionStatus,
             click: () => desktop.updateSettings({ connectionStatus: !current.connectionStatus }),
+        },
+        {
+            type: 'checkbox',
+            label: 'Send text as typed (characters rather than key positions: dead keys, other layouts)',
+            checked: current.unicodeKeys,
+            click: () => desktop.updateSettings({ unicodeKeys: !current.unicodeKeys }),
         },
         ...process.platform === 'darwin' ? [{
             type: 'checkbox' as const,

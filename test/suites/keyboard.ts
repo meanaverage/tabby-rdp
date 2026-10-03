@@ -77,6 +77,24 @@ await suite('keyboard', async t => {
         t.skip('Mac shortcuts', 'macOS only')
     }
 
+    // 6b. "Send text as typed": a key whose character isn't what its position gives on the remote's layout (a z on the
+    // Y key, as a German keyboard has it) arrives as that character; off, the position wins (a y). A character the
+    // remote's layout doesn't have at all (é on a US GNOME) can't be typed either way: mutter has no keycode for it.
+    const typeZ = async () => {
+        await ev(`H.pane.sendInput('clear\\r')`)
+        await sleep(500)
+        await t.type('echo ')
+        await t.key('z', 'KeyY', 89, [], 'z')
+        await t.type('$((6*7))')
+        await t.enter()
+    }
+    await t.settings({ unicodeKeys: true })
+    await typeZ()
+    check('text as typed: a z on the Y key arrives as z', !!(await t.waitFor('return /^z42\\s*$/m.test(H.screen(H.pane))', 6)), (await ev<string>('return H.screen(H.pane)')).split('\n').filter(Boolean).slice(-4))
+    await t.settings({ unicodeKeys: false })
+    await typeZ()
+    check('key positions (the default): the Y key is a y', !!(await t.waitFor('return /^y42\\s*$/m.test(H.screen(H.pane))', 6)), (await ev<string>('return H.screen(H.pane)')).split('\n').filter(Boolean).slice(-4))
+
     // 7. Tabby shortcuts that stay: switching tabs, and the desktop/console switch.
     const hotkey = await ev(`return RD.injector.get(require('tabby-core').ConfigService).store.hotkeys['remote-desktop-toggle'][0] ?? ''`)
     const other = await ev<number>('return RD.app.tabs.findIndex(x => x !== H.topOf(H.pane))')
