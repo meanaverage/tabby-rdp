@@ -250,6 +250,8 @@ keeps the remote from changing, adding or removing anything in it. Every remote 
 folders, so share only what each of them may have, and remove a folder to stop sharing it. Changes apply on the next
 connection.
 
+<p align="center"><img src="docs/images/shared-folders.png" width="548" alt="Shared folders in Settings › Remote Desktop: two folders, one read-only, and Share a folder…"></p>
+
 Files are served through the RDP connection as the remote reads and writes them, which suits opening and saving
 documents in place; for moving large files, copying through the clipboard is just as quick. Symbolic links inside a
 shared folder are followed, as mstsc follows them. Windows mounts shared folders (tested); xrdp can when built with
