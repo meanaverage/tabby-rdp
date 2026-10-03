@@ -12,6 +12,12 @@
   and nothing else: `..` and symbolic links that lead out of it don't resolve, and only files and folders are served.
   File operations run in the background (Node's thread pool), one request at a time, so a slow disk or network
   folder slows the drive, not Tabby's window.
+- **Hyper-V VMs** ([#28](https://github.com/meanaverage/tabby-rdp/issues/28)): on a Windows SSH host that runs
+  Hyper-V, its VMs are listed among the host's desktops (`Get-VM`, with PowerShell over the SSH connection), and one
+  that is off is started when opened. What opens is the VM's console, through the host (port 2179), as Hyper-V
+  Manager's Connect does: no network or Remote Desktop needed in the VM. A Windows guest that is up gets an enhanced
+  session; otherwise it is the basic console. The sign-in is the host's, asked once per host; an account the host
+  signs in but doesn't let open the console (it ends the connection at once) brings the form back, saying so.
 - IronRDP's web client gains drive redirection (MS-RDPEFS) through a JavaScript file system (patch 15), and its
   static channels send multi-chunk messages Windows accepts (patch 16): a response over 1600 bytes was flagged for the
   receiver to keep the channel header, which Windows' drive redirector didn't expect and dropped the channel on.

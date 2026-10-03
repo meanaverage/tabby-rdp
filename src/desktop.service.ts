@@ -26,7 +26,8 @@ import {
     storeName, STYLE as SIGNIN_STYLE,
 } from './signin'
 import { isSSHTab } from './ssh'
-import { rdpAnswers, shutDownWhenIdle, waitForRdp, wakeDesktop } from './wake'
+import { desktopUp, shutDownWhenIdle, waitForRdp, wakeDesktop } from './wake'
+import { hyperVState } from './hyperv'
 import { scanVMs, vmSpec } from './vms'
 
 /** How long a desktop that was started (`wake`) gets to answer. */
@@ -106,6 +107,8 @@ interface Endpoint {
     domain?: string
     /** The host's own desktop: the fingerprint of the certificate its setup made, the only one to accept. */
     certificate?: string
+    /** A Hyper-V VM's console: the kind of session the guest takes right now (see hyperv.ts). */
+    hyperv?: 'enhanced' | 'basic'
 }
 
 /** A server certificate the proxy refused (see checkCertificate). */
@@ -244,6 +247,14 @@ class DesktopSession {
     /** Resolves when the session is disposed (ends a pending sign-in). */
     readonly disposed: Promise<void>
     private markDisposed!: () => void
+
+    /**
+     * What a sign-in and a certificate are remembered under: the desktop; for a Hyper-V VM, its host, whose account
+     * and certificate they are, the same for all of its VMs.
+     */
+    get authKey (): string {
+        return this.spec.hyperv ? this.key.replace(/#hyperv:[^#]*$/, '#hyperv') : this.key
+    }
 
     /** `key`: see sessionKey(); one desktop per key. */
     constructor (container: HTMLElement, readonly key: string, readonly spec: DesktopSpec) {
@@ -516,7 +527,7 @@ export class RemoteDesktopService {
     async signInAgain (pane: DesktopPane): Promise<void> {
         const session = this.sessions.get(pane)
         if (session && this.signsIn(session.spec)) {
-            await forgetCredentials(session.key)
+            await forgetCredentials(session.authKey)
             // With a saved account, the form asks for its password anew (the saved one stays until then).
             this.askAgain.add(pane)
             await this.reopen(pane, session.spec)
@@ -542,8 +553,8 @@ export class RemoteDesktopService {
         return [...specs, ...found.filter(f => !specs.some(s => s.id === f.id))]
     }
 
-    /** VMs found on SSH hosts (see vms.ts), by target key: when, and as desktops. */
-    private vms = new Map<string, { at: number, specs: DesktopSpec[], scan?: Promise<void> }>()
+    /** VMs found on SSH hosts (see vms.ts), by target key: when, and as desktops; and what the scans learnt of the host. */
+    private vms = new Map<string, { at: number, specs: DesktopSpec[], scan?: Promise<void>, host: { windows?: boolean } }>()
 
     /**
      * Looks for VMs with a desktop on the host (libvirt), unless it did in the last minute or the setting is off.
@@ -560,13 +571,15 @@ export class RemoteDesktopService {
         if (known && Date.now() - known.at < 60000) {
             return Promise.resolve()
         }
-        const scan = scanVMs(target).then(found => {
-            this.vms.set(target.key, { at: Date.now(), specs: found.map(vmSpec) })
+        const host = known?.host ?? { windows: this.ownDesktops.get(target.key)?.kind === 'windows' || undefined }
+        const scan = scanVMs(target, host).then(found => {
+            this.vms.set(target.key, { at: Date.now(), specs: found.map(vmSpec), host })
             this.changed$.next()
         }, () => {
-            this.vms.set(target.key, { at: Date.now(), specs: known?.specs ?? [] })
+            // Not asked, rather than nothing found (the connection wasn't up yet, say): the next look asks again.
+            this.vms.set(target.key, { at: known?.at ?? 0, specs: known?.specs ?? [], host })
         })
-        this.vms.set(target.key, { at: known?.at ?? 0, specs: known?.specs ?? [], scan })
+        this.vms.set(target.key, { at: known?.at ?? 0, specs: known?.specs ?? [], scan, host })
         return scan
     }
 
@@ -577,7 +590,8 @@ export class RemoteDesktopService {
         if (!session?.remote || !spec?.found) {
             return
         }
-        const entry = { name: spec.name, via: session.remote.label, host: spec.host, port: spec.port, kind: spec.kind, ...spec.wake ? { wake: spec.wake } : {} }
+        const entry = spec.hyperv ? { name: spec.name, via: session.remote.label, hyperv: spec.hyperv }
+            : { name: spec.name, via: session.remote.label, host: spec.host, port: spec.port, kind: spec.kind, ...spec.wake ? { wake: spec.wake } : {} }
         this.config.store.remoteDesktop.desktops = [...this.configuredDesktops(), entry]
         this.config.save()
         this.changed$.next()
@@ -1816,6 +1830,20 @@ export class RemoteDesktopService {
             spec.port = endpoint.port
             spec.username ??= endpoint.username
         }
+        // A Hyper-V VM's console: which session the guest takes right now (enhanced once its Remote Desktop Services
+        // are up, the basic console before that and for guests that have none). The sign-in is the host's.
+        let hyperv: Endpoint['hyperv']
+        if (spec.hyperv) {
+            session.status(`Connecting to ${spec.name} via ${target.label}…`)
+            const state = await hyperVState(target, spec.hyperv)
+            if (!state.running) {
+                throw new Error(`${spec.name} isn't running`)
+            }
+            hyperv = state.enhanced ? 'enhanced' : 'basic'
+            session.log.push(`hyper-v: ${hyperv === 'enhanced' ? 'an enhanced session' : 'the basic console (the guest takes no enhanced session now)'}`)
+            // The SSH user is who to try first: it got to list the VMs.
+            spec.username ??= target.key.replace(/@[^@]*$/, '') || undefined
+        }
         // A saved account (Settings): its user name, and its password from the keychain. One that has none yet, or that
         // this desktop just refused, is asked for here and saved for every desktop that uses the account.
         const account = spec.account ? this.accounts().find(a => a.id === spec.account) : undefined
@@ -1824,7 +1852,7 @@ export class RemoteDesktopService {
         }
         const again = this.askAgain.delete(pane)
         // A desktop whose account is gone asks, rather than falling back to a login of its own saved earlier.
-        let saved = retryError || again || spec.account && !account ? null : await loadCredentials(account ? accountKey(account.id) : session.key)
+        let saved = retryError || again || spec.account && !account ? null : await loadCredentials(account ? accountKey(account.id) : session.authKey)
         if (saved && account && saved.username !== signInName(account)) {
             // Kept for an earlier user name of the account (its change didn't reach the store): not this one's.
             session.log.push(`sign-in: the account's saved password is for ${saved.username}, not ${signInName(account)}; asking`)
@@ -1834,12 +1862,13 @@ export class RemoteDesktopService {
             if (account) {
                 session.log.push(`sign-in: the saved account "${account.name}"`)
             }
-            return { host: spec.host, port: spec.port, credentials: account ? { username: signInName(account), password: saved.password } : saved, remember: false, domain: account ? account.domain ?? '' : undefined }
+            return { host: spec.host, port: spec.port, credentials: account ? { username: signInName(account), password: saved.password } : saved, remember: false, domain: account ? account.domain ?? '' : undefined, hyperv }
         }
         session.status('')
         const asked = askCredentials(session.overlay, {
             // The host's own desktops (its own, or its xrdp besides GNOME) and direct ones need no "via".
-            title: spec.id === OWN_DESKTOP || target.direct || spec.kind === 'xrdp' && spec.host === '127.0.0.1' ? `Sign in to ${spec.name}` : `Sign in to ${spec.name} (via ${target.label})`,
+            title: spec.hyperv ? `Sign in to ${target.label}, to open ${spec.name}`
+                : spec.id === OWN_DESKTOP || target.direct || spec.kind === 'xrdp' && spec.host === '127.0.0.1' ? `Sign in to ${spec.name}` : `Sign in to ${spec.name} (via ${target.label})`,
             username: account ? signInName(account) : spec.username,
             error: retryError,
             canRemember: true,
@@ -1852,6 +1881,7 @@ export class RemoteDesktopService {
         return entered && {
             host: spec.host, port: spec.port, credentials: entered, remember: entered.remember, domain: account ? account.domain ?? '' : undefined,
             saveKey: account && accountKey(account.id), saveLabel: account && `saved account ${account.name}`, saveFor: account && signInName(account),
+            hyperv,
         }
     }
 
@@ -1911,7 +1941,7 @@ export class RemoteDesktopService {
                 if (outcome.signInFailed && this.signsIn(spec) && attempt < 5 && alive()) {
                     // The desktop's own saved account goes. A shared one stays until a new password is entered: this
                     // desktop refusing it doesn't make it wrong for the others.
-                    await forgetCredentials(session.key)
+                    await forgetCredentials(session.authKey)
                     retryError = outcome.signInFailed
                     endpoint = null
                     continue
@@ -1967,9 +1997,9 @@ export class RemoteDesktopService {
             session.log.push(`certificate: SHA-256 ${fingerprint}, as set up`)
             return
         }
-        const known = this.trustedCertificate(session.key)
+        const known = this.trustedCertificate(session.authKey)
         if (!known) {
-            this.trustCertificate(session.key, fingerprint)
+            this.trustCertificate(session.authKey, fingerprint)
             session.log.push(`certificate: SHA-256 ${fingerprint}, remembered (first connection)`)
             return
         }
@@ -2069,7 +2099,7 @@ export class RemoteDesktopService {
             stop('Not connected: the new certificate was not trusted.')
             return false
         }
-        this.trustCertificate(session.key, problem.actual)
+        this.trustCertificate(session.authKey, problem.actual)
         session.log.push(`certificate: SHA-256 ${problem.actual}, trusted instead of ${problem.expected}`)
         return true
     }
@@ -2107,7 +2137,7 @@ export class RemoteDesktopService {
     private async wakeIfDown (pane: DesktopPane, target: RemoteTarget, spec: DesktopSpec, session: DesktopSession, automatic: boolean): Promise<boolean | null> {
         const alive = () => this.sessions.get(pane) === session
         session.status(`Connecting to ${spec.name} via ${target.label}…`)
-        if (await rdpAnswers(target, spec.host, spec.port)) {
+        if (await desktopUp(target, spec.host, spec.port, spec.wake)) {
             return false
         }
         if (!alive()) {
@@ -2132,7 +2162,7 @@ export class RemoteDesktopService {
         const started = Date.now()
         const progress = () => session.status(`Starting ${spec.name}…\nWaiting for it to answer: ${Math.round((Date.now() - started) / 1000)} s`, [cancel])
         progress()
-        const up = await this.zone.runOutsideAngular(() => waitForRdp(target, spec.host, spec.port, WAKE_TIMEOUT_MS, () => cancelled || !alive(), progress))
+        const up = await this.zone.runOutsideAngular(() => waitForRdp(target, spec.host, spec.port, WAKE_TIMEOUT_MS, () => cancelled || !alive(), progress, spec.wake))
         if (up) {
             session.log.push(`wake: answered after ${Math.round((Date.now() - started) / 1000)} s`)
             // Started here, so it can go back off when it's no longer used, if the settings say so (a VM only: a machine
@@ -2191,7 +2221,8 @@ export class RemoteDesktopService {
             const config = session.ui.configBuilder()
                 .withUsername(username)
                 .withPassword(credentials.password)
-                .withDestination(`${spec.id === OWN_DESKTOP ? target.hostname ?? target.label : endpoint.host}:${endpoint.port}`)
+                // The name the server is signed in to as: the SSH host's for its own desktop, and for its VMs' consoles.
+                .withDestination(`${spec.id === OWN_DESKTOP || spec.hyperv ? target.hostname ?? target.label : endpoint.host}:${endpoint.port}`)
                 .withProxyAddress(session.proxy!.url)
                 .withServerDomain(domain)
                 .withAuthToken(session.proxy!.token)
@@ -2201,9 +2232,18 @@ export class RemoteDesktopService {
             // H.264 in the graphics pipeline, decoded by the browser (hardware-accelerated where it can be). A decoder
             // failure ends the connection, which then reconnects without H.264 (see below). Not for xrdp: it encodes
             // H.264 only in some builds, and without it bitmaps do better there than the pipeline.
+            // A Hyper-V VM's console: the VM's id goes ahead of everything, and the sign-in (the host's) before the RDP
+            // handshake. Its basic console is a picture, keyboard and mouse: no channels for sound, files or resizing.
+            const basic = endpoint.hyperv === 'basic'
+            if (spec.hyperv) {
+                if (typeof rdp.vmConnect !== 'function') {
+                    throw new Error('this build of IronRDP has no Hyper-V console support')
+                }
+                config.withExtension(rdp.vmConnect(spec.hyperv, endpoint.hyperv ?? 'basic'))
+            }
             session.h264?.close()
             session.h264 = null
-            if (spec.kind !== 'xrdp' && typeof rdp.graphicsPipeline === 'function' && await this.useH264(rdp, session, settings)) {
+            if (spec.kind !== 'xrdp' && !basic && typeof rdp.graphicsPipeline === 'function' && await this.useH264(rdp, session, settings)) {
                 session.h264 = new rdp.WebCodecsH264Decoder({ onFailure: (reason: string) => session.log.push(`h264: failed: ${reason}`) })
                 config.withExtension(rdp.h264Decoder(session.h264))
             }
@@ -2218,14 +2258,14 @@ export class RemoteDesktopService {
                 session.graphics = 'automatic graphics'
             }
             session.log.push(`graphics: ${session.graphics}`)
-            if (settings.sound) {
+            if (settings.sound && !basic) {
                 session.audio?.close()
                 session.audio = new AudioPlayer()
                 config.withExtension(rdp.audioPlayback(session.audio.callback))
             }
             session.mic?.close()
             session.mic = null
-            if (settings.microphone && typeof rdp.audioInput === 'function') {
+            if (settings.microphone && !basic && typeof rdp.audioInput === 'function') {
                 const ui = session.ui
                 const mic: Microphone = new Microphone(
                     pcm => ui.invokeExtension(rdp.audioInputData(pcm)),
@@ -2241,7 +2281,7 @@ export class RemoteDesktopService {
             session.drives?.dispose()
             session.drives = null
             const folders = this.sharedFolders()
-            if (folders.length && spec.kind !== 'gnome' && typeof rdp.driveRedirection === 'function') {
+            if (folders.length && spec.kind !== 'gnome' && !basic && typeof rdp.driveRedirection === 'function') {
                 session.drives = new SharedDrives(folders, m => session.log.push(m))
                 config.withExtension(rdp.driveRedirection(session.drives))
                 session.log.push(`drives: ${folders.map(f => `${f.name}${f.readOnly ? ' (read-only)' : ''}`).join(', ')}`)
@@ -2269,7 +2309,7 @@ export class RemoteDesktopService {
             }
             session.ui.setVisibility(true)
             session.remoteSize = { width, height, scale: 100 }
-            if (size.scale !== 100 || spec.kind === 'windows') {
+            if (!basic && (size.scale !== 100 || spec.kind === 'windows')) {
                 // Retina: the connection starts unscaled; ask for the matching remote scale right away. Windows also
                 // keeps a signed-in session's scale from the last connection: set it either way.
                 this.applySize(session, size)
@@ -2289,13 +2329,14 @@ export class RemoteDesktopService {
             if (endpoint.remember && endpoint.saveKey && (!accountNow || signInName(accountNow) !== endpoint.saveFor)) {
                 session.log.push(`sign-in: not saved: the account ${accountNow ? 'changed' : 'was removed'} meanwhile`)
             } else if (endpoint.remember) {
-                saveCredentials(endpoint.saveKey ?? session.key, credentials, endpoint.saveLabel).then(
+                saveCredentials(endpoint.saveKey ?? session.authKey, credentials, endpoint.saveLabel).then(
                     () => session.log.push(`sign-in: saved ${endpoint.saveKey ? 'as the account\'s password ' : ''}in ${storeName()}`),
                     e => session.log.push(`sign-in: ${storeName()}: ${e?.message ?? e}`))
             }
             if (session.visible) {
                 session.focusDesktop()
             }
+            const connectedAt = Date.now()
             let end: any
             try {
                 end = await info.run()
@@ -2309,7 +2350,14 @@ export class RemoteDesktopService {
                     this.h264Failed.add(session.key)
                     return { connected: true, error: `H.264 decoding failed (${session.h264.failed}); continuing without it` }
                 }
-                return { connected: true, error: typeof e?.backtrace === 'function' ? e.backtrace().split('\n')[0] : (e?.message ?? String(e)) }
+                const error: string = typeof e?.backtrace === 'function' ? e.backtrace().split('\n')[0] : (e?.message ?? String(e))
+                // A Hyper-V host signs anyone in that it knows, and ends the connection at once when that account may not
+                // open the VM's console: a refused sign-in in effect, so the form comes back, saying so.
+                if (spec.hyperv && Date.now() - connectedAt < 5000 && /disconnect provider ultimatum/i.test(error)) {
+                    session.log.push(`hyper-v: disconnected at once (${error}): the account may not open this VM's console`)
+                    return { connected: false, signInFailed: `${target.label} ended the connection at once: this account may not open ${spec.name}'s console. Use an administrator of the host, a member of its Hyper-V Administrators, or an account given access with Grant-VMConnectAccess.` }
+                }
+                return { connected: true, error }
             } finally {
                 // The server can't close the microphone, or its files, once the connection is gone.
                 session.mic?.close()
