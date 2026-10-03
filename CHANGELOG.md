@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-**New**
+**Added**
 - **Shared folders** ([#26](https://github.com/meanaverage/tabby-rdp/issues/26)): folders from this computer appear as
   drives on the remote desktop, under `\\tsclient` in Explorer, like mstsc's drive redirection. Settings › Remote
   Desktop › Settings › Shared folders: **Share a folder…**, each one read-write or read-only. Every desktop you connect
