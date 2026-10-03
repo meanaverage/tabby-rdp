@@ -282,7 +282,7 @@ preview. Desktops are named after their SSH profile's name.
 ## VMs on a host
 
 When you right-click an SSH host, the plugin looks at the host's libvirt VMs (`virsh`, as your SSH user; read-only, at
-most once a minute) and lists the ones with a desktop under **Desktops**, with nothing to set up:
+most once a minute; on a Windows host, [Hyper-V's](#hyper-v)) and lists the ones with a desktop under **Desktops**, with nothing to set up:
 
 - a running VM whose RDP port answers: Windows, or Linux with xrdp;
 - a Windows VM that's shut off: **Start and open**, which starts it (`virsh start`) and connects as soon as it answers.
@@ -298,6 +298,23 @@ also works once the tab is closed or Tabby has quit: after that long with no con
 host, it asks the VM to shut down (`virsh shutdown`, with a key press first, since Windows ignores the request while its
 screen sleeps), then ends. VMs that were already running are never touched, and neither are machines woken over the
 network.
+
+### Hyper-V
+
+A Windows SSH host that runs Hyper-V gets the same: its VMs (`Get-VM`, with PowerShell over the SSH connection) are
+listed under **Desktops**, and one that is off is started when opened (`Start-VM`). What opens is the VM's console, as
+Hyper-V Manager's **Connect** shows it: reached through the host (its port 2179), so the VM needs no network, no
+Remote Desktop turned on, not even an operating system. A Windows guest that is up is asked for an enhanced session
+(its own sign-in screen, the clipboard, sound, shared folders, resizing); before that, and for other guests, it is the
+basic console: the picture, keyboard and mouse. The basic console is what has been tested so far; enhanced sessions
+take the same path but haven't been tried against a running Windows guest yet.
+
+The sign-in is the **host's**, not the guest's: an account that may open the VM's console there, which the plugin
+asks for once per host (the SSH user is filled in). That is an administrator, a member of the host's Hyper-V
+Administrators group, or an account given access with `Grant-VMConnectAccess`. A local administrator other than the
+built-in one can list VMs over SSH and still be refused the console, since Windows gives it a reduced token over the
+network; Hyper-V refuses by ending the connection at once, and the plugin then asks again, saying so. Listing VMs
+takes an account Hyper-V lets do that (an administrator of the host, in practice).
 
 ## desk: the console on the desktop
 

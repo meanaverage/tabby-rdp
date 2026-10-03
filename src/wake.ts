@@ -1,18 +1,23 @@
 import { shq } from './deskScript'
+import { hyperVState, startHyperV, vmId } from './hyperv'
 import { RemoteTarget } from './targets'
 
 /**
  * `wake` of a desktop behind a host: how to start it when it is off. `vm`: a libvirt domain on the SSH host,
  * started with `virsh` as the SSH user. `mac`: a Wake-on-LAN magic packet, sent from the SSH host (UDP broadcast,
- * by default to 255.255.255.255 port 9).
+ * by default to 255.255.255.255 port 9). `hyperv`: a Hyper-V VM on a Windows SSH host, by its id, started with
+ * Start-VM as the SSH user.
  */
-export type WakeSpec = { vm: string } | { mac: string, broadcast?: string, port?: number }
+export type WakeSpec = { vm: string } | { mac: string, broadcast?: string, port?: number } | { hyperv: string }
 
 const MAC = /^[0-9a-f]{2}([:-]?)[0-9a-f]{2}(\1[0-9a-f]{2}){4}$/i
 const IPV4 = /^\d{1,3}(\.\d{1,3}){3}$/
 
 /** A `wake` config value, checked; undefined when absent or unusable. */
 export function parseWake (raw: any): WakeSpec | undefined {
+    if (vmId(raw?.hyperv)) {
+        return { hyperv: vmId(raw.hyperv) }
+    }
     if (typeof raw?.vm === 'string' && raw.vm.trim()) {
         return { vm: raw.vm.trim() }
     }
@@ -159,8 +164,16 @@ export async function rdpAnswers (target: RemoteTarget, host: string, port: numb
     return /^RD_OPEN$/m.test(out)
 }
 
+/** Whether the desktop is up: its RDP server answers, or, for a Hyper-V VM (reached through its host), it runs. */
+export async function desktopUp (target: RemoteTarget, host: string, port: number, wake?: WakeSpec): Promise<boolean> {
+    return wake && 'hyperv' in wake ? (await hyperVState(target, wake.hyperv)).running : rdpAnswers(target, host, port)
+}
+
 /** Starts the desktop as `wake` says. Resolves with what was done; throws with the reason when it couldn't. */
 export async function wakeDesktop (target: RemoteTarget, wake: WakeSpec): Promise<string> {
+    if ('hyperv' in wake) {
+        return startHyperV(target, wake.hyperv)
+    }
     const script = 'vm' in wake
         ? `VM=${shq(wake.vm)}\n${VM_SCRIPT}`
         : `MAC=${shq(wake.mac)}\nBCAST=${shq(wake.broadcast ?? '255.255.255.255')}\nPORT=${wake.port ?? 9}\n${WOL_SCRIPT}`
@@ -173,18 +186,18 @@ export async function wakeDesktop (target: RemoteTarget, wake: WakeSpec): Promis
 }
 
 /**
- * Probes until the RDP server answers (true), the time is up or `stopped()` (false). At most one probe every
- * 3 s; `progress` is called every 5 s.
+ * Probes until the desktop is up (true; see desktopUp), the time is up or `stopped()` (false). At most one probe
+ * every 3 s; `progress` is called every 5 s.
  */
 export async function waitForRdp (
-    target: RemoteTarget, host: string, port: number, timeoutMs: number, stopped: () => boolean, progress: () => void,
+    target: RemoteTarget, host: string, port: number, timeoutMs: number, stopped: () => boolean, progress: () => void, wake?: WakeSpec,
 ): Promise<boolean> {
     const deadline = Date.now() + timeoutMs
     const ticker = setInterval(() => stopped() || progress(), 5000)
     try {
         while (Date.now() < deadline && !stopped()) {
             const started = Date.now()
-            if (await rdpAnswers(target, host, port).catch(() => false)) {
+            if (await desktopUp(target, host, port, wake).catch(() => false)) {
                 return !stopped()
             }
             await new Promise(resolve => setTimeout(resolve, Math.max(0, 3000 - (Date.now() - started))))
