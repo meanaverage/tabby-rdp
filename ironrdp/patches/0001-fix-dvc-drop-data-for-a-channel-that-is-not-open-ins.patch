@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: meanaverage <18336095+meanaverage@users.noreply.github.com>
 Date: Fri, 25 Sep 2026 18:41:52 -0700
-Subject: [PATCH 01/14] fix(dvc): drop data for a channel that is not open
+Subject: [PATCH 01/16] fix(dvc): drop data for a channel that is not open
  instead of failing
 
 A server can send data on a dynamic channel before it sees the client
