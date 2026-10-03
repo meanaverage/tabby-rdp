@@ -51,9 +51,12 @@ function vaultName (key: string): string {
 
 // The system keychain can keep a call waiting indefinitely: on Linux, a locked or missing keyring waits for an unlock
 // prompt, which a session without a keyring prompter never shows. Give up after a while. A call that never returns
-// also keeps one of Node's few worker threads, which the rest of Tabby needs: after one, stop using the keychain.
+// also keeps one of Node's few worker threads (four), which the rest of Tabby needs for files and name lookups: after
+// one, stop using the keychain. And one call at a time: several started together (a list of saved accounts, each
+// asking whether it has a password) would each keep a thread before the first is given up on.
 const KEYCHAIN_TIMEOUT_MS = 10000
 let keychainStuck = false
+let keychainQueue: Promise<unknown> = Promise.resolve()
 
 // Tabby ships keytar (tabby-ssh keeps SSH passwords with it). Without it, nothing is remembered.
 function keytar (): any {
@@ -67,16 +70,28 @@ function keytar (): any {
     }
 }
 
-function answered<T> (call: Promise<T> | undefined): Promise<T | undefined> {
-    return new Promise((resolve, reject) => {
+/**
+ * A keychain call, after the ones before it: its answer, undefined without a keychain, or an error when it doesn't
+ * answer in time (or one before it didn't: it is then not made at all).
+ */
+function keychain<T> (call: (keytar: any) => Promise<T>): Promise<T | undefined> {
+    const run = () => new Promise<T | undefined>((resolve, reject) => {
+        const store = keytar()
+        if (!store) {
+            resolve(undefined)
+            return
+        }
         const timer = setTimeout(() => {
             keychainStuck = true
             reject(new Error('the keychain did not answer'))
         }, KEYCHAIN_TIMEOUT_MS)
-        Promise.resolve(call).then(
+        Promise.resolve(call(store)).then(
             value => { clearTimeout(timer); resolve(value) },
             error => { clearTimeout(timer); reject(error) })
     })
+    const next = keychainQueue.then(run, run)
+    keychainQueue = next.catch(() => null)
+    return next
 }
 
 function parseCredentials (saved: string | null | undefined): Credentials | null {
@@ -103,7 +118,7 @@ export async function loadCredentials (key: string): Promise<Credentials | null>
         } catch { }
     }
     try {
-        return parseCredentials(await answered<string | null>(keytar()?.getPassword(KEYCHAIN_SERVICE, key)))
+        return parseCredentials(await keychain<string | null>(store => store.getPassword(KEYCHAIN_SERVICE, key)))
     } catch {
         return null
     }
@@ -132,7 +147,7 @@ export async function hasCredentials (key: string): Promise<'yes' | 'no' | 'unkn
         }
     }
     try {
-        return parseCredentials(await answered<string | null>(keytar()?.getPassword(KEYCHAIN_SERVICE, key))) ? 'yes' : 'no'
+        return parseCredentials(await keychain<string | null>(store => store.getPassword(KEYCHAIN_SERVICE, key))) ? 'yes' : 'no'
     } catch {
         return 'unknown'
     }
@@ -142,10 +157,10 @@ export async function saveCredentials (key: string, credentials: Credentials, la
     if (vaultOn()) {
         await queued(() => vault.addSecret({ type: VAULT_SECRET_TYPE, key: { ...vaultKey(key), description: label ?? vaultName(key) }, value: JSON.stringify(credentials) }))
         // Not in two places: what the keychain had for it goes.
-        try { await answered(keytar()?.deletePassword(KEYCHAIN_SERVICE, key)) } catch { }
+        try { await keychain(store => store.deletePassword(KEYCHAIN_SERVICE, key)) } catch { }
         return
     }
-    await answered(keytar()?.setPassword(KEYCHAIN_SERVICE, key, JSON.stringify(credentials)))
+    await keychain(store => store.setPassword(KEYCHAIN_SERVICE, key, JSON.stringify(credentials)))
 }
 
 export async function forgetCredentials (key: string): Promise<void> {
@@ -159,14 +174,8 @@ export async function forgetCredentialsOrFail (key: string): Promise<void> {
     if (vaultOn()) {
         await queued(() => vault.removeSecret(VAULT_SECRET_TYPE, vaultKey(key)))
     }
-    try {
-        await answered(keytar()?.deletePassword(KEYCHAIN_SERVICE, key))
-    } catch (e) {
-        // No keychain at all is not a failure to forget; one that didn't answer is.
-        if (keytar()) {
-            throw e
-        }
-    }
+    // No keychain at all is not a failure to forget; one that didn't answer is.
+    await keychain(store => store.deletePassword(KEYCHAIN_SERVICE, key))
 }
 
 /** Every saved entry's key and value, from the Vault (when on) and the keychain. */
@@ -183,7 +192,7 @@ async function allCredentials (): Promise<{ account: string, password: string }[
         } catch { }
     }
     try {
-        entries.push(...await answered<{ account: string, password: string }[]>(keytar()?.findCredentials(KEYCHAIN_SERVICE)) ?? [])
+        entries.push(...await keychain<{ account: string, password: string }[]>(store => store.findCredentials(KEYCHAIN_SERVICE)) ?? [])
     } catch { }
     return entries
 }
