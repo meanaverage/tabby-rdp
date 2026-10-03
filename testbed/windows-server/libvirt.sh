@@ -15,7 +15,8 @@
 # Defaults: tabby-rdp-winserver, and the evaluation ISO, downloaded into $TESTBED_DIR (default
 # ~/.cache/tabby-rdp-testbed; 6 GB). TEST_PASSWORD is for the test account, tabbyrdp, here and in the guest VM, and
 # has to meet Windows Server's complexity rules (three of: capitals, small letters, digits, symbols); ADMIN_PASSWORD,
-# for the administrator account, tabbyadmin, is random unless set. It takes 16 GB of memory and one CPU (VCPUS) while it runs,
+# for the administrator account, tabbyadmin, is random unless set. SSH_KEY is a public key file that may sign in over
+# SSH as tabbyadmin (the hyperv suite lists the VMs that way; default ~/.ssh/id_ed25519.pub, or id_rsa.pub). It takes 16 GB of memory and one CPU (VCPUS) while it runs,
 # and up to 120 GB of disk. Installing takes one to two hours on one CPU.
 #
 # Remove it with: virsh destroy <name>; virsh undefine --nvram --tpm --remove-all-storage <name>
@@ -56,6 +57,16 @@ sed -e "s|@@COMPUTER_NAME@@|$COMPUTER|g" -e "s|@@ADMIN_USER@@|tabbyadmin|g" -e "
     -e "s|@@ADMIN_PASSWORD@@|$ADMIN_VALUE|g" -e "s|@@TEST_PASSWORD@@|$TEST_VALUE|g" \
     "$HERE/autounattend.xml" > "$CFG/autounattend.xml"
 cp "$HERE/../windows/setup.ps1" "$HERE/server.ps1" "$CFG/"
+# The key(s) for SSH as the administrator: server.ps1 takes the file next to it.
+if [ -z "${SSH_KEY:-}" ]; then
+    for k in "$HOME/.ssh/id_ed25519.pub" "$HOME/.ssh/id_rsa.pub"; do
+        [ -f "$k" ] && { SSH_KEY="$k"; break; }
+    done
+fi
+if [ -n "${SSH_KEY:-}" ]; then
+    [ -f "$SSH_KEY" ] || { echo "SSH_KEY: no such file: $SSH_KEY" >&2; exit 2; }
+    grep -v '^[[:space:]]*$' "$SSH_KEY" > "$CFG/authorized_keys"
+fi
 genisoimage -quiet -J -R -V TABBYRDP -o "$WORK/$NAME-config.iso" "$CFG"
 rm -rf "$CFG"   # it holds the passwords
 
@@ -135,3 +146,8 @@ echo "screen. C:\\tabby-rdp\\ready.txt has their ids:"
 echo "    RD Gateway:        https://$IP (self-signed), any computer behind it, e.g. the Windows test machine"
 echo "    Hyper-V consoles:  $IP:2179; SSH (PowerShell) on $IP:22 to list the VMs (Get-VM, as tabbyadmin)"
 echo "    Remote Desktop:    $IP:3389, WinRM on $IP:5985"
+echo
+echo "For the suites (test/README.md), where Tabby reaches $IP:"
+echo "    export TRD_TEST_HYPERV=tabbyadmin@$IP TRD_TEST_HYPERV_PASSWORD='<the administrator password above>'"
+echo "    export TRD_TEST_HYPERV_CONSOLE=tabbyrdp TRD_TEST_HYPERV_CONSOLE_PASSWORD='<the test account password>'"
+echo "    export TRD_TEST_GATEWAY=$IP TRD_TEST_GATEWAY_USER=tabbyrdp TRD_TEST_GATEWAY_PASSWORD='<the test account password>'"

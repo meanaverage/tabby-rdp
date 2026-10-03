@@ -35,13 +35,18 @@ Its password, for the same account in the guest VM. Needed for the roles stage.
 
 .PARAMETER NoGuestStart
 Leaves the Windows guest off (see above).
+
+.PARAMETER SshKeys
+A file of public keys that may sign in over SSH as an administrator (the tests' key, for listing the VMs). Default:
+authorized_keys next to this script, when there is one.
 #>
 [CmdletBinding()]
 param(
     [ValidateSet('roles', 'configure')] [string] $Stage = 'roles',
     [string] $UserName = 'tabbyrdp',
     [string] $Password,
-    [switch] $NoGuestStart
+    [switch] $NoGuestStart,
+    [string] $SshKeys
 )
 $ErrorActionPreference = 'Stop'
 $home_ = 'C:\tabby-rdp'
@@ -70,6 +75,12 @@ if ($Stage -eq 'roles') {
     Set-ItemProperty "$home_\server.ps1" -Name IsReadOnly -Value $false  # as copied from a disc
     # The guest's account gets the same password: kept for the second stage (the folder is the administrators').
     Set-Content -Path "$home_\guest.txt" -Value $Password -NoNewline
+    # The keys for SSH, kept for the second stage too.
+    if (-not $SshKeys -and (Test-Path "$PSScriptRoot\authorized_keys")) { $SshKeys = "$PSScriptRoot\authorized_keys" }
+    if ($SshKeys) {
+        Copy-Item -Force $SshKeys "$home_\authorized_keys"
+        Set-ItemProperty "$home_\authorized_keys" -Name IsReadOnly -Value $false
+    }
 
     Step 'RD Gateway' { Install-WindowsFeature RDS-Gateway -IncludeManagementTools | Out-Null }
     Step 'Hyper-V' {
@@ -112,6 +123,12 @@ Step 'OpenSSH Server' {
     $ssh = Get-LocalGroup -Name 'OpenSSH Users' -ErrorAction SilentlyContinue
     if ($ssh -and -not (Get-LocalGroupMember -Group $ssh | Where-Object { $_.Name -like "*\$UserName" })) {
         Add-LocalGroupMember -Group $ssh -Member $UserName
+    }
+    # Keys for administrators are in one file for all of them, which sshd only reads when it is theirs alone.
+    if (Test-Path "$home_\authorized_keys") {
+        $keys = "$env:ProgramData\ssh\administrators_authorized_keys"
+        Copy-Item -Force "$home_\authorized_keys" $keys
+        icacls $keys /inheritance:r /grant:r 'SYSTEM:F' 'Administrators:F' | Out-Null
     }
 }
 

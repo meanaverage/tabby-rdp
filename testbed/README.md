@@ -130,7 +130,12 @@ It is prepared with `setup.ps1` (as the Windows machine above) and [`server.ps1`
   test account is a Hyper-V administrator on the host, which is what lets it open a guest's console;
 - turns on **OpenSSH Server** with PowerShell as its shell, for listing the host's VMs over SSH. Listing them
   (`Get-VM`) takes the administrator account, `tabbyadmin`: the test account can sign in and open consoles, but
-  Hyper-V didn't let it list VMs.
+  Hyper-V didn't let it list VMs. Your public key (`SSH_KEY`, default `~/.ssh/id_ed25519.pub`) may sign in as
+  `tabbyadmin`.
+
+The script ends with the `TRD_TEST_HYPERV…` and `TRD_TEST_GATEWAY…` settings for the `hyperv` and `gateway` suites
+([test/README.md](../test/README.md)). The gateway asks for nothing more than the account: it checks that the sign-in
+was made over its own TLS connection (extended protection, its default), which the plugin's sign-in carries.
 
 Hyper-V in a VM needs nested virtualization: the libvirt host's KVM with `nested` on (`cat
 /sys/module/kvm_*/parameters/nested`). The VM takes 16 GB of memory and one CPU while it runs, and up to 120 GB of
@@ -146,4 +151,5 @@ disc in a drive. In an elevated PowerShell on it, after `setup.ps1`:
 
 ```powershell
 .\server.ps1 -Password '<the test account's password>'   # restarts once, and finishes at startup
+# -SshKeys <a file of public keys>: may sign in over SSH as an administrator (the hyperv suite lists the VMs that way)
 ```
