@@ -1,1 +1,8 @@
 blank_issues_enabled: true
+contact_links:
+  - name: Ask a question
+    url: https://github.com/meanaverage/tabby-rdp/discussions/categories/q-a
+    about: How do I…? Is this expected? Questions go to Discussions › Q&A; issues are for bugs and feature requests.
+  - name: Share an idea or a setup
+    url: https://github.com/meanaverage/tabby-rdp/discussions
+    about: Ideas not ready for an issue, and what you built with it, in Discussions.
