@@ -290,7 +290,7 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
 
                 <h5>SSH hosts</h5>
                 ${this.toggleLine('desk', 'desk: bring the console along', `Type <code>desk</code> in an SSH console to show that same shell on the desktop. Installs a small helper and a login line on GNOME hosts the next time a desktop opens there; off removes them.`)}
-                ${this.toggleLine('discoverVMs', 'Find virtual machines on SSH hosts', 'Lists the host\'s libvirt VMs that have a desktop (RDP answering, or Windows and shut off) in its tab\'s menu, ready to open or start. Read-only: it runs virsh as you there, at most once a minute.')}
+                ${this.toggleLine('discoverVMs', 'Find virtual machines on SSH hosts', 'Lists the host\'s VMs in its tab\'s menu, ready to open or start: libvirt VMs that have a desktop (RDP answering, or Windows and shut off), and on a Windows host, Hyper-V VMs (their consoles, through the host). Read-only: it runs virsh, or PowerShell\'s Get-VM, as you there, at most once a minute.')}
                 <div class="form-line">
                     <div class="header">
                         <div class="title">Shut down VMs it started</div>
@@ -606,6 +606,7 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
             const details = [
                 account ? `Signs in as ${esc(account.name)}` : o.username ? `Signs in as ${esc(o.username)}` : '',
                 o.kind && o.kind !== 'windows' ? esc(o.kind) : '',
+                o.gateway ? `Through the gateway ${esc(o.gateway)}${accountOf(o.gatewayAccount) ? `, as ${esc(accountOf(o.gatewayAccount)!.name)}` : ''}` : '',
             ].filter(Boolean).join('<br>')
             return this.row(esc(p.name ?? address), `${esc(address)}${via ? ` via ${esc(via)}` : ''}${details ? `<br>${details}` : ''}`, [
                 { label: 'Edit…', run: () => { this.editProfile(p.id) } },
@@ -614,14 +615,16 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
         })
         const desktops = this.desktop.configuredDesktops()
         const desktopRows = desktops.map((d, i) => {
-            const address = `${d.host ?? '127.0.0.1'}:${d.port ?? 3389}`
+            // A Hyper-V VM has no address of its own: its console is its host's to give.
+            const address = d.hyperv ? 'Hyper-V VM' : `${d.host ?? '127.0.0.1'}:${d.port ?? 3389}`
             const account = accountOf(d.account)
             const details = [
                 account ? `Signs in as ${esc(account.name)}` : d.username ? `Signs in as ${esc(d.username)}` : '',
                 d.kind && d.kind !== 'windows' ? esc(d.kind) : '',
+                d.gateway && !d.hyperv ? `Through the gateway ${esc(d.gateway)}${accountOf(d.gatewayAccount) ? `, as ${esc(accountOf(d.gatewayAccount)!.name)}` : ''}` : '',
                 d.wake?.vm ? `Starts VM ${esc(d.wake.vm)} when off` : d.wake?.mac ? `Wakes ${esc(d.wake.mac)} when off` : '',
             ].filter(Boolean).join('<br>')
-            return this.row(esc(d.name ?? address), `${esc(address)} behind ${esc(d.via)}${details ? `<br>${details}` : ''}`, [
+            return this.row(esc(d.name ?? address), `${esc(address)} ${d.hyperv ? 'on' : 'behind'} ${esc(d.via)}${details ? `<br>${details}` : ''}`, [
                 { label: 'Edit…', run: () => { this.desktop.editDesktopIn(this.root, i, true) } },
                 { label: 'Remove…', danger: true, run: () => { this.desktop.confirmRemoveDesktop(i) } },
             ])
@@ -972,7 +975,7 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
         const entries = this.desktop.trustedCertificates()
         list.replaceChildren(...entries.map(({ desktop, sha256 }) => {
             const [who, address] = desktop.includes('#') ? desktop.split('#', 2) : [desktop, '']
-            const title = address ? who === DIRECT_KEY ? `${esc(address)} (direct)` : `${esc(address)} behind ${esc(who)}` : esc(who)
+            const title = address ? who === 'gateway' ? `The gateway ${esc(address)}` : who === DIRECT_KEY ? `${esc(address)} (direct)` : `${esc(address)} behind ${esc(who)}` : esc(who)
             return this.row(title, `SHA-256 ${esc(sha256.slice(0, 23))}…`, [
                 { label: 'Forget', run: () => this.desktop.forgetCertificate(desktop) },
             ])

@@ -1,8 +1,14 @@
-import { DesktopSpec } from './desktops'
+import { DesktopSpec, hyperVSpec } from './desktops'
+import { scanHyperV } from './hyperv'
 import { RemoteTarget } from './targets'
 
-/** A virtual machine on an SSH host (libvirt) that looks like it has a desktop to connect to. */
+/**
+ * A virtual machine on an SSH host that looks like it has a desktop to connect to: a libvirt VM whose RDP server
+ * answers (or a Windows one that is off), or, on a Windows host, a Hyper-V VM (its console, through the host).
+ */
 export interface FoundVM {
+    /** A Hyper-V VM's id (see hyperv.ts); the address and RDP fields don't apply to it. */
+    hyperv?: string
     name: string
     /** 'running', or 'off' (shut off, paused, suspended: started when opened). */
     state: 'running' | 'off'
@@ -26,6 +32,7 @@ const XRDP_LIKE = '1'
 // wake.ts) within a second; the protocol the server chose, or 0 without a negotiation response ('' if none).
 // Read-only: starts nothing, changes nothing.
 const SCAN_SCRIPT = String.raw`
+echo TRD_SH
 command -v virsh >/dev/null 2>&1 || exit 0
 probe () {
     if command -v python3 >/dev/null 2>&1; then
@@ -68,9 +75,20 @@ for uri in qemu:///system qemu:///session; do
 done
 `
 
-/** The host's VMs that have (or, being off, may have) a desktop: running ones whose RDP answers, and Windows ones that are off. */
-export async function scanVMs (target: RemoteTarget): Promise<FoundVM[]> {
-    const out = await target.exec('sh -s', SCAN_SCRIPT)
+/**
+ * The host's VMs that have (or, being off, may have) a desktop: libvirt's running ones whose RDP answers, and Windows
+ * ones that are off; on a Windows host, Hyper-V's. `host.windows` says the host is known to run Windows, and is set
+ * when the scan finds out: such a host isn't asked for libvirt again (its shell takes a while to say it has no sh).
+ */
+export async function scanVMs (target: RemoteTarget, host: { windows?: boolean } = {}): Promise<FoundVM[]> {
+    const out = host.windows ? '' : await target.exec('sh -s', SCAN_SCRIPT)
+    // No sh answered: a Windows host (cmd.exe or PowerShell as its SSH shell), which is where Hyper-V is. Asked only
+    // then, so that a Linux host costs nothing extra.
+    if (!/^TRD_SH$/m.test(out)) {
+        const vms = await scanHyperV(target)
+        host.windows = true
+        return vms.map(vm => ({ hyperv: vm.id, name: vm.name, state: vm.state, windows: true, address: '', rdp: false }))
+    }
     const found: FoundVM[] = []
     for (const line of out.split('\n')) {
         const m = /^TRD_VM ([^|]+)\|([^|]*)\|([^|]*)\|([^|]*)\|(\d*)\s*$/.exec(line.trim())
@@ -91,6 +109,9 @@ export async function scanVMs (target: RemoteTarget): Promise<FoundVM[]> {
 
 /** A found VM as a desktop behind its host: started by name when it's off (see wake.ts). */
 export function vmSpec (vm: FoundVM): DesktopSpec {
+    if (vm.hyperv) {
+        return hyperVSpec(vm.hyperv, vm.name, { found: vm.state })
+    }
     return {
         id: `${vm.address}:3389`,
         name: vm.name,

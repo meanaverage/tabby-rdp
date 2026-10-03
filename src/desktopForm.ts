@@ -1,6 +1,7 @@
 import { SavedAccount, signInName } from './accounts'
 import { newAccountOption, NewAccountInput } from './accountForm'
 import { ExtraDesktopConfig } from './desktops'
+import { parseGateway } from './gateway'
 import { wakeFromText } from './wake'
 
 /** host:port, [v6]:port, or a bare host (RDP's 3389); null if it doesn't look like an address. */
@@ -66,6 +67,8 @@ export function askDesktop (pane: HTMLElement, options: DesktopFormOptions): Pro
                 <select class="form-control" name="account" title="Saved accounts are added in Settings › Remote Desktop › Accounts"></select>
                 <input class="form-control" name="username" placeholder="User name (optional; asked when connecting)" spellcheck="false">
                 <input class="form-control" name="domain" placeholder="Domain (optional)" spellcheck="false">
+                <input class="form-control" name="gateway" placeholder="RD Gateway (optional), as seen from the host, e.g. rdgw.example.com" title="A Remote Desktop Gateway to reach the desktop through (HTTPS, port 443 unless given); the address above is then as the gateway sees it" spellcheck="false">
+                <select class="form-control" name="gatewayAccount" title="A gateway that takes another account than the desktop: a saved account for it"></select>
                 <input class="form-control" name="wake" placeholder="Start it when off (optional): libvirt VM name, or MAC address" title="A libvirt VM on the host, started with virsh; or a MAC address to wake over the network from the host" spellcheck="false">
                 <div class="trd-signin-buttons">
                     <button type="button" class="btn btn-secondary" name="cancel">Cancel</button>
@@ -107,6 +110,20 @@ export function askDesktop (pane: HTMLElement, options: DesktopFormOptions): Pro
         account.hidden = account.options.length < 2
     }
     ownAccount()
+    // The gateway's own account: offered once there is a gateway and a saved account to choose.
+    const gateway = field('gateway')
+    const gatewayAccount = field<HTMLSelectElement>('gatewayAccount')
+    gateway.value = initial.gateway ?? ''
+    gatewayAccount.append(new Option('Gateway account: the same as the desktop\'s', ''), ...accounts.map(a => new Option(`Gateway account: ${a.name} (${signInName(a)})`, a.id)))
+    if (initial.gatewayAccount && !accounts.some(a => a.id === initial.gatewayAccount)) {
+        gatewayAccount.append(new Option('(a saved account that no longer exists)', initial.gatewayAccount))
+    }
+    gatewayAccount.value = initial.gatewayAccount ?? ''
+    const gatewayChanged = () => {
+        gatewayAccount.hidden = !gateway.value.trim() || gatewayAccount.options.length < 2
+    }
+    gateway.addEventListener('input', gatewayChanged)
+    gatewayChanged()
 
     if (getComputedStyle(pane).position === 'static') {
         pane.style.position = 'relative'
@@ -149,6 +166,12 @@ export function askDesktop (pane: HTMLElement, options: DesktopFormOptions): Pro
                 field('address').focus()
                 return
             }
+            const gatewayText = gateway.value.trim()
+            if (gatewayText && !parseGateway(gatewayText)) {
+                error.textContent = 'The gateway should be a name or address, with :port if it isn\'t 443.'
+                gateway.focus()
+                return
+            }
             if (options.hosts && !via.value.trim()) {
                 error.textContent = 'Which SSH host is it behind?'
                 via.focus()
@@ -172,8 +195,10 @@ export function askDesktop (pane: HTMLElement, options: DesktopFormOptions): Pro
                 domain: domain || undefined,
                 account: account.value && account.value !== '__new__' ? account.value : undefined,
                 wake,
+                gateway: gatewayText || undefined,
+                gatewayAccount: gatewayText && gatewayAccount.value || undefined,
             }
-            for (const key of ['username', 'domain', 'account', 'wake'] as const) {
+            for (const key of ['username', 'domain', 'account', 'wake', 'gateway', 'gatewayAccount'] as const) {
                 if (entry[key] === undefined) {
                     delete entry[key]
                 }

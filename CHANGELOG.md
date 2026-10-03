@@ -12,6 +12,22 @@
   and nothing else: `..` and symbolic links that lead out of it don't resolve, and only files and folders are served.
   File operations run in the background (Node's thread pool), one request at a time, so a slow disk or network
   folder slows the drive, not Tabby's window.
+- **Hyper-V VMs** ([#28](https://github.com/meanaverage/tabby-rdp/issues/28)): on a Windows SSH host that runs
+  Hyper-V, its VMs are listed among the host's desktops (`Get-VM`, with PowerShell over the SSH connection), and one
+  that is off is started when opened. What opens is the VM's console, through the host (port 2179), as Hyper-V
+  Manager's Connect does: no network or Remote Desktop needed in the VM. A Windows guest that is up gets an enhanced
+  session; otherwise it is the basic console. The sign-in is the host's, asked once per host; an account the host
+  signs in but doesn't let open the console (it ends the connection at once) brings the form back, saying so.
+- **RD Gateway** ([#29](https://github.com/meanaverage/tabby-rdp/issues/29)): a remote desktop profile, or a desktop
+  behind an SSH host, can name a Remote Desktop Gateway (**RD Gateway**: `rdgw.example.com`, or `host:port`). The
+  connection then goes to the gateway over HTTPS (its WebSocket transport, Windows Server 2012 R2 and later), signs in
+  there with a user name and password, and is connected on to the desktop, whose address is as the gateway sees it.
+  The desktop's sign-in is the gateway's too unless the profile picks a saved account for the gateway. A sign-in the
+  gateway refuses brings the form back saying it was the gateway, before anything goes to the desktop; a desktop its
+  policy doesn't allow, or that it can't reach, is an error saying which. The gateway's certificate is accepted when
+  valid for its name and otherwise remembered on first use; a changed one stops the connection until it is trusted.
+  The sign-in (NTLMv2) is bound to the gateway's TLS certificate, which gateways require by default. Smart cards,
+  sign-in pages and one-time codes at the gateway aren't supported.
 - IronRDP's web client gains drive redirection (MS-RDPEFS) through a JavaScript file system (patch 15), and its
   static channels send multi-chunk messages Windows accepts (patch 16): a response over 1600 bytes was flagged for the
   receiver to keep the channel header, which Windows' drive redirector didn't expect and dropped the channel on.
@@ -43,6 +59,13 @@
   are released first.
 - **H.264: small changes far apart** (a clock in one corner, a cursor in another) read back everything between them:
   33 MB for a 4K picture to get a few pixels. Regions far apart are read one by one (IronRDP patch 17).
+
+**Also fixed**
+- **Linux without an unlocked keyring: Tabby could stop opening connections.** A keychain call there never returns
+  and keeps one of Node's four worker threads waiting. The plugin gave the keychain up after the first such call, but
+  calls started together (the settings page asking whether each saved account has a password, a desktop signing in
+  meanwhile) each kept a thread first, and with all four taken, Tabby's file access and name lookups waited forever:
+  a new SSH tab stayed at "Connecting". Keychain calls now go one at a time, so at most one thread is ever kept.
 
 ## 0.4.1
 
