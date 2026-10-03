@@ -1,0 +1,148 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: meanaverage <18336095+meanaverage@users.noreply.github.com>
+Date: Fri, 2 Oct 2026 20:48:29 -0700
+Subject: [PATCH 17/17] perf(web): read H.264 regions that are far apart one by
+ one
+
+The decoder read all of a frame's regions back in one call, as their
+bounding box. Two small regions in opposite corners of the picture (a
+clock, a cursor) made that box the whole picture: 33 MB read and
+allocated for a 4K frame to get eight bytes.
+
+When the box holds more than twice what the regions do, each region is
+read on its own, straight into its place in the result; regions that are
+close together are still read as one box.
+---
+ .../src/H264Decoder.test.ts                   | 41 +++++++++++++++++++
+ .../src/H264Decoder.ts                        | 37 ++++++++++++-----
+ 2 files changed, 67 insertions(+), 11 deletions(-)
+
+diff --git a/web-client/iron-remote-desktop-rdp/src/H264Decoder.test.ts b/web-client/iron-remote-desktop-rdp/src/H264Decoder.test.ts
+index bb81b17f..dfccb897 100644
+--- a/web-client/iron-remote-desktop-rdp/src/H264Decoder.test.ts
++++ b/web-client/iron-remote-desktop-rdp/src/H264Decoder.test.ts
+@@ -15,6 +15,8 @@ interface FakeChunk {
+ 
+ class FakePicture {
+     closed = false;
++    /** The rects read with copyTo, in turn. */
++    readonly copied: { x: number; y: number; width: number; height: number }[] = [];
+     readonly visibleRect: { x: number; y: number; width: number; height: number };
+     readonly codedWidth: number;
+     readonly codedHeight: number;
+@@ -44,7 +46,9 @@ class FakePicture {
+         }
+         expect(this.copyFormat).toBe('RGBA');
+         expect(options.format).toBe('RGBA');
++        this.copied.push(options.rect);
+         const { x, y, width, height } = options.rect;
++        expect(into.length).toBe(width * height * 4);
+         for (let row = 0; row < height; row++) {
+             for (let col = 0; col < width; col++) {
+                 into.set([x + col, y + row, this.timestamp, 255], (row * width + col) * 4);
+@@ -169,6 +173,43 @@ describe('WebCodecsH264Decoder', () => {
+         expect(decoder.stats.pending).toBe(0);
+     });
+ 
++    it('reads regions that are close together as one box', async () => {
++        decoder.decode(
++            frame(0, true, [
++                { left: 0, top: 0, right: 4, bottom: 2 },
++                { left: 4, top: 0, right: 6, bottom: 2 },
++                { left: 0, top: 2, right: 6, bottom: 3 },
++            ]),
++            done,
++        );
++        const picture = FakeDecoder.instances[0].emit(0);
++        await flush();
++        expect(picture.copied).toEqual([{ x: 0, y: 0, width: 6, height: 3 }]);
++        const pixels = done.mock.calls[0][1] as Uint8Array;
++        expect(pixels.length).toBe(18 * 4);
++        // The second region's first pixel, then the third's.
++        expect(Array.from(pixels.subarray(8 * 4, 9 * 4))).toEqual([4, 0, 0, 255]);
++        expect(Array.from(pixels.subarray(12 * 4, 13 * 4))).toEqual([0, 2, 0, 255]);
++    });
++
++    it('reads regions that are far apart one by one, not the picture between them', async () => {
++        decoder.decode(
++            frame(0, true, [
++                { left: 0, top: 0, right: 1, bottom: 1 },
++                { left: 3839, top: 2159, right: 3840, bottom: 2160 },
++            ]),
++            done,
++        );
++        const picture = FakeDecoder.instances[0].emit(0, 3840, 2160);
++        await flush();
++        // Two pixels read, not the 4K picture's 33 MB for their bounding box.
++        expect(picture.copied).toEqual([
++            { x: 0, y: 0, width: 1, height: 1 },
++            { x: 3839, y: 2159, width: 1, height: 1 },
++        ]);
++        expect(Array.from(done.mock.calls[0][1] as Uint8Array)).toEqual([0, 0, 0, 255, 3839 & 255, 2159 & 255, 0, 255]);
++    });
++
+     it('takes a picture the size of a destination elsewhere on the surface as starting there', async () => {
+         const offset: H264Frame = {
+             ...frame(0, true, [{ left: 105, top: 51, right: 106, bottom: 52 }]),
+diff --git a/web-client/iron-remote-desktop-rdp/src/H264Decoder.ts b/web-client/iron-remote-desktop-rdp/src/H264Decoder.ts
+index 1d4b5e84..6fa8eea3 100644
+--- a/web-client/iron-remote-desktop-rdp/src/H264Decoder.ts
++++ b/web-client/iron-remote-desktop-rdp/src/H264Decoder.ts
+@@ -283,7 +283,9 @@ export class WebCodecsH264Decoder {
+         if (rects.length === 0) {
+             return out;
+         }
+-        // One readback for all regions: their bounding box.
++        // One readback for all regions, their bounding box, when that is mostly what changed: one call rather than
++        // one per region. Regions far apart (a clock in one corner, a cursor in another) would make the box most of
++        // the picture, megabytes read for a few pixels: those are read one by one, each straight into its place.
+         const left = Math.min(...rects.map((r) => r.x));
+         const top = Math.min(...rects.map((r) => r.y));
+         const box = {
+@@ -292,23 +294,36 @@ export class WebCodecsH264Decoder {
+             width: Math.max(...rects.map((r) => r.x + r.width)) - left,
+             height: Math.max(...rects.map((r) => r.y + r.height)) - top,
+         };
+-        const single = rects.length === 1;
+-        const boxPixels = single ? out : new Uint8Array(box.width * box.height * 4);
+-        await this.readBox(picture, visible, box, boxPixels);
+-        if (!single) {
++        if (rects.length === 1) {
++            await this.readBox(picture, visible, box, out);
++            return out;
++        }
++        if (box.width * box.height * 4 > total * WebCodecsH264Decoder.BOX_WASTE) {
+             let offset = 0;
+             for (const r of rects) {
+-                const row = r.width * 4;
+-                for (let y = 0; y < r.height; y++) {
+-                    const from = ((r.y - box.y + y) * box.width + (r.x - box.x)) * 4;
+-                    out.set(boxPixels.subarray(from, from + row), offset);
+-                    offset += row;
+-                }
++                const size = r.width * r.height * 4;
++                await this.readBox(picture, visible, r, out.subarray(offset, offset + size));
++                offset += size;
++            }
++            return out;
++        }
++        const boxPixels = new Uint8Array(box.width * box.height * 4);
++        await this.readBox(picture, visible, box, boxPixels);
++        let offset = 0;
++        for (const r of rects) {
++            const row = r.width * 4;
++            for (let y = 0; y < r.height; y++) {
++                const from = ((r.y - box.y + y) * box.width + (r.x - box.x)) * 4;
++                out.set(boxPixels.subarray(from, from + row), offset);
++                offset += row;
+             }
+         }
+         return out;
+     }
+ 
++    /** A bounding box may be this many times what its regions hold before they are read one by one instead. */
++    private static readonly BOX_WASTE = 2;
++
+     private async readBox(
+         picture: VideoFrame,
+         visible: { x: number; y: number; width: number; height: number },

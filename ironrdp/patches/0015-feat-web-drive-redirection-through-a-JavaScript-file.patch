@@ -1,0 +1,1511 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: meanaverage <18336095+meanaverage@users.noreply.github.com>
+Date: Fri, 2 Oct 2026 19:14:23 -0700
+Subject: [PATCH 15/17] feat(web): drive redirection through a JavaScript file
+ system
+
+The web client could not share drives: it has no file system of its own.
+A host that has one (an Electron application, say) can now hand in a
+JavaScript object with file operations through the `drive_redirection`
+extension, with the drives to share, and the server's drive I/O requests
+(MS-RDPEFS 2.2.3.3) are served with it: create/open with the create
+dispositions, read, write, query and set information, query volume
+information, directory enumeration with DOS patterns, delete on close,
+rename, lock control (granted), flush. Paths reach the object as the
+server sends them, relative to the drive; the object resolves them
+inside the folder it shares. Errors it throws, or rejects with, are
+mapped to NT statuses by their Node-style `code`.
+
+File operations can be slow, and the web client shares its thread with
+the page, so nothing is done in the SVC processor: `WasmDriveBackend`
+queues each request, and a worker task takes them one at a time, in the
+server's order, awaits the JavaScript operations (which may return
+promises) and hands the encoded responses to the session's event loop.
+A slow disk holds up the drive, not the page.
+
+Directory patterns are the server's: they are matched without recursion,
+in time bounded by pattern length x name length, and one longer than any
+file name matches nothing.
+
+Drive names are announced as ANSI in DeviceData, which is how Windows
+reads them whatever the drive capability version: a UTF-16 name came out
+as its first letter (`\\TSCLIENT\t`).
+
+With drives, the virtual printer is left out of the session (one RDPDR
+backend per connection).
+
+`driveRedirection(fs)` in iron-remote-desktop-rdp builds the extension
+and documents the `DriveFs` interface.
+---
+ crates/ironrdp-rdpdr/src/pdu/efs.rs           |   17 +-
+ crates/ironrdp-web/src/drive.rs               | 1171 +++++++++++++++++
+ crates/ironrdp-web/src/lib.rs                 |    1 +
+ crates/ironrdp-web/src/session.rs             |   73 +-
+ .../iron-remote-desktop-rdp/src/main.ts       |   53 +
+ 5 files changed, 1309 insertions(+), 6 deletions(-)
+ create mode 100644 crates/ironrdp-web/src/drive.rs
+
+diff --git a/crates/ironrdp-rdpdr/src/pdu/efs.rs b/crates/ironrdp-rdpdr/src/pdu/efs.rs
+index 177a1649..29f7057a 100644
+--- a/crates/ironrdp-rdpdr/src/pdu/efs.rs
++++ b/crates/ironrdp-rdpdr/src/pdu/efs.rs
+@@ -1192,11 +1192,11 @@ impl DeviceAnnounceHeader {
+         Self {
+             device_type: DeviceType::Filesystem,
+             device_id,
+-            // With DRIVE_CAPABILITY_VERSION_02, DeviceData contains the complete
+-            // null-terminated Unicode name. The field remains mandatory even
+-            // though the server ignores it when DeviceDataLength is nonzero.
++            // DeviceData carries the complete drive name, null-terminated, as ANSI characters: Windows reads
++            // it that way whatever the drive capability version (a UTF-16 name comes out as its first letter),
++            // and so does FreeRDP's client write it. Characters outside ASCII become '_'.
+             preferred_dos_name: PreferredDosName::for_drive(&name),
+-            device_data: utf16le_with_nul(&name),
++            device_data: ansi_with_nul(&name),
+         }
+     }
+ 
+@@ -1384,6 +1384,15 @@ impl DeviceAnnounceHeader {
+     }
+ }
+ 
++fn ansi_with_nul(s: &str) -> Vec<u8> {
++    let mut out: Vec<u8> = s
++        .chars()
++        .map(|c| u8::try_from(u32::from(c)).ok().filter(u8::is_ascii).unwrap_or(b'_'))
++        .collect();
++    out.push(0 /* NUL terminator */);
++    out
++}
++
+ fn utf16le_with_nul(s: &str) -> Vec<u8> {
+     let mut out = Vec::with_capacity((s.len() + 1) * 2 /* 2 bytes per UTF-16 unit */);
+     for unit in s.encode_utf16() {
+diff --git a/crates/ironrdp-web/src/drive.rs b/crates/ironrdp-web/src/drive.rs
+new file mode 100644
+index 00000000..c2ec081f
+--- /dev/null
++++ b/crates/ironrdp-web/src/drive.rs
+@@ -0,0 +1,1171 @@
++//! Browser-side drive redirection backend for RDPDR.
++//!
++//! The web client can't reach a file system itself; the host application (an Electron app, say) can. The
++//! `drive_redirection` extension hands in a JavaScript object with file operations, and the server's drive I/O
++//! requests ([MS-RDPEFS] 2.2.3.3) are served with them.
++//!
++//! File operations can be slow (a network mount, a disk waking up), and the web client shares its thread with the
++//! page: [`WasmDriveBackend`], on the SVC processor side, only queues each request. A worker task
++//! ([`DriveWorker`]) takes them one at a time, in the order the server sent them, awaits the JavaScript operations
++//! (which may return promises) and hands the response to the session's event loop, which sends it. A slow
++//! operation holds up the drive, not the page.
++//!
++//! The JavaScript object (`DriveFs` below) sees the server's paths as the server sends them, relative to the drive,
++//! with backslashes, and is responsible for resolving them inside the folder it shares (and refusing paths that
++//! leave it). Errors it throws, or rejects with, are mapped to NT statuses by their `code` (Node's `ENOENT`,
++//! `EEXIST`, …).
++//!
++//! [MS-RDPEFS]: https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-rdpefs/34d9de58-b2b5-40b6-b970-f82d4a0ab25e
++
++use std::collections::HashMap;
++use std::fmt;
++
++use futures_channel::mpsc;
++use futures_util::StreamExt as _;
++use ironrdp::rdpdr::backend::RdpdrBackend;
++use ironrdp::rdpdr::pdu::RdpdrPdu;
++use ironrdp::rdpdr::pdu::efs::{
++    Boolean, ClientDriveLockControlResponse, ClientDriveQueryDirectoryResponse, ClientDriveQueryInformationResponse,
++    ClientDriveQuerySecurityResponse, ClientDriveQueryVolumeInformationResponse, ClientDriveSetInformationResponse,
++    ClientDriveSetSecurityResponse, CreateDisposition, CreateOptions, DesiredAccess, DeviceCloseRequest,
++    DeviceCloseResponse, DeviceControlRequest, DeviceControlResponse, DeviceCreateRequest, DeviceCreateResponse,
++    DeviceFlushBuffersResponse, DeviceIoRequest, DeviceIoResponse, DeviceReadRequest, DeviceReadResponse,
++    DeviceWriteRequest, DeviceWriteResponse, FileAttributeTagInformation, FileAttributes, FileBasicInformation,
++    FileBothDirectoryInformation, FileDirectoryInformation, FileFsAttributeInformation, FileFsFullSizeInformation,
++    FileFsSizeInformation, FileFsVolumeInformation, FileFullDirectoryInformation, FileInformationClass,
++    FileInformationClassLevel, FileNamesInformation, FileStandardInformation, FileSystemAttributes,
++    FileSystemInformationClass, FileSystemInformationClassLevel, Information, NtStatus, ServerDeviceAnnounceResponse,
++    ServerDriveIoRequest, ServerDriveQueryDirectoryRequest, ServerDriveQueryInformationRequest,
++    ServerDriveQueryVolumeInformationRequest, ServerDriveSetInformationRequest,
++};
++use ironrdp::rdpdr::pdu::esc::{ScardCall, ScardIoCtlCode};
++use ironrdp_core::impl_as_any;
++use ironrdp_pdu::{PduResult, encode_err};
++use ironrdp_svc::SvcMessage;
++use tracing::{debug, warn};
++use wasm_bindgen::{JsCast as _, JsValue};
++use wasm_bindgen_futures::{JsFuture, spawn_local};
++
++use crate::session::RdpInputEvent;
++
++/// A drive the host shares: its RDPDR device id and the name the remote shows for it.
++#[derive(Debug, Clone)]
++pub(crate) struct SharedDrive {
++    pub(crate) device_id: u32,
++    pub(crate) name: String,
++}
++
++/// The JavaScript object implementing the file operations (see the module documentation).
++///
++/// Expected methods, each returning its result or a promise of it; paths are the server's (relative to the drive,
++/// backslashes):
++/// - `stat(deviceId, path)` → `{ dir, size, created, accessed, modified, readonly }` (times in ms since the epoch) or `null`
++/// - `list(deviceId, path)` → `string[]` of the entries' names
++/// - `open(deviceId, path, { write, create, exclusive, truncate })` → a handle (number)
++/// - `read(handle, offset, length)` → `Uint8Array`
++/// - `write(handle, offset, data: Uint8Array)` → number of bytes written
++/// - `truncate(handle, size)`, `close(handle)`
++/// - `mkdir(deviceId, path)`, `remove(deviceId, path)`, `rename(deviceId, from, to, replace)`
++/// - `volume(deviceId)` → `{ total, free, label }` (bytes)
++pub(crate) struct JsDriveFs(js_sys::Object);
++
++impl fmt::Debug for JsDriveFs {
++    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
++        f.debug_struct("JsDriveFs").finish_non_exhaustive()
++    }
++}
++
++/// What a JavaScript call came back with: a value, or the error it threw (an NT status, from its `code`).
++type JsResult<T> = Result<T, NtStatus>;
++
++impl JsDriveFs {
++    pub(crate) fn new(object: js_sys::Object) -> Self {
++        Self(object)
++    }
++
++    async fn call(&self, method: &str, args: &[JsValue]) -> JsResult<JsValue> {
++        let function = js_sys::Reflect::get(&self.0, &JsValue::from_str(method))
++            .ok()
++            .and_then(|f| f.dyn_into::<js_sys::Function>().ok())
++            .ok_or_else(|| {
++                warn!(method, "Drive file system has no such method");
++                NtStatus::NOT_SUPPORTED
++            })?;
++        let array = js_sys::Array::new();
++        for arg in args {
++            array.push(arg);
++        }
++        let value = js_sys::Reflect::apply(&function, &self.0, &array).map_err(|error| status_of(method, &error))?;
++        // A file system that works asynchronously answers with a promise. Told by its `then`, not by `instanceof`:
++        // pages replace the global `Promise` (zone.js does), and an async function's promise is still the native one.
++        let thenable = value.is_object()
++            && js_sys::Reflect::get(&value, &JsValue::from_str("then")).is_ok_and(|then| then.is_function());
++        if thenable {
++            JsFuture::from(js_sys::Promise::resolve(&value))
++                .await
++                .map_err(|error| status_of(method, &error))
++        } else {
++            Ok(value)
++        }
++    }
++
++    async fn stat(&self, device_id: u32, path: &str) -> JsResult<Option<Stat>> {
++        let value = self
++            .call("stat", &[JsValue::from(device_id), JsValue::from_str(path)])
++            .await?;
++        if value.is_null() || value.is_undefined() {
++            return Ok(None);
++        }
++        Ok(Some(Stat {
++            dir: get_bool(&value, "dir"),
++            size: to_u64(get_f64(&value, "size")),
++            created: get_f64(&value, "created"),
++            accessed: get_f64(&value, "accessed"),
++            modified: get_f64(&value, "modified"),
++            readonly: get_bool(&value, "readonly"),
++        }))
++    }
++
++    async fn list(&self, device_id: u32, path: &str) -> JsResult<Vec<String>> {
++        let value = self
++            .call("list", &[JsValue::from(device_id), JsValue::from_str(path)])
++            .await?;
++        let array = value.dyn_into::<js_sys::Array>().map_err(|_| NtStatus::UNSUCCESSFUL)?;
++        Ok(array.iter().filter_map(|v| v.as_string()).collect())
++    }
++
++    async fn open(&self, device_id: u32, path: &str, mode: OpenMode) -> JsResult<u32> {
++        let options = js_sys::Object::new();
++        for (key, on) in [
++            ("write", mode.write),
++            ("create", mode.create),
++            ("exclusive", mode.exclusive),
++            ("truncate", mode.truncate),
++        ] {
++            let _ = js_sys::Reflect::set(&options, &JsValue::from_str(key), &JsValue::from_bool(on));
++        }
++        let value = self
++            .call(
++                "open",
++                &[JsValue::from(device_id), JsValue::from_str(path), options.into()],
++            )
++            .await?;
++        value.as_f64().and_then(to_u32).ok_or(NtStatus::UNSUCCESSFUL)
++    }
++
++    async fn read(&self, handle: u32, offset: u64, length: u32) -> JsResult<Vec<u8>> {
++        let value = self
++            .call(
++                "read",
++                &[JsValue::from(handle), from_u64(offset), JsValue::from(length)],
++            )
++            .await?;
++        let bytes = value
++            .dyn_into::<js_sys::Uint8Array>()
++            .map_err(|_| NtStatus::UNSUCCESSFUL)?;
++        Ok(bytes.to_vec())
++    }
++
++    async fn write(&self, handle: u32, offset: u64, data: &[u8]) -> JsResult<u32> {
++        let bytes = js_sys::Uint8Array::from(data);
++        let value = self
++            .call("write", &[JsValue::from(handle), from_u64(offset), bytes.into()])
++            .await?;
++        value.as_f64().and_then(to_u32).ok_or(NtStatus::UNSUCCESSFUL)
++    }
++
++    async fn truncate(&self, handle: u32, size: u64) -> JsResult<()> {
++        self.call("truncate", &[JsValue::from(handle), from_u64(size)])
++            .await
++            .map(|_| ())
++    }
++
++    async fn close(&self, handle: u32) -> JsResult<()> {
++        self.call("close", &[JsValue::from(handle)]).await.map(|_| ())
++    }
++
++    async fn mkdir(&self, device_id: u32, path: &str) -> JsResult<()> {
++        self.call("mkdir", &[JsValue::from(device_id), JsValue::from_str(path)])
++            .await
++            .map(|_| ())
++    }
++
++    async fn remove(&self, device_id: u32, path: &str) -> JsResult<()> {
++        self.call("remove", &[JsValue::from(device_id), JsValue::from_str(path)])
++            .await
++            .map(|_| ())
++    }
++
++    async fn rename(&self, device_id: u32, from: &str, to: &str, replace: bool) -> JsResult<()> {
++        self.call(
++            "rename",
++            &[
++                JsValue::from(device_id),
++                JsValue::from_str(from),
++                JsValue::from_str(to),
++                JsValue::from_bool(replace),
++            ],
++        )
++        .await
++        .map(|_| ())
++    }
++
++    async fn volume(&self, device_id: u32) -> JsResult<Volume> {
++        let value = self.call("volume", &[JsValue::from(device_id)]).await?;
++        Ok(Volume {
++            total: to_u64(get_f64(&value, "total")),
++            free: to_u64(get_f64(&value, "free")),
++            label: js_sys::Reflect::get(&value, &JsValue::from_str("label"))
++                .ok()
++                .and_then(|v| v.as_string())
++                .unwrap_or_default(),
++        })
++    }
++}
++
++/// A JavaScript number as a `u64`: non-negative and finite (JavaScript numbers are exact to 2^53, as file sizes
++/// are); anything else is 0.
++fn to_u64(value: f64) -> u64 {
++    // `as` saturates: a value past u64::MAX becomes u64::MAX, which is as good an answer as any.
++    if value.is_finite() && value >= 0.0 {
++        #[expect(clippy::as_conversions, clippy::cast_possible_truncation, clippy::cast_sign_loss)]
++        {
++            value as u64
++        }
++    } else {
++        0
++    }
++}
++
++/// A JavaScript number as a `u32`, when it is one.
++fn to_u32(value: f64) -> Option<u32> {
++    if value.is_finite() && value >= 0.0 && value <= f64::from(u32::MAX) {
++        #[expect(clippy::as_conversions, clippy::cast_possible_truncation, clippy::cast_sign_loss)]
++        {
++            Some(value as u32)
++        }
++    } else {
++        None
++    }
++}
++
++/// A `u64` for JavaScript: exact up to 2^53, as file offsets and sizes are.
++fn from_u64(value: u64) -> JsValue {
++    #[expect(clippy::as_conversions, clippy::cast_precision_loss)]
++    JsValue::from(value as f64)
++}
++
++fn get_f64(value: &JsValue, key: &str) -> f64 {
++    js_sys::Reflect::get(value, &JsValue::from_str(key))
++        .ok()
++        .and_then(|v| v.as_f64())
++        .unwrap_or(0.0)
++}
++
++fn get_bool(value: &JsValue, key: &str) -> bool {
++    js_sys::Reflect::get(value, &JsValue::from_str(key))
++        .ok()
++        .and_then(|v| v.as_bool())
++        .unwrap_or(false)
++}
++
++/// The NT status for an error JavaScript threw: by its `code` (Node's errno names), else a general failure.
++fn status_of(method: &str, error: &JsValue) -> NtStatus {
++    let code = js_sys::Reflect::get(error, &JsValue::from_str("code"))
++        .ok()
++        .and_then(|v| v.as_string())
++        .unwrap_or_default();
++    let status = match code.as_str() {
++        "ENOENT" => NtStatus::NO_SUCH_FILE,
++        "EEXIST" => NtStatus::OBJECT_NAME_COLLISION,
++        "EACCES" | "EPERM" | "EROFS" => NtStatus::ACCESS_DENIED,
++        "ENOTEMPTY" => NtStatus::DIRECTORY_NOT_EMPTY,
++        "EISDIR" => NtStatus::FILE_IS_A_DIRECTORY,
++        "ENOTDIR" => NtStatus::NOT_A_DIRECTORY,
++        "ENOSPC" => NtStatus::DISK_FULL,
++        "EBUSY" => NtStatus::SHARING_VIOLATION,
++        "EINVAL" | "ENAMETOOLONG" => NtStatus::OBJECT_NAME_INVALID,
++        _ => NtStatus::UNSUCCESSFUL,
++    };
++    debug!(method, code, ?status, "Drive operation failed");
++    status
++}
++
++struct Stat {
++    dir: bool,
++    size: u64,
++    created: f64,
++    accessed: f64,
++    modified: f64,
++    readonly: bool,
++}
++
++struct Volume {
++    total: u64,
++    free: u64,
++    label: String,
++}
++
++#[derive(Clone, Copy, Default)]
++struct OpenMode {
++    write: bool,
++    create: bool,
++    exclusive: bool,
++    truncate: bool,
++}
++
++/// An open file or directory on a shared drive, by the file id handed to the server.
++#[derive(Debug)]
++struct OpenEntry {
++    device_id: u32,
++    /// The server's path, relative to the drive, with backslashes; the drive's root is `\`.
++    path: String,
++    /// The JavaScript handle of an open file; directories have none.
++    handle: Option<u32>,
++    dir: bool,
++    /// A directory enumeration in progress: the matching names, and the next to report.
++    listing: Option<Vec<String>>,
++    listing_next: usize,
++    /// FILE_DELETE_ON_CLOSE, or a disposition set later: removed when closed.
++    delete_on_close: bool,
++}
++
++/// Drive redirection served by a JavaScript file system (see the module documentation): the SVC processor's side,
++/// which queues the server's requests for the [`DriveWorker`].
++#[derive(Debug)]
++pub(crate) struct WasmDriveBackend {
++    drives: Vec<SharedDrive>,
++    requests: mpsc::UnboundedSender<ServerDriveIoRequest>,
++}
++
++impl_as_any!(WasmDriveBackend);
++
++impl WasmDriveBackend {
++    /// Starts the worker serving `drives` with `fs`; its responses go to the session's event loop through `events`.
++    /// The worker ends when the backend is dropped.
++    pub(crate) fn new(fs: JsDriveFs, drives: Vec<SharedDrive>, events: mpsc::UnboundedSender<RdpInputEvent>) -> Self {
++        let (requests, queue) = mpsc::unbounded();
++        let worker = DriveWorker {
++            fs,
++            drives: drives.clone(),
++            next_file_id: 1,
++            open: HashMap::new(),
++        };
++        spawn_local(worker.run(queue, events));
++        Self { drives, requests }
++    }
++
++    /// The drives to announce, as `Rdpdr::with_drives` takes them.
++    pub(crate) fn drive_list(&self) -> Vec<(u32, String)> {
++        self.drives.iter().map(|d| (d.device_id, d.name.clone())).collect()
++    }
++}
++
++/// Serves the queued requests with the JavaScript file system, one at a time.
++struct DriveWorker {
++    fs: JsDriveFs,
++    drives: Vec<SharedDrive>,
++    next_file_id: u32,
++    open: HashMap<u32, OpenEntry>,
++}
++
++impl DriveWorker {
++    async fn run(
++        mut self,
++        mut requests: mpsc::UnboundedReceiver<ServerDriveIoRequest>,
++        events: mpsc::UnboundedSender<RdpInputEvent>,
++    ) {
++        while let Some(request) = requests.next().await {
++            match self.handle(request).await {
++                Ok(messages) if messages.is_empty() => {}
++                // Encoded here: the event loop's messages are plain data.
++                Ok(messages) => match messages.iter().map(SvcMessage::encode_unframed_pdu).collect() {
++                    Ok(responses) => {
++                        if events.unbounded_send(RdpInputEvent::Drive(responses)).is_err() {
++                            break;
++                        }
++                    }
++                    Err(error) => warn!(?error, "Drive response not encoded"),
++                },
++                Err(error) => warn!(?error, "Drive request failed"),
++            }
++        }
++        // The session is over: close what the server left open.
++        for (_, entry) in self.open.drain() {
++            if let Some(handle) = entry.handle {
++                let _ = self.fs.close(handle).await;
++            }
++        }
++        debug!("Drive worker ended");
++    }
++
++    async fn handle(&mut self, req: ServerDriveIoRequest) -> PduResult<Vec<SvcMessage>> {
++        match req {
++            ServerDriveIoRequest::ServerCreateDriveRequest(req) => self.create(req).await,
++            ServerDriveIoRequest::DeviceCloseRequest(req) => self.close(req).await,
++            ServerDriveIoRequest::DeviceReadRequest(req) => self.read(req).await,
++            ServerDriveIoRequest::DeviceWriteRequest(req) => self.write(req).await,
++            ServerDriveIoRequest::ServerDriveQueryInformationRequest(req) => self.query_information(req).await,
++            ServerDriveIoRequest::ServerDriveQueryVolumeInformationRequest(req) => {
++                self.query_volume_information(req).await
++            }
++            ServerDriveIoRequest::ServerDriveSetInformationRequest(req) => self.set_information(req).await,
++            ServerDriveIoRequest::ServerDriveQueryDirectoryRequest(req) => self.query_directory(req).await,
++            ServerDriveIoRequest::DeviceFlushBuffersRequest(req) => Ok(vec![SvcMessage::from(
++                RdpdrPdu::DeviceFlushBuffersResponse(DeviceFlushBuffersResponse {
++                    device_io_response: DeviceIoResponse::new(req.device_io_request, NtStatus::SUCCESS),
++                }),
++            )]),
++            // Change notification is never answered: the server keeps the request pending, as with other clients
++            // that don't watch directories.
++            ServerDriveIoRequest::ServerDriveNotifyChangeDirectoryRequest(_) => Ok(Vec::new()),
++            // Locks are granted without being enforced: one client at a time uses these files.
++            ServerDriveIoRequest::ServerDriveLockControlRequest(req) => {
++                Ok(vec![SvcMessage::from(RdpdrPdu::ClientDriveLockControlResponse(
++                    ClientDriveLockControlResponse::new(req.device_io_request, NtStatus::SUCCESS),
++                ))])
++            }
++            ServerDriveIoRequest::DeviceControlRequest(req) => Ok(vec![SvcMessage::from(
++                RdpdrPdu::DeviceControlResponse(DeviceControlResponse {
++                    device_io_reply: DeviceIoResponse::new(req.header, NtStatus::SUCCESS),
++                    output_buffer: None,
++                }),
++            )]),
++            ServerDriveIoRequest::ServerDriveQuerySecurityRequest(req) => Ok(vec![SvcMessage::from(
++                RdpdrPdu::ClientDriveQuerySecurityResponse(ClientDriveQuerySecurityResponse {
++                    device_io_response: DeviceIoResponse::new(req.device_io_request, NtStatus::NOT_SUPPORTED),
++                    security_descriptor: None,
++                }),
++            )]),
++            ServerDriveIoRequest::ServerDriveSetSecurityRequest(req) => {
++                Ok(vec![SvcMessage::from(RdpdrPdu::ClientDriveSetSecurityResponse(
++                    ClientDriveSetSecurityResponse::new(&req, NtStatus::NOT_SUPPORTED).map_err(|e| encode_err!(e))?,
++                ))])
++            }
++        }
++    }
++
++    async fn create(&mut self, req: DeviceCreateRequest) -> PduResult<Vec<SvcMessage>> {
++        let device_id = req.device_io_request.device_id;
++        let path = normalize(&req.path);
++        let respond = |request: DeviceIoRequest, status: NtStatus, file_id: u32, information: Information| {
++            Ok(vec![SvcMessage::from(RdpdrPdu::DeviceCreateResponse(
++                DeviceCreateResponse {
++                    device_io_reply: DeviceIoResponse::new(request, status),
++                    file_id,
++                    information,
++                },
++            ))])
++        };
++        if !self.drives.iter().any(|d| d.device_id == device_id) {
++            warn!(device_id, "Create on a drive that isn't shared");
++            return respond(req.device_io_request, NtStatus::NO_SUCH_FILE, 0, Information::empty());
++        }
++
++        let wants_dir = req.create_options.contains(CreateOptions::FILE_DIRECTORY_FILE);
++        let wants_file = req.create_options.contains(CreateOptions::FILE_NON_DIRECTORY_FILE);
++        let delete_on_close = req.create_options.contains(CreateOptions::FILE_DELETE_ON_CLOSE);
++        let disposition = req.create_disposition;
++
++        let existing = match self.fs.stat(device_id, &path).await {
++            Ok(stat) => stat,
++            Err(status) => return respond(req.device_io_request, status, 0, Information::empty()),
++        };
++
++        // Directories: opened without a handle; made when the disposition allows.
++        let (is_dir, handle, information) = match &existing {
++            Some(stat) if stat.dir => {
++                if wants_file {
++                    return respond(
++                        req.device_io_request,
++                        NtStatus::FILE_IS_A_DIRECTORY,
++                        0,
++                        Information::empty(),
++                    );
++                }
++                if disposition == CreateDisposition::FILE_CREATE {
++                    return respond(
++                        req.device_io_request,
++                        NtStatus::OBJECT_NAME_COLLISION,
++                        0,
++                        Information::empty(),
++                    );
++                }
++                (true, None, Information::FILE_OPENED)
++            }
++            Some(_) if wants_dir => {
++                return respond(
++                    req.device_io_request,
++                    NtStatus::NOT_A_DIRECTORY,
++                    0,
++                    Information::empty(),
++                );
++            }
++            None if wants_dir => {
++                if disposition != CreateDisposition::FILE_CREATE && disposition != CreateDisposition::FILE_OPEN_IF {
++                    return respond(req.device_io_request, NtStatus::NO_SUCH_FILE, 0, Information::empty());
++                }
++                if let Err(status) = self.fs.mkdir(device_id, &path).await {
++                    return respond(req.device_io_request, status, 0, Information::empty());
++                }
++                (true, None, Information::FILE_CREATED)
++            }
++            _ => {
++                // A file: the disposition says whether it must, may or mustn't exist, and whether it is truncated.
++                let exists = existing.is_some();
++                let (mode, information) = match disposition {
++                    CreateDisposition::FILE_OPEN => {
++                        if !exists {
++                            return respond(req.device_io_request, NtStatus::NO_SUCH_FILE, 0, Information::empty());
++                        }
++                        (OpenMode::default(), Information::FILE_OPENED)
++                    }
++                    CreateDisposition::FILE_CREATE => {
++                        if exists {
++                            return respond(
++                                req.device_io_request,
++                                NtStatus::OBJECT_NAME_COLLISION,
++                                0,
++                                Information::empty(),
++                            );
++                        }
++                        (
++                            OpenMode {
++                                write: true,
++                                create: true,
++                                exclusive: true,
++                                truncate: false,
++                            },
++                            Information::FILE_CREATED,
++                        )
++                    }
++                    CreateDisposition::FILE_OPEN_IF => (
++                        OpenMode {
++                            write: true,
++                            create: true,
++                            exclusive: false,
++                            truncate: false,
++                        },
++                        if exists {
++                            Information::FILE_OPENED
++                        } else {
++                            Information::FILE_CREATED
++                        },
++                    ),
++                    CreateDisposition::FILE_OVERWRITE => {
++                        if !exists {
++                            return respond(req.device_io_request, NtStatus::NO_SUCH_FILE, 0, Information::empty());
++                        }
++                        (
++                            OpenMode {
++                                write: true,
++                                create: false,
++                                exclusive: false,
++                                truncate: true,
++                            },
++                            Information::FILE_OVERWRITTEN,
++                        )
++                    }
++                    CreateDisposition::FILE_OVERWRITE_IF => (
++                        OpenMode {
++                            write: true,
++                            create: true,
++                            exclusive: false,
++                            truncate: true,
++                        },
++                        if exists {
++                            Information::FILE_OVERWRITTEN
++                        } else {
++                            Information::FILE_CREATED
++                        },
++                    ),
++                    // FILE_SUPERSEDE, and anything unknown: a fresh file.
++                    _ => (
++                        OpenMode {
++                            write: true,
++                            create: true,
++                            exclusive: false,
++                            truncate: true,
++                        },
++                        Information::FILE_SUPERSEDED,
++                    ),
++                };
++                // Opened for writing when the server asks for it (or will create/truncate); a read-only file
++                // opened for reading only.
++                let mode = OpenMode {
++                    write: mode.write || wants_write(req.desired_access),
++                    ..mode
++                };
++                let handle = match self.fs.open(device_id, &path, mode).await {
++                    Ok(handle) => handle,
++                    // A file that can't be opened for writing (read-only) still opens for reading when the server only
++                    // asked to open it.
++                    Err(NtStatus::ACCESS_DENIED)
++                        if mode.write && !mode.truncate && disposition == CreateDisposition::FILE_OPEN =>
++                    {
++                        match self.fs.open(device_id, &path, OpenMode::default()).await {
++                            Ok(handle) => handle,
++                            Err(status) => {
++                                return respond(req.device_io_request, status, 0, Information::empty());
++                            }
++                        }
++                    }
++                    Err(status) => return respond(req.device_io_request, status, 0, Information::empty()),
++                };
++                (false, Some(handle), information)
++            }
++        };
++
++        let file_id = self.next_file_id;
++        self.next_file_id = self.next_file_id.wrapping_add(1).max(1);
++        debug!(file_id, device_id, %path, is_dir, "Drive file opened");
++        self.open.insert(
++            file_id,
++            OpenEntry {
++                device_id,
++                path,
++                handle,
++                dir: is_dir,
++                listing: None,
++                listing_next: 0,
++                delete_on_close,
++            },
++        );
++        respond(req.device_io_request, NtStatus::SUCCESS, file_id, information)
++    }
++
++    async fn close(&mut self, req: DeviceCloseRequest) -> PduResult<Vec<SvcMessage>> {
++        if let Some(entry) = self.open.remove(&req.device_io_request.file_id) {
++            if let Some(handle) = entry.handle {
++                if let Err(status) = self.fs.close(handle).await {
++                    warn!(?status, "Closing a drive file failed");
++                }
++            }
++            if entry.delete_on_close {
++                if let Err(status) = self.fs.remove(entry.device_id, &entry.path).await {
++                    warn!(?status, path = %entry.path, "Removing a drive file on close failed");
++                }
++            }
++        }
++        Ok(vec![SvcMessage::from(RdpdrPdu::DeviceCloseResponse(
++            DeviceCloseResponse {
++                device_io_response: DeviceIoResponse::new(req.device_io_request, NtStatus::SUCCESS),
++            },
++        ))])
++    }
++
++    async fn read(&mut self, req: DeviceReadRequest) -> PduResult<Vec<SvcMessage>> {
++        let respond = |request: DeviceIoRequest, status: NtStatus, read_data: Vec<u8>| {
++            Ok(vec![SvcMessage::from(RdpdrPdu::DeviceReadResponse(
++                DeviceReadResponse {
++                    device_io_reply: DeviceIoResponse::new(request, status),
++                    read_data,
++                },
++            ))])
++        };
++        let Some(handle) = self.open.get(&req.device_io_request.file_id).and_then(|e| e.handle) else {
++            return respond(req.device_io_request, NtStatus::INVALID_HANDLE, Vec::new());
++        };
++        match self.fs.read(handle, req.offset, req.length).await {
++            Ok(data) => respond(req.device_io_request, NtStatus::SUCCESS, data),
++            Err(status) => respond(req.device_io_request, status, Vec::new()),
++        }
++    }
++
++    async fn write(&mut self, req: DeviceWriteRequest) -> PduResult<Vec<SvcMessage>> {
++        let respond = |request: DeviceIoRequest, status: NtStatus, length: u32| {
++            Ok(vec![SvcMessage::from(RdpdrPdu::DeviceWriteResponse(
++                DeviceWriteResponse {
++                    device_io_reply: DeviceIoResponse::new(request, status),
++                    length,
++                },
++            ))])
++        };
++        let Some(handle) = self.open.get(&req.device_io_request.file_id).and_then(|e| e.handle) else {
++            return respond(req.device_io_request, NtStatus::INVALID_HANDLE, 0);
++        };
++        match self.fs.write(handle, req.offset, &req.write_data).await {
++            Ok(length) => respond(req.device_io_request, NtStatus::SUCCESS, length),
++            Err(status) => respond(req.device_io_request, status, 0),
++        }
++    }
++
++    async fn query_information(&mut self, req: ServerDriveQueryInformationRequest) -> PduResult<Vec<SvcMessage>> {
++        let respond = |request: DeviceIoRequest, status: NtStatus, buffer: Option<FileInformationClass>| {
++            Ok(vec![SvcMessage::from(RdpdrPdu::ClientDriveQueryInformationResponse(
++                ClientDriveQueryInformationResponse {
++                    device_io_response: DeviceIoResponse::new(request, status),
++                    buffer,
++                },
++            ))])
++        };
++        let Some(entry) = self.open.get(&req.device_io_request.file_id) else {
++            return respond(req.device_io_request, NtStatus::INVALID_HANDLE, None);
++        };
++        let stat = match self.fs.stat(entry.device_id, &entry.path).await {
++            Ok(Some(stat)) => stat,
++            Ok(None) => return respond(req.device_io_request, NtStatus::NO_SUCH_FILE, None),
++            Err(status) => return respond(req.device_io_request, status, None),
++        };
++        let attributes = attributes_of(&stat, file_name(&entry.path));
++        let buffer = match req.file_info_class_lvl {
++            FileInformationClassLevel::FILE_BASIC_INFORMATION => FileInformationClass::Basic(FileBasicInformation {
++                creation_time: filetime(stat.created),
++                last_access_time: filetime(stat.accessed),
++                last_write_time: filetime(stat.modified),
++                change_time: filetime(stat.modified),
++                file_attributes: attributes,
++            }),
++            FileInformationClassLevel::FILE_STANDARD_INFORMATION => {
++                FileInformationClass::Standard(FileStandardInformation {
++                    allocation_size: size_i64(stat.size),
++                    end_of_file: size_i64(stat.size),
++                    number_of_links: 1,
++                    delete_pending: if entry.delete_on_close {
++                        Boolean::True
++                    } else {
++                        Boolean::False
++                    },
++                    directory: if stat.dir { Boolean::True } else { Boolean::False },
++                })
++            }
++            FileInformationClassLevel::FILE_ATTRIBUTE_TAG_INFORMATION => {
++                FileInformationClass::AttributeTag(FileAttributeTagInformation {
++                    file_attributes: attributes,
++                    reparse_tag: 0,
++                })
++            }
++            other => {
++                debug!(?other, "Unsupported file information class");
++                return respond(req.device_io_request, NtStatus::NOT_SUPPORTED, None);
++            }
++        };
++        respond(req.device_io_request, NtStatus::SUCCESS, Some(buffer))
++    }
++
++    async fn query_volume_information(
++        &mut self,
++        req: ServerDriveQueryVolumeInformationRequest,
++    ) -> PduResult<Vec<SvcMessage>> {
++        let respond = |request: DeviceIoRequest, status: NtStatus, buffer: Option<FileSystemInformationClass>| {
++            Ok(vec![SvcMessage::from(
++                RdpdrPdu::ClientDriveQueryVolumeInformationResponse(ClientDriveQueryVolumeInformationResponse {
++                    device_io_reply: DeviceIoResponse::new(request, status),
++                    buffer,
++                }),
++            )])
++        };
++        let Some(entry) = self.open.get(&req.device_io_request.file_id) else {
++            return respond(req.device_io_request, NtStatus::INVALID_HANDLE, None);
++        };
++        let volume = match self.fs.volume(entry.device_id).await {
++            Ok(volume) => volume,
++            Err(status) => return respond(req.device_io_request, status, None),
++        };
++        // Sizes are reported in allocation units of one sector of 512 bytes (the figures are informational).
++        const SECTOR: u64 = 512;
++        const SECTOR_U32: u32 = 512;
++        let units = |bytes: u64| size_i64(bytes / SECTOR);
++        let buffer = match req.fs_info_class_lvl {
++            FileSystemInformationClassLevel::FILE_FS_VOLUME_INFORMATION => {
++                FileSystemInformationClass::FileFsVolumeInformation(FileFsVolumeInformation {
++                    volume_creation_time: 0,
++                    volume_serial_number: serial_of(entry.device_id, &volume.label),
++                    supports_objects: Boolean::False,
++                    volume_label: if volume.label.is_empty() {
++                        drive_name(&self.drives, entry.device_id)
++                    } else {
++                        volume.label
++                    },
++                })
++            }
++            FileSystemInformationClassLevel::FILE_FS_SIZE_INFORMATION => {
++                FileSystemInformationClass::FileFsSizeInformation(FileFsSizeInformation {
++                    total_alloc_units: units(volume.total),
++                    available_alloc_units: units(volume.free),
++                    sectors_per_alloc_unit: 1,
++                    bytes_per_sector: SECTOR_U32,
++                })
++            }
++            FileSystemInformationClassLevel::FILE_FS_FULL_SIZE_INFORMATION => {
++                FileSystemInformationClass::FileFsFullSizeInformation(FileFsFullSizeInformation {
++                    total_alloc_units: units(volume.total),
++                    caller_available_alloc_units: units(volume.free),
++                    actual_available_alloc_units: units(volume.free),
++                    sectors_per_alloc_unit: 1,
++                    bytes_per_sector: SECTOR_U32,
++                })
++            }
++            FileSystemInformationClassLevel::FILE_FS_ATTRIBUTE_INFORMATION => {
++                FileSystemInformationClass::FileFsAttributeInformation(FileFsAttributeInformation {
++                    file_system_attributes: FileSystemAttributes::FILE_CASE_SENSITIVE_SEARCH
++                        | FileSystemAttributes::FILE_CASE_PRESERVED_NAMES
++                        | FileSystemAttributes::FILE_UNICODE_ON_DISK,
++                    max_component_name_len: 255,
++                    file_system_name: "NTFS".to_owned(),
++                })
++            }
++            other => {
++                debug!(?other, "Unsupported file system information class");
++                return respond(req.device_io_request, NtStatus::NOT_SUPPORTED, None);
++            }
++        };
++        respond(req.device_io_request, NtStatus::SUCCESS, Some(buffer))
++    }
++
++    async fn set_information(&mut self, req: ServerDriveSetInformationRequest) -> PduResult<Vec<SvcMessage>> {
++        let respond = |req: &ServerDriveSetInformationRequest, status: NtStatus| {
++            Ok(vec![SvcMessage::from(RdpdrPdu::ClientDriveSetInformationResponse(
++                ClientDriveSetInformationResponse::new(req, status).map_err(|e| encode_err!(e))?,
++            ))])
++        };
++        let Some(entry) = self.open.get_mut(&req.device_io_request.file_id) else {
++            return respond(&req, NtStatus::INVALID_HANDLE);
++        };
++        let status = match &req.set_buffer {
++            FileInformationClass::Rename(info) => {
++                let to = normalize(&info.file_name);
++                match self
++                    .fs
++                    .rename(
++                        entry.device_id,
++                        &entry.path,
++                        &to,
++                        info.replace_if_exists == Boolean::True,
++                    )
++                    .await
++                {
++                    Ok(()) => {
++                        entry.path = to;
++                        NtStatus::SUCCESS
++                    }
++                    Err(status) => status,
++                }
++            }
++            FileInformationClass::Disposition(info) => {
++                entry.delete_on_close = info.delete_pending != 0;
++                NtStatus::SUCCESS
++            }
++            FileInformationClass::EndOfFile(info) => match entry.handle {
++                Some(handle) => match self
++                    .fs
++                    .truncate(handle, u64::try_from(info.end_of_file).unwrap_or(0))
++                    .await
++                {
++                    Ok(()) => NtStatus::SUCCESS,
++                    Err(status) => status,
++                },
++                None => NtStatus::FILE_IS_A_DIRECTORY,
++            },
++            // Allocation hints and attribute/time changes are taken without doing anything: the host's file system
++            // keeps its own.
++            FileInformationClass::Allocation(_) | FileInformationClass::Basic(_) => NtStatus::SUCCESS,
++            other => {
++                debug!(class = %other, "Unsupported set-information class");
++                NtStatus::NOT_SUPPORTED
++            }
++        };
++        respond(&req, status)
++    }
++
++    async fn query_directory(&mut self, req: ServerDriveQueryDirectoryRequest) -> PduResult<Vec<SvcMessage>> {
++        let respond = |request: DeviceIoRequest, status: NtStatus, buffer: Option<FileInformationClass>| {
++            Ok(vec![SvcMessage::from(RdpdrPdu::ClientDriveQueryDirectoryResponse(
++                ClientDriveQueryDirectoryResponse {
++                    device_io_reply: DeviceIoResponse::new(request, status),
++                    buffer,
++                },
++            ))])
++        };
++        let Some(entry) = self.open.get_mut(&req.device_io_request.file_id) else {
++            return respond(req.device_io_request, NtStatus::INVALID_HANDLE, None);
++        };
++        if !entry.dir {
++            return respond(req.device_io_request, NtStatus::NOT_A_DIRECTORY, None);
++        }
++        if req.initial_query != 0 {
++            // The path is the directory's with a pattern as its last component: `\dir\*`, `\dir\*.txt`, or an exact
++            // name to look for.
++            let query = normalize(&req.path);
++            let (dir, pattern) = match query.rsplit_once('\\') {
++                Some(("", pattern)) => ("\\", pattern),
++                Some((dir, pattern)) => (dir, pattern),
++                None => (entry.path.as_str(), query.as_str()),
++            };
++            let names = match self.fs.list(entry.device_id, dir).await {
++                Ok(names) => names,
++                Err(status) => return respond(req.device_io_request, status, None),
++            };
++            let mut matching: Vec<String> = names.into_iter().filter(|name| matches(pattern, name)).collect();
++            matching.sort();
++            entry.listing = Some(matching);
++            entry.listing_next = 0;
++        }
++        let (device_id, dir) = (entry.device_id, entry.path.clone());
++        let Some(listing) = entry.listing.as_ref() else {
++            return respond(req.device_io_request, NtStatus::NO_MORE_FILES, None);
++        };
++        // Entries whose stat fails (gone meanwhile) are skipped.
++        while let Some(name) = listing.get(entry.listing_next).cloned() {
++            entry.listing_next = entry.listing_next.saturating_add(1);
++            let path = join(&dir, &name);
++            let stat = match self.fs.stat(device_id, &path).await {
++                Ok(Some(stat)) => stat,
++                _ => continue,
++            };
++            let attributes = attributes_of(&stat, &name);
++            let size = size_i64(stat.size);
++            let buffer = match req.file_info_class_lvl {
++                FileInformationClassLevel::FILE_BOTH_DIRECTORY_INFORMATION => {
++                    FileInformationClass::BothDirectory(FileBothDirectoryInformation::new(
++                        filetime(stat.created),
++                        filetime(stat.accessed),
++                        filetime(stat.modified),
++                        filetime(stat.modified),
++                        size,
++                        attributes,
++                        name,
++                    ))
++                }
++                FileInformationClassLevel::FILE_FULL_DIRECTORY_INFORMATION => {
++                    FileInformationClass::FullDirectory(FileFullDirectoryInformation::new(
++                        filetime(stat.created),
++                        filetime(stat.accessed),
++                        filetime(stat.modified),
++                        filetime(stat.modified),
++                        size,
++                        attributes,
++                        name,
++                    ))
++                }
++                FileInformationClassLevel::FILE_DIRECTORY_INFORMATION => {
++                    FileInformationClass::Directory(FileDirectoryInformation::new(
++                        filetime(stat.created),
++                        filetime(stat.accessed),
++                        filetime(stat.modified),
++                        filetime(stat.modified),
++                        size,
++                        attributes,
++                        name,
++                    ))
++                }
++                FileInformationClassLevel::FILE_NAMES_INFORMATION => {
++                    FileInformationClass::Names(FileNamesInformation::new(name))
++                }
++                other => {
++                    debug!(?other, "Unsupported directory information class");
++                    return respond(req.device_io_request, NtStatus::NOT_SUPPORTED, None);
++                }
++            };
++            return respond(req.device_io_request, NtStatus::SUCCESS, Some(buffer));
++        }
++        let status = if req.initial_query != 0 {
++            NtStatus::NO_SUCH_FILE
++        } else {
++            NtStatus::NO_MORE_FILES
++        };
++        respond(req.device_io_request, status, None)
++    }
++}
++
++impl RdpdrBackend for WasmDriveBackend {
++    fn handle_server_device_announce_response(&mut self, pdu: ServerDeviceAnnounceResponse) -> PduResult<()> {
++        if pdu.result_code != NtStatus::SUCCESS {
++            warn!(device_id = pdu.device_id, status = ?pdu.result_code, "The server declined a shared drive");
++        }
++        Ok(())
++    }
++
++    fn handle_scard_call(
++        &mut self,
++        _req: DeviceControlRequest<ScardIoCtlCode>,
++        _call: ScardCall,
++    ) -> PduResult<Vec<SvcMessage>> {
++        Ok(Vec::new())
++    }
++
++    fn handle_drive_io_request(&mut self, req: ServerDriveIoRequest) -> PduResult<Vec<SvcMessage>> {
++        // Answered by the worker, through the event loop.
++        if self.requests.unbounded_send(req).is_err() {
++            warn!("Drive request dropped: the worker has ended");
++        }
++        Ok(Vec::new())
++    }
++}
++
++/// The server's path with a leading backslash and no trailing one (the root is `\`), forward slashes as backslashes.
++fn normalize(path: &str) -> String {
++    let path = path.replace('/', "\\");
++    let trimmed = path.trim_end_matches('\\');
++    if trimmed.is_empty() {
++        "\\".to_owned()
++    } else if trimmed.starts_with('\\') {
++        trimmed.to_owned()
++    } else {
++        format!("\\{trimmed}")
++    }
++}
++
++fn join(dir: &str, name: &str) -> String {
++    if dir == "\\" {
++        format!("\\{name}")
++    } else {
++        format!("{dir}\\{name}")
++    }
++}
++
++fn file_name(path: &str) -> &str {
++    path.rsplit('\\').next().unwrap_or(path)
++}
++
++fn drive_name(drives: &[SharedDrive], device_id: u32) -> String {
++    drives
++        .iter()
++        .find(|d| d.device_id == device_id)
++        .map(|d| d.name.clone())
++        .unwrap_or_default()
++}
++
++/// Whether the server asks for an access that writes (data, append) or everything.
++fn wants_write(access: DesiredAccess) -> bool {
++    access.intersects(
++        DesiredAccess::FILE_WRITE_DATA_OR_FILE_ADD_FILE
++            | DesiredAccess::FILE_APPEND_DATA_OR_FILE_ADD_SUBDIRECTORY
++            | DesiredAccess::GENERIC_WRITE
++            | DesiredAccess::GENERIC_ALL,
++    )
++}
++
++fn attributes_of(stat: &Stat, name: &str) -> FileAttributes {
++    let mut attributes = FileAttributes::empty();
++    if stat.dir {
++        attributes |= FileAttributes::FILE_ATTRIBUTE_DIRECTORY;
++    } else {
++        attributes |= FileAttributes::FILE_ATTRIBUTE_ARCHIVE;
++    }
++    if stat.readonly {
++        attributes |= FileAttributes::FILE_ATTRIBUTE_READONLY;
++    }
++    // Unix convention: a leading dot hides a file.
++    if name.len() > 1 && name.starts_with('.') && !name.starts_with("..") {
++        attributes |= FileAttributes::FILE_ATTRIBUTE_HIDDEN;
++    }
++    attributes
++}
++
++/// Milliseconds since the Unix epoch as a Windows FILETIME (100 ns units since 1601).
++fn filetime(ms_since_epoch: f64) -> i64 {
++    if !ms_since_epoch.is_finite() || ms_since_epoch <= 0.0 {
++        return 0;
++    }
++    const EPOCH_DIFFERENCE: i64 = 116_444_736_000_000_000;
++    i64::try_from(to_u64(ms_since_epoch))
++        .unwrap_or(i64::MAX)
++        .saturating_mul(10_000)
++        .saturating_add(EPOCH_DIFFERENCE)
++}
++
++fn size_i64(size: u64) -> i64 {
++    i64::try_from(size).unwrap_or(i64::MAX)
++}
++
++/// A stable volume serial from the drive's id and label.
++fn serial_of(device_id: u32, label: &str) -> u32 {
++    label.bytes().fold(device_id.wrapping_mul(2_654_435_761), |h, b| {
++        h.wrapping_mul(31).wrapping_add(u32::from(b))
++    })
++}
++
++/// Whether `name` matches a DOS-style pattern (`*`, `?`), case-insensitively; an empty pattern matches everything.
++///
++/// The pattern is the server's. It is matched without recursion, retrying only the last `*`, so the work is bounded
++/// by pattern length × name length whatever the pattern; one longer than any file name matches nothing.
++fn matches(pattern: &str, name: &str) -> bool {
++    const MAX_PATTERN_CHARS: usize = 1024;
++
++    if pattern.is_empty() || pattern == "*" || pattern == "*.*" {
++        return true;
++    }
++    let pattern: Vec<char> = pattern.to_lowercase().chars().collect();
++    if pattern.len() > MAX_PATTERN_CHARS {
++        return false;
++    }
++    let name: Vec<char> = name.to_lowercase().chars().collect();
++    let (mut p, mut n) = (0usize, 0usize);
++    // The last `*` passed, and how much of the name it has been given so far.
++    let mut star: Option<(usize, usize)> = None;
++    while let Some(&nc) = name.get(n) {
++        match pattern.get(p) {
++            Some('*') => {
++                star = Some((p, n));
++                p = p.saturating_add(1);
++            }
++            Some(&pc) if pc == '?' || pc == nc => {
++                p = p.saturating_add(1);
++                n = n.saturating_add(1);
++            }
++            _ => match star {
++                // Let the `*` take one more character, and try the rest again from there.
++                Some((star_p, star_n)) => {
++                    let star_n = star_n.saturating_add(1);
++                    star = Some((star_p, star_n));
++                    p = star_p.saturating_add(1);
++                    n = star_n;
++                }
++                None => return false,
++            },
++        }
++    }
++    pattern.iter().skip(p).all(|&c| c == '*')
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn patterns() {
++        assert!(matches("*", "anything"));
++        assert!(matches("*.*", "no-dot"));
++        assert!(matches("*.txt", "Notes.TXT"));
++        assert!(!matches("*.txt", "notes.txt.bak"));
++        assert!(matches("a?c", "abc"));
++        assert!(!matches("a?c", "abbc"));
++        assert!(matches("exact.name", "EXACT.name"));
++        assert!(!matches("exact.name", "exact.names"));
++        assert!(matches("*a*b*", "xxaxxbxx"));
++        assert!(matches("a*b*c", "a-b-b-c"));
++        assert!(!matches("a*b*c", "a-b-b-cd"));
++        assert!(matches("*.t?t", "a.b.txt"));
++        assert!(matches("a**", "a"));
++        assert!(!matches("?", ""));
++    }
++
++    #[test]
++    fn patterns_from_a_hostile_server_stay_cheap() {
++        // Exponential for a backtracking matcher; a few thousand steps here.
++        let pattern = format!("{}b", "a*".repeat(40));
++        let name = "a".repeat(200);
++        assert!(!matches(&pattern, &name));
++        assert!(matches(&pattern, &format!("{name}b")));
++        assert!(!matches(&"*".repeat(2000), "anything"));
++    }
++
++    #[test]
++    fn paths() {
++        assert_eq!(normalize(""), "\\");
++        assert_eq!(normalize("\\"), "\\");
++        assert_eq!(normalize("dir\\file.txt"), "\\dir\\file.txt");
++        assert_eq!(normalize("/dir/"), "\\dir");
++        assert_eq!(join("\\", "a"), "\\a");
++        assert_eq!(join("\\dir", "a"), "\\dir\\a");
++        assert_eq!(file_name("\\dir\\a.txt"), "a.txt");
++    }
++
++    #[test]
++    fn filetimes() {
++        assert_eq!(filetime(0.0), 0);
++        // 2000-01-01T00:00:00Z
++        assert_eq!(filetime(946_684_800_000.0), 125_911_584_000_000_000);
++    }
++}
+diff --git a/crates/ironrdp-web/src/lib.rs b/crates/ironrdp-web/src/lib.rs
+index 0c4e56a1..20e37cdf 100644
+--- a/crates/ironrdp-web/src/lib.rs
++++ b/crates/ironrdp-web/src/lib.rs
+@@ -19,6 +19,7 @@ mod audio;
+ mod audio_input;
+ mod canvas;
+ mod clipboard;
++mod drive;
+ mod error;
+ mod h264;
+ mod image;
+diff --git a/crates/ironrdp-web/src/session.rs b/crates/ironrdp-web/src/session.rs
+index 83f921c3..67f864f6 100644
+--- a/crates/ironrdp-web/src/session.rs
++++ b/crates/ironrdp-web/src/session.rs
+@@ -43,6 +43,7 @@ use web_sys::HtmlCanvasElement;
+ use crate::canvas::Canvas;
+ use crate::clipboard;
+ use crate::clipboard::{ClipboardData, FileMetadata, WasmClipboard, WasmClipboardBackend, WasmClipboardBackendMessage};
++use crate::drive::{JsDriveFs, SharedDrive, WasmDriveBackend};
+ use crate::error::IronError;
+ use crate::image::extract_partial_image;
+ use crate::input::InputTransaction;
+@@ -90,6 +91,9 @@ struct SessionBuilderInner {
+     printer_device_id: Option<u32>,
+     printer_driver_name: Option<String>,
+ 
++    // Drive redirection: a JavaScript file system with `drives: [{ id, name }]` (see drive.rs).
++    drive_redirection: Option<js_sys::Object>,
++
+     use_display_control: bool,
+     use_graphics_pipeline: bool,
+     audio_playback_callback: Option<js_sys::Function>,
+@@ -138,6 +142,7 @@ impl Default for SessionBuilderInner {
+             printer_name: None,
+             printer_device_id: None,
+             printer_driver_name: None,
++            drive_redirection: None,
+ 
+             use_display_control: false,
+             use_graphics_pipeline: false,
+@@ -271,6 +276,10 @@ impl iron_remote_desktop::SessionBuilder for SessionBuilder {
+                 // A function receiving the audio (see audio::to_js); anything else turns playback off.
+                 self.0.borrow_mut().audio_playback_callback = audio_playback.dyn_into::<js_sys::Function>().ok();
+             };
++            |drive_redirection: JsValue| {
++                // An object with the file operations and `drives` (see drive.rs); anything else turns it off.
++                self.0.borrow_mut().drive_redirection = drive_redirection.dyn_into::<js_sys::Object>().ok();
++            };
+             |audio_input: JsValue| {
+                 // A function told when to capture (see audio_input::to_js); anything else turns the microphone off.
+                 self.0.borrow_mut().audio_input_callback = audio_input.dyn_into::<js_sys::Function>().ok();
+@@ -387,6 +396,7 @@ impl iron_remote_desktop::SessionBuilder for SessionBuilder {
+             printer_name,
+             printer_device_id,
+             printer_driver_name,
++            drive_redirection,
+             outbound_message_size_limit,
+             legacy_graphics,
+         );
+@@ -430,6 +440,7 @@ impl iron_remote_desktop::SessionBuilder for SessionBuilder {
+             printer_name = inner.printer_name.clone();
+             printer_device_id = inner.printer_device_id;
+             printer_driver_name = inner.printer_driver_name.clone();
++            drive_redirection = inner.drive_redirection.clone();
+             outbound_message_size_limit = inner.outbound_message_size_limit;
+             legacy_graphics = inner.legacy_graphics;
+         }
+@@ -508,6 +519,34 @@ impl iron_remote_desktop::SessionBuilder for SessionBuilder {
+             None => (None, None),
+         };
+ 
++        // Drive redirection: the JavaScript file system, with the drives it shares (`drives: [{ id, name }]`).
++        let drive_backend = drive_redirection.map(|object| {
++            let drives = js_sys::Reflect::get(&object, &JsValue::from_str("drives"))
++                .ok()
++                .and_then(|list| list.dyn_into::<js_sys::Array>().ok())
++                .map(|list| {
++                    list.iter()
++                        .filter_map(|item| {
++                            let id = js_sys::Reflect::get(&item, &JsValue::from_str("id")).ok()?.as_f64()?;
++                            let name = js_sys::Reflect::get(&item, &JsValue::from_str("name"))
++                                .ok()?
++                                .as_string()?;
++                            (id >= 1.0 && id <= f64::from(u32::MAX)).then(|| {
++                                #[expect(
++                                    clippy::as_conversions,
++                                    clippy::cast_possible_truncation,
++                                    clippy::cast_sign_loss
++                                )]
++                                let device_id = id as u32;
++                                SharedDrive { device_id, name }
++                            })
++                        })
++                        .collect::<Vec<_>>()
++                })
++                .unwrap_or_default();
++            WasmDriveBackend::new(JsDriveFs::new(object), drives, input_events_tx.clone())
++        });
++
+         // Default to 2 to avoid a potential collision if drive redirection is
+         // enabled in the same session.
+         let printer_device_id = printer_device_id.unwrap_or(2);
+@@ -552,6 +591,7 @@ impl iron_remote_desktop::SessionBuilder for SessionBuilder {
+             kdc_proxy_url,
+             clipboard_backend: clipboard.as_ref().map(|clip| clip.backend()),
+             printer_backend,
++            drive_backend,
+             printer_device_id,
+             printer_name,
+             printer_driver_name,
+@@ -612,6 +652,8 @@ pub(crate) enum RdpInputEvent {
+     /// Printer backend → event loop: a print job finished and its bytes are
+     /// ready for delivery to JS. See [`crate::printer::PrinterBackendMessage`].
+     Printer(crate::printer::PrinterBackendMessage),
++    /// Drive worker → event loop: encoded responses to the server's drive I/O requests (see [`crate::drive`]).
++    Drive(Vec<Vec<u8>>),
+     /// RDPSND backend → event loop: audio for the JS callback. See [`crate::audio::AudioMessage`].
+     Audio(crate::audio::AudioMessage),
+     /// Microphone backend → event loop: start or stop capturing, for the JS callback.
+@@ -976,6 +1018,14 @@ impl iron_remote_desktop::Session for Session {
+                             }
+                             Vec::new()
+                         }
++                        RdpInputEvent::Drive(messages) => {
++                            let frame = active_stage.process_svc_processor_messages(
++                                ironrdp_svc::SvcProcessorMessages::<Rdpdr>::new(
++                                    messages.into_iter().map(ironrdp_svc::SvcMessage::from).collect(),
++                                ),
++                            )?;
++                            vec![ActiveStageOutput::ResponseFrame(frame)]
++                        }
+                         RdpInputEvent::Audio(message) => {
+                             if let Some(callback) = &self.audio_playback_callback {
+                                 if let Err(error) = callback.call1(&JsValue::NULL, &crate::audio::to_js(message)) {
+@@ -1724,6 +1774,7 @@ struct ConnectParams {
+     kdc_proxy_url: Option<String>,
+     clipboard_backend: Option<WasmClipboardBackend>,
+     printer_backend: Option<WasmPrinterBackend>,
++    drive_backend: Option<WasmDriveBackend>,
+     printer_device_id: u32,
+     printer_name: String,
+     printer_driver_name: String,
+@@ -1780,6 +1831,7 @@ async fn connect(
+         kdc_proxy_url,
+         clipboard_backend,
+         printer_backend,
++        drive_backend,
+         printer_device_id,
+         printer_name,
+         printer_driver_name,
+@@ -1806,8 +1858,8 @@ async fn connect(
+     if let Some(audio_backend) = audio_backend {
+         connector.attach_static_channel(Rdpsnd::new(Box::new(audio_backend)));
+         // Windows servers only start audio playback once RDPDR is up too (FreeRDP enables device redirection
+-        // along with audio for the same reason); without a printer, a device-less RDPDR does it.
+-        if printer_backend.is_none() {
++        // along with audio for the same reason); without a printer or drives, a device-less RDPDR does it.
++        if printer_backend.is_none() && drive_backend.is_none() {
+             connector.attach_static_channel(Rdpdr::new(
+                 Box::new(ironrdp::rdpdr::NoopRdpdrBackend),
+                 computer_name.clone(),
+@@ -1815,6 +1867,23 @@ async fn connect(
+         }
+     }
+ 
++    // Shared drives (see drive.rs). One RDPDR backend per connection: with drives, a printer isn't served.
++    let printer_backend = if let Some(drive_backend) = drive_backend {
++        if printer_backend.is_some() {
++            warn!("Drive redirection and the virtual printer can't be combined yet; the printer is left out");
++        }
++        if !audio {
++            connector.attach_static_channel(Rdpsnd::new(Box::new(NoopRdpsndBackend)));
++        }
++        let drives = drive_backend.drive_list();
++        connector.attach_static_channel(
++            Rdpdr::new(Box::new(drive_backend), computer_name.clone()).with_drives(Some(drives)),
++        );
++        None
++    } else {
++        printer_backend
++    };
++
+     if let Some(printer_backend) = printer_backend {
+         // Windows servers only speak on RDPDR when RDPSND is advertised too
+         // (MS-RDPEFS Appendix A<1>). Without audio playback, the no-op RDPSND
+diff --git a/web-client/iron-remote-desktop-rdp/src/main.ts b/web-client/iron-remote-desktop-rdp/src/main.ts
+index 5712762c..55328f19 100644
+--- a/web-client/iron-remote-desktop-rdp/src/main.ts
++++ b/web-client/iron-remote-desktop-rdp/src/main.ts
+@@ -82,6 +82,59 @@ export function audioPlayback(callback: (message: unknown) => void): Extension {
+     return new Extension('audio_playback', callback);
+ }
+ 
++/** What a shared drive's file operations see and return (see `driveRedirection`). */
++export interface DriveStat {
++    dir: boolean;
++    size: number;
++    /** Milliseconds since the Unix epoch. */
++    created: number;
++    accessed: number;
++    modified: number;
++    readonly: boolean;
++}
++
++export interface DriveOpenMode {
++    write: boolean;
++    create: boolean;
++    exclusive: boolean;
++    truncate: boolean;
++}
++
++/** What a file operation returns: its result, or a promise of it. */
++export type DriveResult<T> = T | Promise<T>;
++
++/**
++ * A file system for shared drives (MS-RDPEFS). The server's requests are served one at a time, in order; each
++ * method returns its result or a promise of it, so slow file operations needn't hold up the page. Paths are the
++ * server's: relative to the drive, with backslashes, `\` being the drive's root; the implementation resolves them
++ * inside the folder it shares and must refuse paths that leave it. Errors thrown (or rejected with) with a
++ * Node-style `code` (`ENOENT`, `EEXIST`, `EACCES`, `ENOTEMPTY`, `EISDIR`, `ENOTDIR`, `ENOSPC`, `EBUSY`) are reported
++ * to the server as the matching NT status.
++ */
++export interface DriveFs {
++    /** The drives to share: RDPDR device ids (1 or more, unique in the session) and the names the remote shows. */
++    drives: { id: number; name: string }[];
++    stat(deviceId: number, path: string): DriveResult<DriveStat | null>;
++    list(deviceId: number, path: string): DriveResult<string[]>;
++    open(deviceId: number, path: string, mode: DriveOpenMode): DriveResult<number>;
++    read(handle: number, offset: number, length: number): DriveResult<Uint8Array>;
++    write(handle: number, offset: number, data: Uint8Array): DriveResult<number>;
++    truncate(handle: number, size: number): DriveResult<void>;
++    close(handle: number): DriveResult<void>;
++    mkdir(deviceId: number, path: string): DriveResult<void>;
++    remove(deviceId: number, path: string): DriveResult<void>;
++    rename(deviceId: number, from: string, to: string, replace: boolean): DriveResult<void>;
++    volume(deviceId: number): DriveResult<{ total: number; free: number; label: string }>;
++}
++
++/**
++ * Shares drives with the remote desktop (MS-RDPEFS drive redirection): `fs` serves the server's file operations
++ * for the folders it names in `drives`. The virtual printer can't be combined with it in the same session.
++ */
++export function driveRedirection(fs: DriveFs): Extension {
++    return new Extension('drive_redirection', fs);
++}
++
+ /**
+  * Redirects a microphone (MS-RDPEAI). The server asks for it only while a remote application records:
+  * `callback` receives `{ type: 'open', sampleRate, channels }` when capture should start (or switch format),

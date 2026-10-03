@@ -376,10 +376,34 @@ const KEY_ENCIPHERMENT_ONLY_TLS: tls.ConnectionOptions = {
 
 class NoTlsError extends Error { }
 
-/** Sends the client's X.224 request upstream, reads the confirm, then does TLS there. */
-async function handshake (openUpstream: UpstreamFactory, destination: string, x224Request: Buffer, legacyTls: boolean): Promise<{ raw: Duplex, upstream: tls.TLSSocket, x224: Buffer }> {
+/** The client's first message (the RDCleanPath request: a destination, a token, an X.224 request) is small. */
+const MAX_HELLO = 64 * 1024
+/** How long a client has to send it, and how long the server has to answer X.224 and TLS. */
+const HELLO_TIMEOUT_MS = 10_000
+const HANDSHAKE_TIMEOUT_MS = 45_000
+/** What the client may send ahead while the server is being reached (CredSSP hasn't started: next to nothing). */
+const MAX_EARLY = 256 * 1024
+/** One client at a time uses a proxy; a reconnect can overlap the connection it replaces. */
+const MAX_CLIENTS = 4
+/** A WebSocket message from the client: RDP PDUs, at most a few megabytes for a shared drive's read. */
+const MAX_MESSAGE = 32 * 1024 * 1024
+/** Data waiting for the other side past this pauses the side it comes from, until half of it is gone. */
+const HIGH_WATER = 8 * 1024 * 1024
+
+/**
+ * Sends the client's X.224 request upstream, reads the confirm, then does TLS there. `track` hears of each stream
+ * as soon as it exists, so the caller can end them if the client goes away meanwhile; `gone` says it has.
+ */
+async function handshake (
+    openUpstream: UpstreamFactory, destination: string, x224Request: Buffer, legacyTls: boolean,
+    track: (stream: Duplex) => void, gone: () => boolean,
+): Promise<{ raw: Duplex, upstream: tls.TLSSocket, x224: Buffer }> {
     const raw = await openUpstream(destination)
+    track(raw)
     try {
+        if (gone()) {
+            throw new Error('the client left')
+        }
         raw.write(x224Request)
         const x224 = await readTpkt(raw)
         const refused = noTls(x224)
@@ -387,9 +411,11 @@ async function handshake (openUpstream: UpstreamFactory, destination: string, x2
             throw new NoTlsError(refused)
         }
         const upstream = tls.connect({ socket: raw as any, rejectUnauthorized: false, ...legacyTls ? KEY_ENCIPHERMENT_ONLY_TLS : {} })
+        track(upstream)
         await new Promise<void>((resolve, reject) => {
             upstream.once('secureConnect', resolve)
             upstream.once('error', reject)
+            upstream.once('close', () => reject(new Error('upstream closed during TLS')))
         })
         return { raw, upstream, x224 }
     } catch (e) {
@@ -404,23 +430,50 @@ export async function startRDCleanPathProxy (openUpstream: UpstreamFactory, chec
     // Set once the server turned out to need KEY_ENCIPHERMENT_ONLY_TLS; later connections start with it.
     let legacyTls = false
     const stats = { bytesIn: 0, bytesOut: 0 }
-    const wss = new WebSocketServer({ host: '127.0.0.1', port: 0 })
+    const wss = new WebSocketServer({ host: '127.0.0.1', port: 0, maxPayload: MAX_MESSAGE })
     await new Promise<void>((resolve, reject) => {
         wss.once('listening', resolve)
         wss.once('error', reject)
     })
+    wss.on('error', (e: Error) => log(`proxy: ${e.message}`))
 
     wss.on('connection', (ws: any) => {
+        // Anything on this computer can connect to the port; only the client that knows the token gets further than
+        // its first message, which has to be small and arrive soon.
+        if (wss.clients.size > MAX_CLIENTS) {
+            ws.terminate()
+            return
+        }
         let buf = Buffer.alloc(0)
         let stage: 'hello' | 'handshake' | 'relay' = 'hello'
         const early: Buffer[] = []
+        let earlySize = 0
         let upstream: tls.TLSSocket | null = null
-        let raw: Duplex | null = null
+        let closed = false
+        // Every stream opened for this client, from the moment it exists: ended with the client.
+        const streams = new Set<Duplex>()
+        const track = (stream: Duplex) => {
+            streams.add(stream)
+            stream.once('close', () => streams.delete(stream))
+            if (closed) {
+                stream.destroy()
+            }
+        }
+        const end = () => {
+            closed = true
+            clearTimeout(deadline)
+            for (const stream of streams) {
+                stream.destroy()
+            }
+        }
+        let deadline = setTimeout(() => stage === 'hello' && ws.terminate(), HELLO_TIMEOUT_MS)
         const toServer = options.autologon ? autologon() : (data: Buffer) => data
         const send = (data: Buffer) => {
             const out = toServer(data)
-            if (out.length) {
-                upstream!.write(out)
+            // The server (or the SSH channel to it) not keeping up: stop reading from the client until it has.
+            if (out.length && !upstream!.write(out) && upstream!.writableLength > HIGH_WATER) {
+                ws.pause()
+                upstream!.once('drain', () => ws.resume())
             }
         }
         failure = null
@@ -430,10 +483,14 @@ export async function startRDCleanPathProxy (openUpstream: UpstreamFactory, chec
             log(`RDCleanPath failed: ${why}`)
             try { ws.send(encodeError()) } catch { }
             ws.close()
-            upstream?.destroy()
-            raw?.destroy()
+            end()
         }
 
+        ws.on('error', (e: Error) => {
+            log(`proxy: client: ${e.message}`)
+            ws.terminate()
+            end()
+        })
         ws.on('message', async (data: Buffer) => {
             if (stage === 'relay') {
                 stats.bytesOut += data.length
@@ -441,7 +498,16 @@ export async function startRDCleanPathProxy (openUpstream: UpstreamFactory, chec
                 return
             }
             if (stage === 'handshake') {
+                earlySize += data.length
+                if (earlySize > MAX_EARLY) {
+                    return fail('the client sent too much before the server was reached')
+                }
                 early.push(data)
+                return
+            }
+            // Before the token is checked: no more than a request's worth is kept, whatever length it claims.
+            if (buf.length + data.length > MAX_HELLO) {
+                ws.terminate()
                 return
             }
             buf = Buffer.concat([buf, data])
@@ -450,27 +516,34 @@ export async function startRDCleanPathProxy (openUpstream: UpstreamFactory, chec
                 return
             }
             stage = 'handshake'
+            clearTimeout(deadline)
             try {
                 const req = decodeRequest(buf.subarray(0, outer.end))
+                buf = Buffer.alloc(0)
                 if (req.version !== VERSION_1 || !req.x224 || !req.destination) {
                     return fail('malformed request')
                 }
                 if (req.proxyAuth !== token) {
                     return fail('bad token')
                 }
+                deadline = setTimeout(() => stage === 'handshake' && fail('the server didn\'t answer in time'), HANDSHAKE_TIMEOUT_MS)
                 let up: Awaited<ReturnType<typeof handshake>>
                 try {
-                    up = await handshake(openUpstream, req.destination, req.x224, legacyTls)
+                    up = await handshake(openUpstream, req.destination, req.x224, legacyTls, track, () => closed)
                 } catch (e: any) {
-                    if (legacyTls || !/KEY_USAGE_BIT_INCORRECT/.test(e?.message ?? '')) {
+                    if (closed || legacyTls || !/KEY_USAGE_BIT_INCORRECT/.test(e?.message ?? '')) {
                         throw e
                     }
                     // The X.224 exchange is spent on that connection: start over on a fresh one.
                     log('TLS: the server certificate only allows key encipherment; using TLS 1.2 with RSA key exchange')
                     legacyTls = true
-                    up = await handshake(openUpstream, req.destination, req.x224, legacyTls)
+                    up = await handshake(openUpstream, req.destination, req.x224, legacyTls, track, () => closed)
                 }
-                raw = up.raw
+                // Reached: from here on the time is the user's (a certificate to look at) and the session's.
+                clearTimeout(deadline)
+                if (closed) {
+                    return
+                }
                 upstream = up.upstream
                 const x224 = up.x224
                 // Both handshakes above, the first and the legacy-TLS retry, end here: the certificate is checked
@@ -481,6 +554,9 @@ export async function startRDCleanPathProxy (openUpstream: UpstreamFactory, chec
                     return fail('the server sent no certificate')
                 }
                 await checkCertificate(fingerprintOf(chain[0]))
+                if (closed) {
+                    return
+                }
                 ws.send(encodeResponse(x224, chain, req.destination))
                 stage = 'relay'
                 // PROTOCOL_HYBRID_EX in the server's negotiation response: an Early User Authorization Result follows CredSSP.
@@ -499,6 +575,16 @@ export async function startRDCleanPathProxy (openUpstream: UpstreamFactory, chec
                     for (const pdu of pdus) {
                         ws.send(pdu)
                     }
+                    // The client not keeping up: stop reading from the server until it has taken half of it.
+                    if (ws.bufferedAmount > HIGH_WATER && !upstream!.isPaused()) {
+                        upstream!.pause()
+                        const wait = setInterval(() => {
+                            if (closed || ws.bufferedAmount < HIGH_WATER / 2) {
+                                clearInterval(wait)
+                                upstream?.resume()
+                            }
+                        }, 50)
+                    }
                 })
                 upstream.on('close', () => ws.close())
                 upstream.on('error', (e: Error) => { log(`upstream error: ${e.message}`); ws.close() })
@@ -508,13 +594,12 @@ export async function startRDCleanPathProxy (openUpstream: UpstreamFactory, chec
                 }
                 log(`RDCleanPath relay up to ${req.destination}`)
             } catch (e: any) {
-                fail(e?.message ?? String(e))
+                if (!closed) {
+                    fail(e?.message ?? String(e))
+                }
             }
         })
-        ws.on('close', () => {
-            upstream?.destroy()
-            raw?.destroy()
-        })
+        ws.on('close', end)
     })
 
     const { port } = wss.address() as AddressInfo
@@ -523,6 +608,12 @@ export async function startRDCleanPathProxy (openUpstream: UpstreamFactory, chec
         token,
         stats,
         get failure () { return failure },
-        close: () => wss.close(),
+        close: () => {
+            // Stops listening, and ends the clients there are: close() alone waits for them.
+            wss.close()
+            for (const client of wss.clients) {
+                client.terminate()
+            }
+        },
     }
 }

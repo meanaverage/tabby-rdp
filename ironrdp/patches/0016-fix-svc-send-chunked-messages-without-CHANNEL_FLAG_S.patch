@@ -1,0 +1,114 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: meanaverage <18336095+meanaverage@users.noreply.github.com>
+Date: Fri, 2 Oct 2026 19:48:53 -0700
+Subject: [PATCH 16/17] fix(svc): send chunked messages without
+ CHANNEL_FLAG_SHOW_PROTOCOL
+
+The flag asks the receiver to pass the Channel PDU Header to the
+application layer along with the data. mstsc sets it only for channels
+opened with CHANNEL_OPTION_SHOW_PROTOCOL (the clipboard); Windows'
+rdpdr.sys does not expect it, and dropped the channel on the first
+chunked drive read response (anything over one chunk, 1600 bytes).
+
+Chunks now carry only the flags the message asks for, like a message
+that fits one chunk already did.
+---
+ crates/ironrdp-svc/src/lib.rs              |  9 +++----
+ crates/ironrdp-testsuite-core/tests/svc.rs | 30 +++++++++++++++-------
+ 2 files changed, 25 insertions(+), 14 deletions(-)
+
+diff --git a/crates/ironrdp-svc/src/lib.rs b/crates/ironrdp-svc/src/lib.rs
+index 162c8a64..a2e4f74a 100644
+--- a/crates/ironrdp-svc/src/lib.rs
++++ b/crates/ironrdp-svc/src/lib.rs
+@@ -462,7 +462,6 @@ impl ChunkProcessor {
+         let mut chunks = Vec::new();
+ 
+         let total_len = encoded_pdu.filled_len();
+-        let is_chunked = total_len > max_chunk_len;
+         let mut chunk_start_index: usize = 0;
+         let mut chunk_end_index = core::cmp::min(total_len, max_chunk_len);
+         loop {
+@@ -485,10 +484,10 @@ impl ChunkProcessor {
+                 if last {
+                     flags |= ChannelFlags::LAST;
+                 }
+-                if is_chunked {
+-                    flags |= ChannelFlags::SHOW_PROTOCOL;
+-                }
+-
++                // No CHANNEL_FLAG_SHOW_PROTOCOL of its own: that flag asks the receiver to hand the Channel PDU
++                // Header to the application layer along with the data, which Windows' rdpdr.sys does not expect
++                // (a chunked response makes it drop the channel). mstsc sets it only for channels opened with
++                // CHANNEL_OPTION_SHOW_PROTOCOL; a processor that wants it puts it in its messages' flags.
+                 flags |= message.flags;
+ 
+                 ChannelPduHeader {
+diff --git a/crates/ironrdp-testsuite-core/tests/svc.rs b/crates/ironrdp-testsuite-core/tests/svc.rs
+index d7ce9517..6257f747 100644
+--- a/crates/ironrdp-testsuite-core/tests/svc.rs
++++ b/crates/ironrdp-testsuite-core/tests/svc.rs
+@@ -6,8 +6,9 @@ use ironrdp_pdu::rdp::vc::{ChannelControlFlags, ChannelPduHeader};
+ use ironrdp_pdu::x224::X224;
+ use ironrdp_session::{ActiveStageBuilder, x224::Processor};
+ use ironrdp_svc::{
+-    CHANNEL_CHUNK_LENGTH, MAX_CHANNEL_CHUNK_LENGTH, MAX_STATIC_CHANNELS, StaticChannelKey, StaticChannelSet,
+-    StaticVirtualChannel, SvcClientProcessor, SvcMessage, SvcProcessor, SvcServerProcessor, make_channel_options,
++    CHANNEL_CHUNK_LENGTH, ChannelFlags, MAX_CHANNEL_CHUNK_LENGTH, MAX_STATIC_CHANNELS, StaticChannelKey,
++    StaticChannelSet, StaticVirtualChannel, SvcClientProcessor, SvcMessage, SvcProcessor, SvcServerProcessor,
++    make_channel_options,
+ };
+ 
+ #[derive(Debug)]
+@@ -244,10 +245,21 @@ fn static_channel_rejects_malformed_chunk_sequences() {
+ }
+ 
+ #[test]
+-fn static_channel_chunks_show_protocol_header() {
++fn static_channel_chunks_carry_only_the_message_flags() {
+     let chunks = StaticVirtualChannel::chunkify(vec![SvcMessage::from(vec![0; CHANNEL_CHUNK_LENGTH + 1])])
+         .expect("static channel message should chunk");
+ 
++    assert_eq!(chunks.len(), 2);
++    for chunk in chunks {
++        let header = decode::<ChannelPduHeader>(chunk.filled()).expect("channel header should decode");
++        assert!(!header.flags.contains(ChannelControlFlags::FLAG_SHOW_PROTOCOL));
++    }
++
++    let chunks = StaticVirtualChannel::chunkify(vec![
++        SvcMessage::from(vec![0; CHANNEL_CHUNK_LENGTH + 1]).with_flags(ChannelFlags::SHOW_PROTOCOL),
++    ])
++    .expect("static channel message should chunk");
++
+     assert_eq!(chunks.len(), 2);
+     for chunk in chunks {
+         let header = decode::<ChannelPduHeader>(chunk.filled()).expect("channel header should decode");
+@@ -303,22 +315,22 @@ fn reactivated_session_applies_the_static_channel_chunk_size() {
+     assert_eq!(first.0.initiator_id, 1002);
+     assert_eq!(first_header.length, 4097);
+     assert_eq!(first.0.user_data.len() - 8, 4096);
++    assert!(first_header.flags.contains(ChannelControlFlags::FLAG_FIRST));
+     assert!(
+-        first_header
++        !first_header
+             .flags
+-            .contains(ChannelControlFlags::FLAG_FIRST | ChannelControlFlags::FLAG_SHOW_PROTOCOL)
++            .contains(ChannelControlFlags::FLAG_LAST | ChannelControlFlags::FLAG_SHOW_PROTOCOL)
+     );
+-    assert!(!first_header.flags.contains(ChannelControlFlags::FLAG_LAST));
+ 
+     let second_header = decode::<ChannelPduHeader>(second.0.user_data.as_ref()).expect("second header should decode");
+     assert_eq!(second_header.length, 4097);
+     assert_eq!(second.0.user_data.len() - 8, 1);
++    assert!(second_header.flags.contains(ChannelControlFlags::FLAG_LAST));
+     assert!(
+-        second_header
++        !second_header
+             .flags
+-            .contains(ChannelControlFlags::FLAG_LAST | ChannelControlFlags::FLAG_SHOW_PROTOCOL)
++            .contains(ChannelControlFlags::FLAG_FIRST | ChannelControlFlags::FLAG_SHOW_PROTOCOL)
+     );
+-    assert!(!second_header.flags.contains(ChannelControlFlags::FLAG_FIRST));
+ 
+     let shutdown = active_stage
+         .graceful_shutdown()
