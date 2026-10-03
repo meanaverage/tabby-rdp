@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+**Changed**
+- **The package no longer includes source maps** (`dist/*.js.map`). They pointed at TypeScript sources that were never
+  in the package, so they were of no use to anyone installing it, and their long encoded lines are what package
+  scanners flag as "long strings" (possibly packed code). The package is about 450 KB smaller unpacked. `npm run
+  watch` still writes them, for debugging from the repository.
+
 ## 0.5.0
 
 Shared folders, desktops behind an RD Gateway, Hyper-V VMs' consoles, more of what an .rdp file says, text sent as

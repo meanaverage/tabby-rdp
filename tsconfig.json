@@ -16,7 +16,7 @@
     "useDefineForClassFields": false,
     "importHelpers": false,
     "skipLibCheck": true,
-    "sourceMap": true
+    "sourceMap": false
   },
   "include": [
     "src"
