@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="docs/images/logo.png" width="440" alt="tabby-rdp: a Tabby window with a GNOME desktop, a Windows desktop and two terminals side by side">
+<img src="docs/images/logo.png" width="150" height="137" alt="tabby-rdp: a Tabby window with a GNOME desktop, a Windows desktop and two terminals side by side">
 
 # tabby-rdp
 
