@@ -834,7 +834,19 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
     /** A hotkey's name for a conflict note: one of ours by its short name, Tabby's as Tabby's Hotkeys page lists it. */
     private hotkeyName (id: string): string {
         const own = HOTKEYS.find(h => h.id === id)
-        return own ? `"${own.name}" (above or below)` : `Tabby's "${this.hotkeyNames?.get(id) ?? id}"`
+        if (own) {
+            return `"${own.name}" (above or below)`
+        }
+        // Tabby's per-profile and per-group hotkeys are keyed by the profile's or group's id.
+        const profile = /^profile\.(.+)$/.exec(id)?.[1]
+        const group = /^group-selectors\.(.+)$/.exec(id)?.[1]
+        if (profile) {
+            return `Tabby's hotkey for the profile "${(this.config.store.profiles ?? []).find((p: any) => p?.id === profile)?.name ?? profile}"`
+        }
+        if (group) {
+            return `Tabby's hotkey for the profile group "${(this.config.store.groups ?? []).find((g: any) => g?.id === group)?.name ?? group}"`
+        }
+        return `Tabby's "${this.hotkeyNames?.get(id) ?? id}"`
     }
 
     /** Asks for a binding for one of our hotkeys, and refuses one that another hotkey has: both would fire. */
@@ -1033,6 +1045,8 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
         const profiles = this.injector.get(ProfilesService)
         const template = (await profiles.getProfiles()).find(p => p.type === RDP_PROFILE_TYPE && p.isTemplate)
         const provider = template && profiles.providerForProfile(template)
+        // The group first: the editor reads its profile as soon as it opens.
+        const group = provider ? await this.desktop.remoteDesktopGroup() : ''
         const modal = provider ? this.openModal() : null
         if (!modal || !template || !provider) {
             this.showTabbySettings('profiles')
@@ -1041,7 +1055,7 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
         const { id: _id, isBuiltin: _b, isTemplate: _t, ...base } = JSON.parse(JSON.stringify(template))
         // In the plugin's group from the start, so the editor shows that group's defaults (an account, say) and a choice
         // made against them ("Ask for the account") is kept as the override it is.
-        modal.componentInstance.partialProfile = { ...base, name: '', group: await this.desktop.remoteDesktopGroup() }
+        modal.componentInstance.partialProfile = { ...base, name: '', group }
         modal.componentInstance.profileProvider = provider
         const result = await modal.result.catch(() => null)
         if (!result) {
