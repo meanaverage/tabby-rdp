@@ -53,7 +53,9 @@ await suite('windows', async t => {
     await t.settings({ sound: true, macShortcuts: true, sharpness: 'standard', h264: true })
     // Two folders shared as drives from the start (they apply at connect): one read-write, one read-only.
     const shareDir = await t.tempDir('trd-share-')
-    await ev(`const fs = require('fs'); for (const d of ['rw', 'ro']) { fs.mkdirSync(${JSON.stringify(shareDir)} + '/' + d); fs.writeFileSync(${JSON.stringify(shareDir)} + '/' + d + '/hello.txt', 'hello from ' + d) }`)
+    await ev(`const fs = require('fs'); for (const d of ['rw', 'ro']) { fs.mkdirSync(${JSON.stringify(shareDir)} + '/' + d); fs.writeFileSync(${JSON.stringify(shareDir)} + '/' + d + '/hello.txt', 'hello from ' + d) }
+        // A link out of the shared folder: not the remote's to follow.
+        fs.writeFileSync(${JSON.stringify(shareDir)} + '/outside.txt', 'outside'); fs.symlinkSync(${JSON.stringify(shareDir)} + '/outside.txt', ${JSON.stringify(shareDir)} + '/rw/link-out.txt')`)
     const foldersBefore = await ev('return JSON.stringify(H.config.store.remoteDesktop.sharedFolders ?? [])')
     t.onCleanup(() => ev(`H.inZone(() => { H.config.store.remoteDesktop.sharedFolders = ${foldersBefore}; H.config.save() })`))
     await ev(`H.inZone(() => RD.desktop.setSharedFolders([{ path: ${JSON.stringify(shareDir)} + '/rw', name: 'trd rw', readOnly: false }, { path: ${JSON.stringify(shareDir)} + '/ro', name: 'trd ro', readOnly: true }]))`)
@@ -280,6 +282,8 @@ try { $r += 'hash:' + (Get-FileHash -Algorithm SHA256 '\\\\tsclient\\trd rw\\big
 try { Copy-Item '\\\\tsclient\\trd rw\\big.bin' '\\\\tsclient\\trd rw\\copy.bin'; $r += 'copied' } catch { $r += "copy failed: $_" }
 try { $r += 'ro read:' + (Get-Content -Raw '\\\\tsclient\\trd ro\\hello.txt') } catch { $r += "ro read failed: $_" }
 try { [IO.File]::WriteAllText('\\\\tsclient\\trd ro\\x.txt', 'x'); $r += 'ro write: allowed' } catch { $r += 'ro write: refused' }
+try { $r += 'link out: ' + [IO.File]::ReadAllText('\\\\tsclient\\trd rw\\link-out.txt') } catch { $r += 'link out: not there' }
+try { [IO.File]::WriteAllText('\\\\tsclient\\trd rw\\link-out.txt', 'overwritten'); $r += 'link out write: allowed' } catch { $r += 'link out write: refused' }
 Set-Content "$env:TEMP\\trd-drive.txt" ($r -join '|')`)
         let report = ''
         for (let i = 0; i < 40 && !report; i++) {
@@ -294,6 +298,7 @@ Set-Content "$env:TEMP\\trd-drive.txt" ($r -join '|')`)
         check('drives: a 3 MB file read on Windows hashes the same', report.includes(`hash:${bigHash}`), report)
         const copyHash = await ev<string>(`try { return require('crypto').createHash('sha256').update(require('fs').readFileSync(${JSON.stringify(shareDir)} + '/rw/copy.bin')).digest('hex') } catch (e) { return String(e) }`)
         check('drives: ... and copied on Windows, back here, the same', copyHash === bigHash, { report, copyHash })
+        check('drives: a link out of the shared folder isn\'t listed, read or written through', /link out: not there\|link out write: refused/.test(report) && !/link-out/.test(/list:([^|]*)/.exec(report)?.[1] ?? 'link-out') && await t.readFile(`${shareDir}/outside.txt`) === 'outside', report)
         check('drives: the read-only folder reads but refuses a write', /ro read:hello from ro\|ro write: refused/.test(report) && !(await ev(`return require('fs').existsSync(${JSON.stringify(shareDir)} + '/ro/x.txt')`)), report)
     }
 

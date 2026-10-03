@@ -253,9 +253,14 @@ connection.
 <p align="center"><img src="docs/images/shared-folders.png" width="548" alt="Shared folders in Settings › Remote Desktop: two folders, one read-only, and Share a folder…"></p>
 
 Files are served through the RDP connection as the remote reads and writes them, which suits opening and saving
-documents in place; for moving large files, copying through the clipboard is just as quick. Symbolic links inside a
-shared folder are followed, as mstsc follows them. Windows mounts shared folders (tested); xrdp can when built with
-FUSE (under `~/thinclient_drives`); GNOME Remote Desktop doesn't serve drives, so there the clipboard is the way.
+documents in place; for moving large files, copying through the clipboard is just as quick. They are read and written
+in the background, so a slow disk or network folder slows the drive down, not Tabby.
+
+The remote gets the shared folder and nothing else: a symbolic link works when it points inside the folder, and one
+that leads out of it isn't shown, read or written through. Only files and folders are served (no devices or pipes).
+
+Windows mounts shared folders (tested); xrdp can when built with FUSE (under `~/thinclient_drives`); GNOME Remote
+Desktop doesn't serve drives, so there the clipboard is the way.
 
 ## Several desktops in one tab
 
