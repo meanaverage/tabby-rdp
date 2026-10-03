@@ -31,6 +31,12 @@
 - IronRDP's web client gains drive redirection (MS-RDPEFS) through a JavaScript file system (patch 15), and its
   static channels send multi-chunk messages Windows accepts (patch 16): a response over 1600 bytes was flagged for the
   receiver to keep the channel header, which Windows' drive redirector didn't expect and dropped the channel on.
+- **.rdp files** ([#27](https://github.com/meanaverage/tabby-rdp/issues/27)): an import applies the file's display
+  scale (`desktopscalefactor` 150 or more becomes the desktop's Retina sharpness) and its RD Gateway
+  (`gatewayhostname`, unless the file turns it off), and says which of its other settings the plugin doesn't apply
+  (sound left on the remote or off, a fixed window size, its own drives (shared folders are a setting here), printer,
+  smart card or USB redirection, several monitors, RemoteApp, an account of its own or a smart card at the gateway),
+  instead of ignoring them silently.
 
 **Fixed** (from a review of the code)
 - **Save to Downloads** couldn't be led elsewhere by the remote's file names alone, but could by a link already in

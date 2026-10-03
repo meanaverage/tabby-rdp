@@ -968,7 +968,8 @@ export class RemoteDesktopService {
             return null
         }
         const existing = (this.config.store.profiles ?? []).find((p: any) => p?.type === RDP_PROFILE_TYPE && !p.options?.via &&
-            p.options?.host === parsed.host && (p.options.port || 3389) === parsed.port && (p.options.username ?? '') === (parsed.username ?? ''))
+            p.options?.host === parsed.host && (p.options.port || 3389) === parsed.port && (p.options.username ?? '') === (parsed.username ?? '') &&
+            (p.options.gateway ?? '') === (parsed.gateway ?? ''))
         if (existing) {
             this.notifications.info(`Opening "${existing.name}", which is already a profile for ${fileName}`)
             await this.profiles.openNewTabForProfile(existing)
@@ -979,11 +980,21 @@ export class RemoteDesktopService {
             name: fileName.replace(/^.*[\\/]/, '').replace(/\.rdp$/i, '') || parsed.host,
             icon: 'fas fa-desktop',
             group: await this.remoteDesktopGroup(),
-            options: { host: parsed.host, port: parsed.port, kind: 'windows', username: parsed.username ?? '', domain: parsed.domain ?? '', via: '' },
+            options: { host: parsed.host, port: parsed.port, kind: 'windows', username: parsed.username ?? '', domain: parsed.domain ?? '', via: '', gateway: parsed.gateway ?? '', gatewayAccount: '' },
         }
         await this.profiles.newProfile(profile)
+        // The file's display scale, as this desktop's own sharpness (the key a direct desktop's settings are kept by).
+        if (parsed.sharpness) {
+            const store = this.config.store.remoteDesktop
+            const key = `${DIRECT_KEY}#${desktopIdOf(profile.options)}`
+            store.desktopSharpness = [...(Array.isArray(store.desktopSharpness) ? store.desktopSharpness : []).filter((e: any) => e?.desktop !== key), { desktop: key, sharpness: parsed.sharpness }]
+        }
         this.config.save()
         this.notifications.notice(`Added the remote desktop profile "${profile.name}" (Settings › Profiles & connections)`)
+        if (parsed.ignored.length) {
+            // What the file asked for beyond that, so nobody wonders why the desktop doesn't behave as in mstsc.
+            this.notifications.info(`${fileName} also asks for ${parsed.ignored.join('; ')}. Not applied.`)
+        }
         await this.profiles.openNewTabForProfile(profile)
         return profile
     }
