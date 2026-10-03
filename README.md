@@ -197,9 +197,10 @@ also type `user@host:port` and pick **Quick connect (REMOTE DESKTOP (RDP))**.
 
 **Import an .rdp file…** (in the menu's **Settings**, or **Remote desktop: import an .rdp file…** in Tabby's
 command palette) makes such a profile from a file saved by Remote Desktop Connection or handed out by an admin: its
-address, port, user name and domain, named after the file; a `desktopscalefactor` of 150 or more sets that desktop's
-sharpness to Retina. Settings the plugin doesn't apply (sound left on the remote, a fixed window size, drive or printer
-redirection, a gateway, several monitors) are named in a note on import, so the desktop's behaviour isn't a surprise.
+address, port, user name and domain, named after the file, and its [RD Gateway](#through-an-rd-gateway) when it
+connects through one; a `desktopscalefactor` of 150 or more sets that desktop's sharpness to Retina. Settings the
+plugin doesn't apply (sound left on the remote, a fixed window size, drive or printer redirection, several monitors)
+are named in a note on import, so the desktop's behaviour isn't a surprise.
 
 Its **Connect** setting can name an SSH profile instead of connecting directly. The address is then as that host sees
 it, and opening the profile opens that SSH tab and shows the desktop over it once SSH is connected. Such a desktop is

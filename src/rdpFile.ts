@@ -11,7 +11,7 @@ export interface RdpFile {
     domain?: string
     /** `desktopscalefactor` of 150 or more: the desktop wants a high-DPI scale, which is this plugin's Retina sharpness. */
     sharpness?: 'retina' | 'standard'
-    /** `gatewayhostname`, kept for when the plugin connects through RD Gateways. */
+    /** The RD Gateway the file connects through (`gatewayhostname`, unless `gatewayusagemethod` turns it off). */
     gateway?: string
     /** Settings the file carries that the plugin doesn't apply, in words, for the import's note. */
     ignored: string[]
@@ -31,10 +31,21 @@ const NOTES: Record<string, (value: string, all: Map<string, string>) => string 
     'use multimon': v => v === '1' ? 'several monitors (one screen per desktop here)' : null,
     'screen mode id': (v, all) => v === '1' && (all.get('desktopwidth') || all.get('desktopheight'))
         ? `a fixed ${all.get('desktopwidth') ?? '?'}×${all.get('desktopheight') ?? '?'} window (the desktop follows the pane; Settings › Remote Desktop › When the pane is resized)` : null,
-    'gatewayhostname': v => v ? `the RD Gateway ${v} (not supported yet; the address is connected to directly)` : null,
+    'gatewayhostname': (v, all) => v && !usesGateway(all) ? `the RD Gateway ${v}, which the file names but doesn't use (the profile's RD Gateway field takes it)` : null,
+    'promptcredentialonce': (v, all) => v === '0' && usesGateway(all) ? 'an account of its own for the gateway (pick a saved account as the profile\'s Gateway account)' : null,
+    'gatewaycredentialssource': (v, all) => (v === '1' || v === '5') && usesGateway(all) ? `a ${v === '1' ? 'smart card' : 'sign-in page'} at the gateway (not supported; it is signed in to with a user name and password)` : null,
     'remoteapplicationmode': v => v === '1' ? 'RemoteApp (not supported; the whole desktop opens)' : null,
     'alternate shell': v => v ? 'a program to start instead of the desktop (not supported)' : null,
     'enablecredsspsupport': v => v === '0' ? 'sign-in without Network Level Authentication (it is always used)' : null,
+}
+
+/**
+ * Whether the file connects through its gateway: it names one, and `gatewayusagemethod` doesn't say not to (0, or 4:
+ * never; 1 to 3: always, when a direct connection fails, by the user's defaults). mstsc always writes the method; a
+ * file written by hand that only names a gateway means it.
+ */
+function usesGateway (settings: Map<string, string>): boolean {
+    return !!settings.get('gatewayhostname') && !['0', '4'].includes(settings.get('gatewayusagemethod') ?? '')
 }
 
 /** mstsc writes UTF-16LE with a byte order mark; other tools write UTF-8, with or without one. */
@@ -82,7 +93,7 @@ export function parseRdpFile (data: Uint8Array): RdpFile | null {
         ...settings.get('username') ? { username: settings.get('username') } : {},
         ...settings.get('domain') ? { domain: settings.get('domain') } : {},
         ...Number.isFinite(scale) && scale >= 100 ? { sharpness: scale >= 150 ? 'retina' as const : 'standard' as const } : {},
-        ...settings.get('gatewayhostname') ? { gateway: settings.get('gatewayhostname') } : {},
+        ...usesGateway(settings) ? { gateway: settings.get('gatewayhostname') } : {},
         ignored: [...new Set(ignored)],
     }
 }
