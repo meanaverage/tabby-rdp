@@ -276,6 +276,33 @@ class DesktopSession {
         }, { passive: true })
     }
 
+    /** Keys this desktop was sent and not yet let go of (by `code`): see RemoteDesktopService.broadcastKey. */
+    readonly keysDown = new Map<string, KeyboardEventInit>()
+
+    /** Notes a key sent to this desktop as held, or let go. */
+    noteKey (type: string, init: KeyboardEventInit): void {
+        if (type === 'keydown' && init.code) {
+            this.keysDown.set(init.code, init)
+        } else if (type === 'keyup' && init.code) {
+            this.keysDown.delete(init.code)
+        }
+    }
+
+    /**
+     * Lets go of every key still held on this desktop. For when their keyups won't reach it: view only coming on, or
+     * typing into all going off, by a shortcut whose modifiers are down at that moment. They would stay down there.
+     */
+    releaseKeys (): void {
+        for (const [code, init] of [...this.keysDown]) {
+            this.keysDown.delete(code)
+            try {
+                this.ui?.sendKeyboardEvent(new KeyboardEvent('keyup', { key: init.key, code, location: init.location, cancelable: true }))
+            } catch (e: any) {
+                this.log.push(`keys: ${code} not released: ${e?.message ?? e}`)
+            }
+        }
+    }
+
     setViewOnly (viewOnly: boolean): void {
         this.viewOnly = viewOnly
         this.overlay.classList.toggle('trd-view-only-on', viewOnly)
@@ -1446,6 +1473,14 @@ export class RemoteDesktopService {
     setViewOnly (pane: DesktopPane, viewOnly: boolean): void {
         const session = this.sessions.get(pane)
         if (session) {
+            if (viewOnly) {
+                // From here on this desktop's keys stop at the plugin, their keyups too: let go of what is down, also
+                // on the desktops typing into all had copy them.
+                session.releaseKeys()
+                if (this.isBroadcast(pane)) {
+                    this.othersInTab(pane).forEach(other => other.session.releaseKeys())
+                }
+            }
             session.setViewOnly(viewOnly)
             this.changed$.next()
         }
@@ -1626,6 +1661,10 @@ export class RemoteDesktopService {
         if (!split) {
             return
         }
+        if (!on && this.broadcast.has(split)) {
+            // The keyups of keys held right now (the shortcut's own modifiers) won't be copied any more.
+            this.othersInTab(pane).forEach(other => other.session.releaseKeys())
+        }
         on ? this.broadcast.add(split) : this.broadcast.delete(split)
         for (const p of split.getAllTabs()) {
             const session = this.sessions.get(p as DesktopPane)
@@ -1635,14 +1674,19 @@ export class RemoteDesktopService {
         this.changed$.next()
     }
 
-    /** A key event for the other desktops of a tab typing into all (see DesktopKeyboard). */
+    /**
+     * A key the pane's desktop was sent (see DesktopKeyboard): noted as held there or let go, and copied to the other
+     * desktops of a tab typing into all.
+     */
     broadcastKey (pane: DesktopPane, type: string, init: KeyboardEventInit): void {
+        this.sessions.get(pane)?.noteKey(type, init)
         if (!this.isBroadcast(pane)) {
             return
         }
         for (const { session } of this.othersInTab(pane)) {
             try {
                 session.ui.sendKeyboardEvent(new KeyboardEvent(type, { ...init, cancelable: true }))
+                session.noteKey(type, init)
             } catch (e: any) {
                 session.log.push(`typing into all desktops: ${e?.message ?? e}`)
             }

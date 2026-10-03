@@ -16,6 +16,29 @@
   static channels send multi-chunk messages Windows accepts (patch 16): a response over 1600 bytes was flagged for the
   receiver to keep the channel header, which Windows' drive redirector didn't expect and dropped the channel on.
 
+**Fixed** (from a review of the code)
+- **Save to Downloads** couldn't be led elsewhere by the remote's file names alone, but could by a link already in
+  Downloads with a name the remote chose (a folder name, say). Folders are now made one at a time and must stay inside
+  the folder once links are followed, and each file is created new: an existing name, link or not, gets a number.
+- **Large files copied from the remote** were held in memory, twice over while being saved. They now arrive in a
+  private temporary file and are moved into place.
+- **The plugin's local proxy** (loopback, one per desktop) kept whatever a local program sent before showing the
+  session's token, with no limit or deadline, and an error on such a connection wasn't handled. The first message is
+  now capped at a request's size and has ten seconds to arrive, at most four clients connect at once, and messages
+  are capped at 32 MB. Reaching the server has a deadline too.
+- **A connection given up while the server was being reached** (the tab closed, Cancel) left that connection open
+  until it finished; closing a desktop could leave an idle proxy connection behind. Both end at once now.
+- **Data waiting for a slow side** was buffered without limit. The proxy now pauses the side it reads from while the
+  other has more than 8 MB waiting, and a desktop reached through SSH whose data isn't being read at all is closed at
+  64 MB rather than growing.
+- **Dropping files on a desktop after a reconnect** (a wrong password first, a certificate question) offered them
+  once per connection attempt, through handlers the earlier attempts left behind.
+- **Shortcut modifiers could stay held on the remote:** turning on view only, or turning off typing into all
+  desktops, by a shortcut sent the modifiers' key-down to the remote but not their release. Keys held at that moment
+  are released first.
+- **H.264: small changes far apart** (a clock in one corner, a cursor in another) read back everything between them:
+  33 MB for a 4K picture to get a few pixels. Regions far apart are read one by one (IronRDP patch 17).
+
 ## 0.4.1
 
 Fixes from a review of 0.4.0.

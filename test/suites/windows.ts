@@ -262,7 +262,7 @@ if (Test-Path $state) { Get-ChildItem $state -File | Where-Object { $keep -notco
             await sleep(500)
             arrived = (await guest(`Get-Content -Raw -ErrorAction SilentlyContinue '${folder}\\from-here.txt'`)).trim()
         }
-        check('files: dropped on the desktop, pasted in Explorer, same content', arrived === content, arrived)
+        check('files: dropped on the desktop, pasted in Explorer, same content', arrived === content, { arrived, log: (await log()).filter(l => /^files/.test(l)).slice(-6), note: await ev(`return H.overlay(H.pane).querySelector('.trd-toast-text')?.textContent ?? null`) })
         await t.key('F4', 'F4', 115, ['Alt'])  // close Explorer
 
         // 8b. Shared folders: drives in the session (\\tsclient\<name>), read and written from Windows; the read-only

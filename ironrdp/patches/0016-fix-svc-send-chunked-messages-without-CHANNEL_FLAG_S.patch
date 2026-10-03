@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: meanaverage <18336095+meanaverage@users.noreply.github.com>
 Date: Fri, 2 Oct 2026 19:48:53 -0700
-Subject: [PATCH 16/16] fix(svc): send chunked messages without
+Subject: [PATCH 16/17] fix(svc): send chunked messages without
  CHANNEL_FLAG_SHOW_PROTOCOL
 
 The flag asks the receiver to pass the Channel PDU Header to the
