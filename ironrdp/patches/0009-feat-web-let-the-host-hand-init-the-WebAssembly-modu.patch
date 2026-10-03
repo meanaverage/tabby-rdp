@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: meanaverage <18336095+meanaverage@users.noreply.github.com>
 Date: Sun, 27 Sep 2026 02:35:45 -0700
-Subject: [PATCH 09/14] feat(web): let the host hand `init` the WebAssembly
+Subject: [PATCH 09/17] feat(web): let the host hand `init` the WebAssembly
  module
 
 `init(logLevel)` always loaded the module from its default location:

@@ -10,6 +10,7 @@ import { consoleScript, DeskRequest, MACHINE_ID_COMMAND } from './deskScript'
 import { AudioPlayer } from './audio'
 import { ConnectionStatus, STYLE as STATS_STYLE } from './connectionStatus'
 import { Microphone } from './microphone'
+import { SharedDrives, SharedFolder, sharedFolders } from './drives'
 import { askDesktop } from './desktopForm'
 import { accountKey, accountsOf, newAccountId, SavedAccount, signInName } from './accounts'
 import { NewAccountInput, STYLE as ACCOUNT_FORM_STYLE } from './accountForm'
@@ -224,6 +225,8 @@ class DesktopSession {
     mic: Microphone | null = null
     /** Files through the clipboard (drop on the desktop, or copy on the remote). */
     files: FileTransfer | null = null
+    /** The shared folders as drives on the remote (see drives.ts), when there were any at connect. */
+    drives: SharedDrives | null = null
     /** Decodes H.264 for the graphics pipeline (IronRDP's WebCodecsH264Decoder), when this connection uses it. */
     h264: any = null
     /** No keyboard or mouse input goes to the remote (keys: see keyboard.ts; the mouse: a layer over the picture). */
@@ -271,6 +274,33 @@ class DesktopSession {
             const wheel = event as WheelEvent
             this.host.querySelector('iron-remote-desktop')?.shadowRoot?.querySelector('.screen-wrapper')?.scrollBy(wheel.deltaX, wheel.deltaY)
         }, { passive: true })
+    }
+
+    /** Keys this desktop was sent and not yet let go of (by `code`): see RemoteDesktopService.broadcastKey. */
+    readonly keysDown = new Map<string, KeyboardEventInit>()
+
+    /** Notes a key sent to this desktop as held, or let go. */
+    noteKey (type: string, init: KeyboardEventInit): void {
+        if (type === 'keydown' && init.code) {
+            this.keysDown.set(init.code, init)
+        } else if (type === 'keyup' && init.code) {
+            this.keysDown.delete(init.code)
+        }
+    }
+
+    /**
+     * Lets go of every key still held on this desktop. For when their keyups won't reach it: view only coming on, or
+     * typing into all going off, by a shortcut whose modifiers are down at that moment. They would stay down there.
+     */
+    releaseKeys (): void {
+        for (const [code, init] of [...this.keysDown]) {
+            this.keysDown.delete(code)
+            try {
+                this.ui?.sendKeyboardEvent(new KeyboardEvent('keyup', { key: init.key, code, location: init.location, cancelable: true }))
+            } catch (e: any) {
+                this.log.push(`keys: ${code} not released: ${e?.message ?? e}`)
+            }
+        }
     }
 
     setViewOnly (viewOnly: boolean): void {
@@ -376,6 +406,7 @@ class DesktopSession {
         this.h264?.close()
         this.mic?.close()
         this.files?.dispose()
+        this.drives?.dispose()
         this.proxy?.close()
         this.overlay.remove()
     }
@@ -1271,6 +1302,18 @@ export class RemoteDesktopService {
         }
     }
 
+    /** The folders shared with remote desktops as drives (`remoteDesktop.sharedFolders`), tidied. */
+    sharedFolders (): SharedFolder[] {
+        return sharedFolders(this.config.store.remoteDesktop)
+    }
+
+    /** Replaces the shared folders; applies to desktops connecting from now on. */
+    setSharedFolders (folders: SharedFolder[]): void {
+        this.config.store.remoteDesktop.sharedFolders = folders.map(f => ({ path: f.path, name: f.name, readOnly: f.readOnly }))
+        this.config.save()
+        this.changed$.next()
+    }
+
     /** The sharpness chosen for the pane's desktop in particular (`remoteDesktop.desktopSharpness`), or null. */
     ownSharpness (pane: DesktopPane): DesktopSettings['sharpness'] | null {
         const key = this.sessions.get(pane)?.key
@@ -1440,6 +1483,14 @@ export class RemoteDesktopService {
     setViewOnly (pane: DesktopPane, viewOnly: boolean): void {
         const session = this.sessions.get(pane)
         if (session) {
+            if (viewOnly) {
+                // From here on this desktop's keys stop at the plugin, their keyups too: let go of what is down, also
+                // on the desktops typing into all had copy them.
+                session.releaseKeys()
+                if (this.isBroadcast(pane)) {
+                    this.othersInTab(pane).forEach(other => other.session.releaseKeys())
+                }
+            }
             session.setViewOnly(viewOnly)
             this.changed$.next()
         }
@@ -1620,6 +1671,10 @@ export class RemoteDesktopService {
         if (!split) {
             return
         }
+        if (!on && this.broadcast.has(split)) {
+            // The keyups of keys held right now (the shortcut's own modifiers) won't be copied any more.
+            this.othersInTab(pane).forEach(other => other.session.releaseKeys())
+        }
         on ? this.broadcast.add(split) : this.broadcast.delete(split)
         for (const p of split.getAllTabs()) {
             const session = this.sessions.get(p as DesktopPane)
@@ -1629,14 +1684,19 @@ export class RemoteDesktopService {
         this.changed$.next()
     }
 
-    /** A key event for the other desktops of a tab typing into all (see DesktopKeyboard). */
+    /**
+     * A key the pane's desktop was sent (see DesktopKeyboard): noted as held there or let go, and copied to the other
+     * desktops of a tab typing into all.
+     */
     broadcastKey (pane: DesktopPane, type: string, init: KeyboardEventInit): void {
+        this.sessions.get(pane)?.noteKey(type, init)
         if (!this.isBroadcast(pane)) {
             return
         }
         for (const { session } of this.othersInTab(pane)) {
             try {
                 session.ui.sendKeyboardEvent(new KeyboardEvent(type, { ...init, cancelable: true }))
+                session.noteKey(type, init)
             } catch (e: any) {
                 session.log.push(`typing into all desktops: ${e?.message ?? e}`)
             }
@@ -2186,6 +2246,16 @@ export class RemoteDesktopService {
                 session.mic = mic
                 config.withExtension(rdp.audioInput(mic.callback))
             }
+            // Shared folders as drives (\\tsclient\<name>). GNOME Remote Desktop doesn't serve drives; Windows and xrdp
+            // do. Also skipped with no folder shared: the server then sees no drive device at all.
+            session.drives?.dispose()
+            session.drives = null
+            const folders = this.sharedFolders()
+            if (folders.length && spec.kind !== 'gnome' && typeof rdp.driveRedirection === 'function') {
+                session.drives = new SharedDrives(folders, m => session.log.push(m))
+                config.withExtension(rdp.driveRedirection(session.drives))
+                session.log.push(`drives: ${folders.map(f => `${f.name}${f.readOnly ? ' (read-only)' : ''}`).join(', ')}`)
+            }
             const built = config.build()
             let info: any
             try {
@@ -2251,8 +2321,9 @@ export class RemoteDesktopService {
                 }
                 return { connected: true, error: typeof e?.backtrace === 'function' ? e.backtrace().split('\n')[0] : (e?.message ?? String(e)) }
             } finally {
-                // The server can't close the microphone once the connection is gone.
+                // The server can't close the microphone, or its files, once the connection is gone.
                 session.mic?.close()
+                session.drives?.dispose()
             }
             return { connected: true, reason: end?.reason?.() }
         } catch (e: any) {

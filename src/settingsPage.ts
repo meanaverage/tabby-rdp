@@ -1,10 +1,12 @@
 import { Component, ElementRef, HostBinding, Injectable, Injector, NgZone, OnDestroy, OnInit } from '@angular/core'
+import { basename } from 'path'
 import { Subscription } from 'rxjs'
 import { AppService, ConfigService, HotkeyDescription, HotkeysService, NotificationsService, PlatformService, ProfilesService } from 'tabby-core'
 import { SettingsTabComponent, SettingsTabProvider } from 'tabby-settings'
 import { SavedAccount, signInName } from './accounts'
 import { DesktopSettings, RemoteDesktopService } from './desktop.service'
 import { DIRECT_KEY } from './desktops'
+import { driveName } from './drives'
 import { OSD_FONTS, OSD_POSITIONS, OSD_SIZES, OSD_STYLE, OsdSettings, renderOsd } from './osd'
 import { esc, HelpTopic, HOTKEYS, RemoteDesktopHelp, SETTINGS_TAB_ID, TROUBLESHOOTING } from './help'
 import { installedVersion, UpdateCheck } from './updates'
@@ -94,6 +96,8 @@ const STYLE = `
 .trd-settings .trd-account-form .trd-account-error:empty { display: none; }
 .trd-settings .trd-account-form .trd-account-buttons { grid-column: 1 / -1; display: flex; gap: 8px; justify-content: flex-end; }
 .trd-settings .trd-list + .trd-add { margin-top: 10px; display: flex; gap: 6px; align-items: center; }
+.trd-settings .trd-row .trd-folder-readonly { flex: none; display: flex; align-items: center; gap: 6px; margin: 0; font-size: 12px; white-space: nowrap; }
+.trd-settings .trd-row .trd-folder-readonly input { margin: 0; position: static; float: none; }
 .trd-settings .trd-row a[data-profile], .trd-settings .trd-row a[data-desktop] { cursor: pointer; text-decoration: underline; }
 .trd-settings .trd-form-overlay { position: fixed; inset: 0; z-index: 1050; background: rgba(0, 0, 0, 0.55); }
 /* The window stays draggable by its tab bar while the form shows (Tabby's own dialogs cover it). */
@@ -265,6 +269,13 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
                 <h5>Sound</h5>
                 ${this.toggleLine('sound', 'Sound', 'Play the remote desktop\'s sound here. Applies on the next connection.')}
                 ${this.toggleLine('microphone', 'Microphone', 'Send your microphone while an app there records, with a red dot in the corner meanwhile. Applies on the next connection.')}
+
+                <h5>Shared folders</h5>
+                <div class="trd-lead">Folders from this computer as drives on the remote desktop, under <code>\\\\tsclient</code> in
+                    Explorer. Applies on the next connection.
+                    ${this.info('Every remote desktop you connect to sees these folders, so share only what each of them may have. Read-only keeps the remote from changing anything in a folder. Windows mounts them (xrdp can, with FUSE); GNOME Remote Desktop doesn\'t serve drives.')}</div>
+                <div class="trd-list" data-list="folders"></div>
+                <div class="trd-add"><button class="btn btn-secondary btn-sm" data-action="folder">Share a folder…</button></div>
 
                 <h5>Keyboard</h5>
                 ${mac ? this.toggleLine('macShortcuts', 'Mac-style shortcuts', 'Use ⌘ as Ctrl on the desktop, so ⌘C copies and ⌘V pastes. Tap ⌘ on its own for the Windows key. When off, ⌘ is always the Windows key.') : ''}
@@ -454,6 +465,7 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
             shortcuts: () => this.reveal('keyboard'),
             account: () => this.editAccount(null),
             desktop: () => this.newProfile(),
+            folder: () => this.shareFolder(),
             profiles: () => this.showTabbySettings('profiles'),
             'osd-white': () => this.changeOsd({ color: '' }),
             'osd-try': () => {
@@ -549,6 +561,7 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
         this.renderDesktops()
         this.renderHotkeys()
         this.renderAccounts()
+        this.renderFolders()
         this.renderCertificates()
         this.renderSessions()
     }
@@ -616,6 +629,43 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
         list.replaceChildren(...profileRows, ...desktopRows, this.empty(profileRows.length + desktopRows.length
             ? 'Profiles are also in Profiles &amp; connections; a desktop behind a host also in that host\'s SSH tab: right-click › Settings.'
             : 'None yet. <b>Add a desktop…</b> makes a profile: an RDP server on your network, or one behind an SSH profile\'s host.'))
+    }
+
+    private renderFolders (): void {
+        const list = this.root.querySelector('[data-list=folders]')
+        if (!list) {
+            return
+        }
+        const folders = this.desktop.sharedFolders()
+        list.replaceChildren(...folders.map((f, i) => {
+            const row = this.row(esc(f.name), esc(f.path), [
+                { label: 'Remove', danger: true, run: () => this.desktop.setSharedFolders(folders.filter((_, j) => j !== i)) },
+            ])
+            const check = document.createElement('label')
+            check.className = 'trd-folder-readonly'
+            check.innerHTML = '<input type="checkbox" class="form-check-input"> Read-only'
+            const input = check.querySelector('input')!
+            input.checked = f.readOnly
+            input.addEventListener('change', () => this.zone.run(() => {
+                this.desktop.setSharedFolders(folders.map((o, j) => j === i ? { ...o, readOnly: input.checked } : o))
+            }))
+            row.insertBefore(check, row.querySelector('button'))
+            return row
+        }), ...folders.length ? [] : [this.empty('None shared. The clipboard still carries files either way: drop them on the desktop, or copy them there and save them here.')])
+    }
+
+    /** Asks for a folder and shares it under its own name (numbered when another share has it). */
+    private async shareFolder (): Promise<void> {
+        const picked = await this.platform.pickDirectory().catch(() => '')
+        if (!picked) {
+            return
+        }
+        const folders = this.desktop.sharedFolders()
+        if (folders.some(f => f.path === picked)) {
+            this.injector.get(NotificationsService).info('That folder is shared already')
+            return
+        }
+        this.desktop.setSharedFolders([...folders, { path: picked, name: driveName(basename(picked) || picked, folders), readOnly: false }])
     }
 
     private renderAccounts (): void {

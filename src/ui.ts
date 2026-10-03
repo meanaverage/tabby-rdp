@@ -53,6 +53,8 @@ export class RemoteDesktopConfig extends ConfigProvider {
             accounts: [],
             // Sharpness for particular desktops, overriding `sharpness`: [{ desktop: <session key>, sharpness }].
             desktopSharpness: [],
+            // Folders shared with remote desktops as drives (\\tsclient\<name>): [{ path, name, readOnly }]; see drives.ts.
+            sharedFolders: [],
             // Certificates of desktops behind hosts, trusted on first use: [{ desktop: <session key>, sha256 }].
             trustedCertificates: [],
             // The on-screen display naming a desktop for a moment (see osd.ts).

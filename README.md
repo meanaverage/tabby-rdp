@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="docs/images/logo.svg" width="96" height="96" alt="">
+<img src="docs/images/logo.png" width="150" height="150" alt="tabby-rdp: a Tabby window with a GNOME desktop, a Windows desktop and two terminals side by side">
 
 # tabby-rdp
 
@@ -54,6 +54,7 @@ Making it work with GNOME took fixes in IronRDP, which we contribute upstream ([
 - [Windows and other desktops behind a host](#windows-and-other-desktops-behind-a-host)
 - [Remote desktop profiles](#remote-desktop-profiles)
 - [Saved accounts](#saved-accounts)
+- [Shared folders](#shared-folders)
 - [Several desktops in one tab](#several-desktops-in-one-tab)
 - [VMs on a host](#vms-on-a-host)
 - [desk: the console on the desktop](#desk-the-console-on-the-desktop)
@@ -110,6 +111,7 @@ connecting again.
 |---|---|
 | **Clipboard** | Copy and paste text and images in both directions. |
 | **Files** | Copy files or folders in Finder and press ⌘V on the desktop, or drop them onto it, or use **Remote Desktop › Send files…** in the pane's menu; they paste in Files or Explorer. Files copied on the remote offer **Save to Downloads**. |
+| **Shared folders** | Folders from this computer as drives on the remote desktop (`\\tsclient\<name>` in Explorer), read-write or read-only, for working with files in place: [below](#shared-folders). Windows (and xrdp with FUSE). |
 | **Several desktops in one tab** | Paste to all of them, type into all of them, and see which is which: [below](#several-desktops-in-one-tab). |
 | **VMs on a host** | The host's VMs with a desktop, ready to open: [below](#vms-on-a-host). |
 | **Sound** | The remote desktop's sound plays locally. |
@@ -240,6 +242,27 @@ The accounts' names and user names are in Tabby's config (`remoteDesktop.account
 Vault when it is enabled (encrypted, and carried by Tabby's config sync), else in the system keychain. Removing an
 account removes its password and sets its desktops back to asking.
 
+## Shared folders
+
+A folder on this computer can appear as a drive on the remote desktop, as mstsc's drive redirection does: in
+**Settings › Remote Desktop › Settings › Shared folders**, **Share a folder…** picks one. On the remote it is
+`\\tsclient\<name>` ("<name> on <this computer>" under This PC in Explorer), named after the folder; **Read-only**
+keeps the remote from changing, adding or removing anything in it. Every remote desktop you connect to sees the shared
+folders, so share only what each of them may have, and remove a folder to stop sharing it. Changes apply on the next
+connection.
+
+<p align="center"><img src="docs/images/shared-folders.png" width="548" alt="Shared folders in Settings › Remote Desktop: two folders, one read-only, and Share a folder…"></p>
+
+Files are served through the RDP connection as the remote reads and writes them, which suits opening and saving
+documents in place; for moving large files, copying through the clipboard is just as quick. They are read and written
+in the background, so a slow disk or network folder slows the drive down, not Tabby.
+
+The remote gets the shared folder and nothing else: a symbolic link works when it points inside the folder, and one
+that leads out of it isn't shown, read or written through. Only files and folders are served (no devices or pipes).
+
+Windows mounts shared folders (tested); xrdp can when built with FUSE (under `~/thinclient_drives`); GNOME Remote
+Desktop doesn't serve drives, so there the clipboard is the way.
+
 ## Several desktops in one tab
 
 Split a tab (Tabby's **Split** in the tab's menu, or drag one tab onto another) and each pane can show a desktop: one
@@ -306,6 +329,7 @@ They are stored in Tabby's config under `remoteDesktop`:
 | Sound (`sound`) | On | Applies on the next connection. |
 | Video decoding (`h264`) | On | H.264 decoded by Tabby's browser engine (hardware-accelerated where available), for what the remote sends as video; applies on the next connection. |
 | Microphone (`microphone`) | Off | Send your microphone while an app on the remote desktop records. Applies on the next connection. |
+| Shared folders (`sharedFolders`) | None | `[{ path, name, readOnly }]`: folders shared as drives with every remote desktop ([Shared folders](#shared-folders)). Applies on the next connection. |
 | Show connection status (`connectionStatus`) | Off | The indicator in the desktop's corner; fades when the pointer comes near. |
 | Mac shortcuts (`macShortcuts`) | On | macOS. Off: ⌘ is the Windows key. |
 | Shortcuts (`hotkeys.remote-desktop-*`) | ⌘⇧G / Ctrl+Shift+G for the switch; the rest unbound | Tabby's hotkeys: the switch between desktop and console, view only, screenshot, Ctrl+Alt+Del, type into all, paste to all, connection status, disconnect. Changed on the settings page (Getting started › Shortcuts) or in Settings › Hotkeys. |
@@ -359,6 +383,8 @@ tabby-rdp ships IronRDP with a short series of patches ([ironrdp/](ironrdp)). Th
 | Microphone in the web client | Not submitted yet: waits for #2020 |
 | Keep clipboard sync working for the other desktops when one closes | Not submitted yet |
 | Sync the clipboard only for the desktop that has the focus | Not submitted yet |
+| Drive redirection in the web client, through a JavaScript file system | Not submitted yet |
+| Send chunked static-channel messages without CHANNEL_FLAG_SHOW_PROTOCOL, as Windows' drive redirector expects | Not submitted yet |
 
 The aim is to make IronRDP's browser client work well with both Linux and Windows desktops, for everyone who embeds
 it, not just this plugin.
