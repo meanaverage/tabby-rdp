@@ -105,3 +105,45 @@ npm test -- windows
 If the Windows VM runs on a host with user-mode networking (QEMU's `-netdev user`), forward its ports to that host's
 loopback instead (`hostfwd=tcp:127.0.0.1:13389-:3389,hostfwd=tcp:127.0.0.1:15985-:5985`), use that host as
 `TRD_TEST_WIN_SSH_HOST`, and `127.0.0.1:13389` / `127.0.0.1:15985` as the addresses.
+
+## Windows Server: a Hyper-V host and an RD Gateway (optional)
+
+For the two ways to a desktop that need a server: a VM's console through its Hyper-V host (port 2179, as Hyper-V
+Manager's Connect does), and a desktop behind a Remote Desktop Gateway. One machine does both.
+
+**A libvirt VM**, next to the others, installed unattended from Microsoft's Windows Server 2025 evaluation ISO (180
+days; downloaded the first time, 6 GB):
+
+```sh
+TEST_PASSWORD='<a password for the test account>' testbed/windows-server/libvirt.sh   # on the libvirt host
+# prints the addresses, and the administrator's password
+```
+
+It is prepared with `setup.ps1` (as the Windows machine above) and [`server.ps1`](windows-server/server.ps1), which
+
+- installs **RD Gateway** with a self-signed certificate and policies that let the test account (a local one: the
+  machine is in no domain, the gateway authenticates with NTLM) connect through it to any computer it reaches, the
+  Windows test machine for one;
+- installs **Hyper-V**, turns on enhanced session mode, and makes two guest VMs: `tabby-rdp-guest`, Windows
+  (Server Core, with the test account in it) from the image on the installation disc, for enhanced sessions; and
+  `tabby-rdp-empty`, without a disk, which sits at its firmware's screen and is console enough to connect to. The
+  test account is a Hyper-V administrator on the host, which is what lets it open a guest's console;
+- turns on **OpenSSH Server** with PowerShell as its shell, for listing the host's VMs over SSH. Listing them
+  (`Get-VM`) takes the administrator account, `tabbyadmin`: the test account can sign in and open consoles, but
+  Hyper-V didn't let it list VMs.
+
+Hyper-V in a VM needs nested virtualization: the libvirt host's KVM with `nested` on (`cat
+/sys/module/kvm_*/parameters/nested`). The VM takes 16 GB of memory and one CPU while it runs, and up to 120 GB of
+disk. One CPU because of how deep the nesting can get: where the libvirt host is itself a VM, the machine froze with
+more (`VCPUS=4` on a host that isn't one is much faster); on one CPU, installing can take a couple of hours. On such
+a host a guest that starts an operating system froze the machine too, Windows or Linux: run the script with
+`START_GUEST=0`, which leaves the Windows guest off, and test with the empty one (a console, but no enhanced
+session). The password has to meet Windows Server's complexity rules (three of:
+capitals, small letters, digits, symbols).
+
+**Or any Windows Server 2022 or 2025 with the desktop** (RD Gateway isn't offered on Server Core), its installation
+disc in a drive. In an elevated PowerShell on it, after `setup.ps1`:
+
+```powershell
+.\server.ps1 -Password '<the test account's password>'   # restarts once, and finishes at startup
+```
