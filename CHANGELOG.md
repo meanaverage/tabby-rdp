@@ -1,8 +1,11 @@
 # Changelog
 
-## Unreleased
+## 0.5.0
 
-**Added**
+Shared folders, desktops behind an RD Gateway, Hyper-V VMs' consoles, more of what an .rdp file says, text sent as
+typed; more care with addresses that come from someone else; and fixes from a review of the code.
+
+**New**
 - **Shared folders** ([#26](https://github.com/meanaverage/tabby-rdp/issues/26)): folders from this computer appear as
   drives on the remote desktop, under `\\tsclient` in Explorer, like mstsc's drive redirection. Settings › Remote
   Desktop › Settings › Shared folders: **Share a folder…**, each one read-write or read-only. Every desktop you connect
@@ -28,9 +31,6 @@
   valid for its name and otherwise remembered on first use; a changed one stops the connection until it is trusted.
   The sign-in (NTLMv2) is bound to the gateway's TLS certificate, which gateways require by default. Smart cards,
   sign-in pages and one-time codes at the gateway aren't supported.
-- IronRDP's web client gains drive redirection (MS-RDPEFS) through a JavaScript file system (patch 15), and its
-  static channels send multi-chunk messages Windows accepts (patch 16): a response over 1600 bytes was flagged for the
-  receiver to keep the channel header, which Windows' drive redirector didn't expect and dropped the channel on.
 - **.rdp files** ([#27](https://github.com/meanaverage/tabby-rdp/issues/27)): an import applies the file's display
   scale (`desktopscalefactor` 150 or more becomes the desktop's Retina sharpness) and its RD Gateway
   (`gatewayhostname`, unless the file turns it off), and says which of its other settings the plugin doesn't apply
@@ -42,8 +42,23 @@
   come out right; keys with Ctrl, Alt or ⌘ still go by position, so shortcuts keep working. Off by default. Windows
   types any character; a GNOME desktop only those its own layout has. Input methods (Chinese, Japanese, Korean) need
   more than this and stay open in #31.
+- IronRDP's web client gains drive redirection (MS-RDPEFS) through a JavaScript file system (patch 15), and its
+  static channels send multi-chunk messages Windows accepts (patch 16): a response over 1600 bytes was flagged for the
+  receiver to keep the channel header, which Windows' drive redirector didn't expect and dropped the channel on.
 
-**Fixed** (from a review of the code)
+**Safer with addresses that come from someone else**
+- **Importing an .rdp file asks first**, naming the address, the gateway and the account the file leads to, with
+  **Add and connect**, **Add only** and **Cancel**. It used to add the profile and connect at once. Nothing in a file
+  runs on this computer (and a program it names for the remote isn't asked for), but a file decides where your
+  sign-in goes.
+- **A Windows desktop whose server doesn't use Network Level Authentication stops before the password is sent.**
+  Without it the password goes to the server as it is (encrypted on the way, readable to whatever answered), which a
+  server posing as a Windows machine can ask for; the first certificate being trusted on sight, nothing stood in the
+  way. The connection now stops when the server's answer says so, before TLS, and asks: **Send the password anyway**
+  (remembered for that desktop, shown and forgotten with its certificate under Settings › Remote Desktop ›
+  Certificates) or **Cancel**. xrdp signs in this way by design: desktops of the xrdp kind aren't asked about.
+
+**Fixed**
 - **Save to Downloads** couldn't be led elsewhere by the remote's file names alone, but could by a link already in
   Downloads with a name the remote chose (a folder name, say). Folders are now made one at a time and must stay inside
   the folder once links are followed, and each file is created new: an existing name, link or not, gets a number.
@@ -65,20 +80,6 @@
   are released first.
 - **H.264: small changes far apart** (a clock in one corner, a cursor in another) read back everything between them:
   33 MB for a 4K picture to get a few pixels. Regions far apart are read one by one (IronRDP patch 17).
-
-**Safer with addresses that come from someone else**
-- **Importing an .rdp file asks first**, naming the address, the gateway and the account the file leads to, with
-  **Add and connect**, **Add only** and **Cancel**. It used to add the profile and connect at once. Nothing in a file
-  runs on this computer (and a program it names for the remote isn't asked for), but a file decides where your
-  sign-in goes.
-- **A Windows desktop whose server doesn't use Network Level Authentication stops before the password is sent.**
-  Without it the password goes to the server as it is (encrypted on the way, readable to whatever answered), which a
-  server posing as a Windows machine can ask for; the first certificate being trusted on sight, nothing stood in the
-  way. The connection now stops when the server's answer says so, before TLS, and asks: **Send the password anyway**
-  (remembered for that desktop, shown and forgotten with its certificate under Settings › Remote Desktop ›
-  Certificates) or **Cancel**. xrdp signs in this way by design: desktops of the xrdp kind aren't asked about.
-
-**Also fixed**
 - **Linux without an unlocked keyring: Tabby could stop opening connections.** A keychain call there never returns
   and keeps one of Node's four worker threads waiting. The plugin gave the keychain up after the first such call, but
   calls started together (the settings page asking whether each saved account has a password, a desktop signing in
