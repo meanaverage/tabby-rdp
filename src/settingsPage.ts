@@ -267,7 +267,7 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
                 ${this.toggleLine('microphone', 'Microphone', 'Send your microphone while an app there records, with a red dot in the corner meanwhile. Applies on the next connection.')}
 
                 <h5>Keyboard</h5>
-                ${this.toggleLine('unicodeKeys', 'Send text as typed', 'Sends the characters your keyboard produces rather than key positions, so dead keys (´ then e) and a layout the remote doesn\'t have come out right. Shortcuts with Ctrl, Alt or ⌘ still go by position. Input methods (Chinese, Japanese, Korean) aren\'t supported yet.')}
+                ${this.toggleLine('unicodeKeys', 'Send text as typed', 'Sends the characters your keyboard produces rather than key positions, so dead keys (´ then e) and a layout the remote doesn\'t have come out right. Shortcuts with Ctrl, Alt or ⌘ still go by position. On GNOME, characters the remote\'s own layout lacks still can\'t be typed; Windows takes any. Input methods (Chinese, Japanese, Korean) aren\'t supported yet.')}
                 ${mac ? this.toggleLine('macShortcuts', 'Mac-style shortcuts', 'Use ⌘ as Ctrl on the desktop, so ⌘C copies and ⌘V pastes. Tap ⌘ on its own for the Windows key. When off, ⌘ is always the Windows key.') : ''}
                 <div class="form-line">
                     <div class="header">
