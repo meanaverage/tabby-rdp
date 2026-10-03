@@ -183,6 +183,7 @@ function readTpkt (stream: Duplex): Promise<Buffer> {
             stream.off('data', onData)
             stream.off('error', onError)
             stream.off('close', onClose)
+            stream.off('end', onClose)
         }
         const onError = (e: Error) => { cleanup(); reject(e) }
         const onClose = () => { cleanup(); reject(new Error('upstream closed during X.224')) }
@@ -205,6 +206,8 @@ function readTpkt (stream: Duplex): Promise<Buffer> {
         stream.on('data', onData)
         stream.on('error', onError)
         stream.on('close', onClose)
+        // An SSH channel says when the server has closed its side ("end") without always saying it is closed.
+        stream.on('end', onClose)
     })
 }
 
@@ -469,6 +472,7 @@ async function handshake (
             upstream.once('secureConnect', resolve)
             upstream.once('error', reject)
             upstream.once('close', () => reject(new Error('upstream closed during TLS')))
+            upstream.once('end', () => reject(new Error('upstream closed during TLS')))
         })
         return { raw, upstream, x224 }
     } catch (e) {
@@ -641,6 +645,13 @@ export async function startRDCleanPathProxy (openUpstream: UpstreamFactory, chec
                     }
                 })
                 upstream.on('close', () => ws.close())
+                // The server closing its side is the end of the desktop: RDP has no use for a connection open one way.
+                // Through an SSH host that is all there may be to hear (the channel reports the end, and "closed" only
+                // once something more is sent into it), and a desktop waiting for "closed" stayed up, frozen.
+                upstream.on('end', () => {
+                    ws.close()
+                    upstream?.destroy()
+                })
                 upstream.on('error', (e: Error) => { log(`upstream error: ${e.message}`); ws.close() })
                 for (const d of early) {
                     stats.bytesOut += d.length

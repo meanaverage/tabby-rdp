@@ -5,6 +5,12 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createRequire } from 'node:module'
 import { Duplex } from 'node:stream'
+import { execFileSync } from 'node:child_process'
+import * as fs from 'node:fs'
+import * as net from 'node:net'
+import * as os from 'node:os'
+import * as path from 'node:path'
+import * as tls from 'node:tls'
 
 const require = createRequire(import.meta.url)
 const { startRDCleanPathProxy, preconnectionPdu, offersNla } = require('../../dist/rdcleanpath.js')
@@ -276,4 +282,63 @@ test('a server without Network Level Authentication: asked about before anything
     assert.equal(asked, 2)
     assert.equal(nlaUpstream.sent[1]?.[0], 0x16)
     plain.close()
+})
+
+test('a server that closes its side ends the desktop, also where the stream never says "closed"', async t => {
+    // A stand-in server (needs the openssl command for its certificate): answers the connection request, does TLS,
+    // and then closes.
+    let secureContext: tls.SecureContext
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'trd-proxy-'))
+    try {
+        execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', `${dir}/key.pem`, '-out', `${dir}/cert.pem`, '-days', '2', '-subj', '/CN=server.test'], { stdio: 'ignore' })
+        secureContext = tls.createSecureContext({ key: fs.readFileSync(`${dir}/key.pem`), cert: fs.readFileSync(`${dir}/cert.pem`) })
+    } catch {
+        t.skip('no openssl command')
+        return
+    } finally {
+        fs.rmSync(dir, { recursive: true, force: true })
+    }
+    const server = net.createServer(socket => {
+        socket.on('error', () => { })
+        socket.once('data', () => {
+            socket.write(confirm(2))
+            const secure = new tls.TLSSocket(socket, { isServer: true, secureContext })
+            secure.on('error', () => { })
+            secure.once('secure', () => setTimeout(() => secure.end(), 100))
+        })
+    })
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+    const port = (server.address() as net.AddressInfo).port
+    // The way to it, as an SSH channel behaves once the far end is gone: the end is reported, what is written after
+    // it is never confirmed, and nothing says "closed".
+    const open = async (): Promise<Duplex> => {
+        const socket = net.connect(port, '127.0.0.1')
+        let ended = false
+        const stream: Duplex = new Duplex({
+            read () { },
+            write (chunk, _encoding, done) {
+                if (!ended) {
+                    socket.write(chunk, () => done())
+                }
+            },
+            final () { /* never confirmed */ },
+        })
+        socket.on('data', d => stream.push(d))
+        socket.on('end', () => { ended = true; stream.push(null) })
+        socket.on('error', () => { })
+        stream.on('close', () => socket.destroy())
+        return stream
+    }
+    const log: string[] = []
+    const proxy = await startRDCleanPathProxy(open, () => { }, (m: string) => log.push(m))
+    const ws = new WebSocket(proxy.url)
+    // Whatever the outcome, nothing stays open to keep the test run from ending.
+    t.after(() => { ws.terminate(); proxy.close(); server.close() })
+    ws.on('error', () => { })
+    await opened(ws)
+    const gone = closed(ws)
+    ws.send(request(proxy.token))
+    const outcome = await Promise.race([gone.then(() => 'closed'), soon(4000).then(() => 'still open')])
+    assert.ok(log.some(l => /relay up/.test(l)), log.join('\n'))
+    assert.equal(outcome, 'closed', 'the client hears that the desktop is gone')
 })

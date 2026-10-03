@@ -80,6 +80,10 @@ typed; more care with addresses that come from someone else; and fixes from a re
   are released first.
 - **H.264: small changes far apart** (a clock in one corner, a cursor in another) read back everything between them:
   33 MB for a 4K picture to get a few pixels. Regions far apart are read one by one (IronRDP patch 17).
+- **A desktop whose server went away could stay on screen, frozen.** Through an SSH host, a server that closes the
+  connection (a machine shut down, a VM stopped) is reported as the end of what it sends, and not always as closed;
+  the plugin waited for "closed", so the desktop sometimes stayed up, still marked connected, with no reconnect. The
+  end of the server's side now ends the desktop, and reconnecting takes over as for any drop.
 - **Linux without an unlocked keyring: Tabby could stop opening connections.** A keychain call there never returns
   and keeps one of Node's four worker threads waiting. The plugin gave the keychain up after the first such call, but
   calls started together (the settings page asking whether each saved account has a password, a desktop signing in
