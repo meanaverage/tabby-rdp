@@ -129,6 +129,11 @@ export interface DesktopSettings {
     desk: boolean
     /** macOS: ⌘ is sent as Ctrl (⌘C, ⌘V, … as on a Mac). Off: ⌘ is the Windows/Super key. */
     macShortcuts: boolean
+    /**
+     * Send the characters the keyboard produces (Unicode) rather than key positions: dead keys and a layout the remote
+     * doesn't have come out right. Keys with Ctrl, Alt or ⌘, and non-character keys, still go by position.
+     */
+    unicodeKeys: boolean
     /** Play the remote desktop's sound here (applies on the next connect). */
     sound: boolean
     /** H.264 in the graphics pipeline, decoded by the browser (WebCodecs), where it can (applies on the next connect). */
@@ -1249,6 +1254,7 @@ export class RemoteDesktopService {
             sharpness: store.sharpness === 'retina' ? 'retina' : 'standard',
             desk: store.desk === true,
             macShortcuts: store.macShortcuts !== false,
+            unicodeKeys: store.unicodeKeys === true,
             sound: store.sound !== false,
             h264: store.h264 !== false,
             zoom: store.zoom === 'actual' ? 'actual' : 'fit',
@@ -1311,9 +1317,15 @@ export class RemoteDesktopService {
         this.config.save()
         for (const [pane, session] of this.sessions) {
             this.applyZoom(session)
+            this.applyKeyboardMode(session)
             this.syncIndicator(session)
             this.followPane(pane, session)
         }
+    }
+
+    /** IronRDP's keyboard mode for the session: characters (Unicode) or key positions (scancodes), per the setting. */
+    private applyKeyboardMode (session: DesktopSession): void {
+        try { session.ui?.setKeyboardUnicodeMode(this.settings().unicodeKeys) } catch { }
     }
 
     /** IronRDP's ScreenScale for the picture: Real (1:1, scrolling) only with a fixed resolution and zoom 'actual'. */
@@ -2198,6 +2210,7 @@ export class RemoteDesktopService {
                 return { connected: false }
             }
             session.ui.setVisibility(true)
+            this.applyKeyboardMode(session)
             session.remoteSize = { width, height, scale: 100 }
             if (size.scale !== 100 || spec.kind === 'windows') {
                 // Retina: the connection starts unscaled; ask for the matching remote scale right away. Windows also

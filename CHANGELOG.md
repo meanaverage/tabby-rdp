@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+**New**
+- **Send text as typed** ([#31](https://github.com/meanaverage/tabby-rdp/issues/31)), a setting: the characters the
+  keyboard produces go to the desktop rather than key positions, so dead keys and a layout the remote doesn't have
+  come out right; keys with Ctrl, Alt or ⌘ still go by position, so shortcuts keep working. Off by default. Input
+  methods (Chinese, Japanese, Korean) need more than this and stay open in #31.
+
 ## 0.4.1
 
 Fixes from a review of 0.4.0.

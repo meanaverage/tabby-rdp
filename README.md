@@ -307,6 +307,7 @@ They are stored in Tabby's config under `remoteDesktop`:
 | Microphone (`microphone`) | Off | Send your microphone while an app on the remote desktop records. Applies on the next connection. |
 | Show connection status (`connectionStatus`) | Off | The indicator in the desktop's corner; fades when the pointer comes near. |
 | Mac shortcuts (`macShortcuts`) | On | macOS. Off: ⌘ is the Windows key. |
+| Send text as typed (`unicodeKeys`) | Off | Sends the characters the keyboard produces rather than key positions, so dead keys and a layout the remote doesn't have come out right; keys with Ctrl, Alt or ⌘ still go by position. Input methods (CJK) are not supported yet. |
 | Shortcuts (`hotkeys.remote-desktop-*`) | ⌘⇧G / Ctrl+Shift+G for the switch; the rest unbound | Tabby's hotkeys: the switch between desktop and console, view only, screenshot, Ctrl+Alt+Del, type into all, paste to all, connection status, disconnect. Changed on the settings page (Getting started › Shortcuts) or in Settings › Hotkeys. |
 | Saved accounts (`accounts`) | None | `[{ id, name, username, domain }]`; see [Saved accounts](#saved-accounts). The passwords are in the Vault (encrypted, part of the config) or the keychain, never in plaintext in the config. |
 | Bring the console along with `desk` (`desk`) | Off | Installs `desk` and a login line on each machine you open a desktop on; applies on the next connection there. |
