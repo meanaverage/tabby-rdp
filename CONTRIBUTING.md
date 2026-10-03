@@ -50,7 +50,13 @@ them; see [ironrdp/README.md](ironrdp/README.md). Fixes that belong upstream sho
 
 ## Releasing
 
-Pushing a tag `v<version>` (matching `version` in package.json) runs [`publish.yml`](.github/workflows/publish.yml),
+**When.** Changes accrue on `main` under an **Unreleased** heading in CHANGELOG.md (the workflow also creates the
+GitHub release from that section once it is titled with the version). A release is cut when there is enough there to
+be worth a user's update — a feature set, or a batch of fixes — not per change. Patch releases between those are for
+security fixes and for bugs that make the plugin unusable; everything else waits. Features gather under the next
+minor version (see the milestones).
+
+**How.** Pushing a tag `v<version>` (matching `version` in package.json) runs [`publish.yml`](.github/workflows/publish.yml),
 which builds the package and **stages** it on npm, with provenance. It goes live once a maintainer approves it: on
 npmjs.com, the package's **Staged Packages** tab › **Approve**, or `npm stage approve <stage-id>` (both need two-factor
 authentication). The workflow publishes `vendor/` as committed in the tagged commit (CI does not rebuild IronRDP), so
