@@ -10,12 +10,23 @@ export interface SSHChannel {
     close (): Promise<void>
 }
 
+/**
+ * What may wait in the stream for its reader. The channel can't be told to slow down (russh hands the data over as
+ * it arrives), so a reader that has stopped for good would otherwise have the whole of what the server sends pile up
+ * here.
+ */
+const MAX_PENDING = 64 * 1024 * 1024
+
 /** Node Duplex over an SSH channel, so tls.connect() can run on top of it. */
 export class SSHChannelStream extends Duplex {
     constructor (private channel: SSHChannel) {
         super()
         channel.data$.subscribe({
-            next: d => this.push(Buffer.from(d.buffer, d.byteOffset, d.byteLength)),
+            next: d => {
+                if (!this.push(Buffer.from(d.buffer, d.byteOffset, d.byteLength)) && this.readableLength > MAX_PENDING) {
+                    this.destroy(new Error('the desktop\'s data isn\'t being read: connection closed'))
+                }
+            },
             error: e => this.destroy(e instanceof Error ? e : new Error(String(e))),
         })
         channel.eof$.subscribe(() => this.push(null))

@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: meanaverage <18336095+meanaverage@users.noreply.github.com>
 Date: Sat, 26 Sep 2026 09:52:41 -0700
-Subject: [PATCH 03/16] fix(web): dispatch the ready event after clipboard
+Subject: [PATCH 03/17] fix(web): dispatch the ready event after clipboard
  initialization
 
 `ready` was dispatched at the end of canvas initialization, before

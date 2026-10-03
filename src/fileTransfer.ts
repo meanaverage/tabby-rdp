@@ -91,6 +91,57 @@ function entriesFor (paths: string[]): any[] {
     return entries
 }
 
+/** On a download's result: the temporary file holding it (see DiskStorage). */
+const DISK_PATH = Symbol('tabby-rdp download')
+
+/**
+ * Where downloads are kept while they arrive (IronRDP's FileStorageBackend): a file each in a private temporary
+ * folder, written chunk by chunk, so a large file takes its size on disk rather than twice that in memory. The
+ * result handed back is an empty Blob that names the file; saveAll moves it into place.
+ */
+export class DiskStorage {
+    readonly name = 'disk'
+    private dir: Promise<string> | null = null
+    private count = 0
+
+    async createWriteHandle (_fileName: string, _expectedSize: number): Promise<any> {
+        this.dir ??= fs.promises.mkdtemp(path.join(os.tmpdir(), 'tabby-rdp-'))  // 0700, a name nobody could prepare
+        const file = path.join(await this.dir, String(++this.count))
+        const handle = await fs.promises.open(file, 'wx', 0o600)
+        let bytesWritten = 0
+        let open = true
+        const close = async () => {
+            if (open) {
+                open = false
+                await handle.close()
+            }
+        }
+        return {
+            get bytesWritten () { return bytesWritten },
+            async write (chunk: Uint8Array) {
+                await handle.appendFile(chunk)
+                bytesWritten += chunk.length
+            },
+            async finalize () {
+                await close()
+                return Object.assign(new Blob([]), { [DISK_PATH]: file })
+            },
+            async abort () {
+                await close().catch(() => null)
+                await fs.promises.rm(file, { force: true })
+            },
+        }
+    }
+
+    async dispose (): Promise<void> {
+        const dir = this.dir
+        this.dir = null
+        if (dir) {
+            await dir.then(d => fs.promises.rm(d, { recursive: true, force: true }), () => null)
+        }
+    }
+}
+
 /** A file the remote offers (IronRDP's FileInfo). */
 interface RemoteFile {
     name: string
@@ -129,9 +180,15 @@ export class FileTransfer {
     private pendingPaste: string | null = null
     /** Resolves when the remote has taken in the files last offered (its Format List Response): true if it accepted them. */
     private offerTaken: Promise<boolean> | null = null
+    /**
+     * Takes the overlay's drop listeners off again: the overlay outlives this (a reconnect makes a new FileTransfer
+     * on it). With removeEventListener, not an AbortSignal: zone.js keeps one native listener per event and its own
+     * list of handlers, and a signal removes the native one behind its back, so the next handlers never get attached.
+     */
+    private readonly stopListening: (() => void)[] = []
 
     constructor (rdp: any, private overlay: HTMLElement, private log: (msg: string) => void) {
-        this.provider = new rdp.RdpFileTransferProvider({ storageBackend: 'blob' })
+        this.provider = new rdp.RdpFileTransferProvider({ storageBackend: new DiskStorage() })
         this.provider.on('files-available', (files: RemoteFile[]) => this.offer(files))
         this.provider.on('error', (e: any) => {
             this.log(`files: ${e?.message ?? JSON.stringify(e)}`)
@@ -140,26 +197,33 @@ export class FileTransfer {
 
         // Drop files on the desktop to send them. Handled here so Tabby doesn't paste their paths into
         // the console under the desktop.
-        overlay.addEventListener('dragover', event => {
+        const listen = (type: 'dragover' | 'dragleave' | 'drop', handler: (event: DragEvent) => void, capture = false) => {
+            overlay.addEventListener(type, handler, capture)
+            this.stopListening.push(() => overlay.removeEventListener(type, handler, capture))
+        }
+        listen('dragover', event => {
             if (event.dataTransfer?.types.includes('Files')) {
                 event.preventDefault()
                 event.stopPropagation()
                 overlay.classList.add('trd-drop-target')
             }
         })
-        overlay.addEventListener('dragleave', event => {
+        listen('dragleave', event => {
             if (!overlay.contains(event.relatedTarget as Node)) {
                 overlay.classList.remove('trd-drop-target')
             }
         })
-        overlay.addEventListener('drop', event => {
+        listen('drop', event => {
             overlay.classList.remove('trd-drop-target')
             if (!event.dataTransfer?.types.includes('Files')) {
                 return
             }
             event.preventDefault()
             event.stopPropagation()
-            this.provider.handleDrop(event).then((dropped: any[]) => this.send(dropped), (e: any) => this.toast(`Couldn't read the dropped files: ${e?.message ?? e}`))
+            this.provider.handleDrop(event).then((dropped: any[]) => this.send(dropped), (e: any) => {
+                this.log(`files: drop: ${e?.message ?? e}`)
+                this.toast(`Couldn't read the dropped files: ${e?.message ?? e}`)
+            })
         }, true)
     }
 
@@ -186,6 +250,7 @@ export class FileTransfer {
                 (e: any) => { this.log(`files: upload: ${e?.message ?? e}`); this.toast(`Copying to the remote desktop failed: ${e?.message ?? e}`) },
             )
         } catch (e: any) {
+            this.log(`files: not offered: ${e?.message ?? e}`)
             this.toast(`Couldn't offer the files: ${e?.message ?? e}`)
             return null
         }
@@ -272,11 +337,9 @@ export class FileTransfer {
                 if (file.isDirectory) {
                     continue
                 }
-                const target = uniquePath(savePath(dir, file.path, file.name))
+                const wanted = savePath(dir, file.path, file.name)
                 const blob: Blob = await this.provider.downloadFile(file, index).completion
-                await fs.promises.mkdir(path.dirname(target), { recursive: true })
-                await fs.promises.writeFile(target, Buffer.from(await blob.arrayBuffer()))
-                saved.push(target)
+                saved.push(await place(dir, wanted, blob))
             }
             this.lastSaved = saved
             this.log(`files: saved ${saved.length}`)
@@ -321,6 +384,8 @@ export class FileTransfer {
     }
 
     dispose (): void {
+        this.stopListening.splice(0).forEach(stop => stop())
+        this.overlay.classList.remove('trd-drop-target')
         clearTimeout(this.toastTimer)
         this.toastEl?.remove()
         try { this.provider.dispose() } catch { }
@@ -346,7 +411,7 @@ export function savePath (dir: string, folder: string | undefined, name: string)
     return target
 }
 
-/** `file.txt`, or `file 2.txt`, `file 3.txt`… if taken. */
+/** `file.txt`, or `file 2.txt`, `file 3.txt`… if taken. For names of the plugin's own choosing (screenshots). */
 export function uniquePath (target: string): string {
     if (!fs.existsSync(target)) {
         return target
@@ -356,6 +421,57 @@ export function uniquePath (target: string): string {
         const candidate = path.join(dir, `${name} ${n}${ext}`)
         if (!fs.existsSync(candidate)) {
             return candidate
+        }
+    }
+}
+
+/**
+ * Makes the folders from `dir` down to `folder` (which savePath put under it), one at a time, and returns the
+ * folder's real path. An existing component may be a link only if it stays inside `dir`: folder names come from the
+ * remote, and a link in Downloads with a matching name would otherwise take the files wherever it points.
+ */
+export async function foldersInside (dir: string, folder: string): Promise<string> {
+    await fs.promises.mkdir(dir, { recursive: true })
+    const root = await fs.promises.realpath(dir)
+    let at = root
+    for (const part of path.relative(path.resolve(dir), folder).split(path.sep).filter(Boolean)) {
+        const next = path.join(at, part)
+        await fs.promises.mkdir(next).catch((e: any) => {
+            if (e?.code !== 'EEXIST') {
+                throw e
+            }
+        })
+        at = await fs.promises.realpath(next)
+        if (at !== root && !at.startsWith(root + path.sep)) {
+            throw new Error(`refused to save through a link that leaves the folder: ${JSON.stringify(part)}`)
+        }
+    }
+    return at
+}
+
+/**
+ * Puts a download at `wanted` under `dir` (or `name 2.ext`, `name 3.ext`… when taken) and returns where it went.
+ * The file is created there and never replaces or follows what exists: a name can be taken, or made a link,
+ * between looking and writing.
+ */
+export async function place (dir: string, wanted: string, blob: Blob): Promise<string> {
+    const folder = await foldersInside(dir, path.dirname(wanted))
+    const { name, ext } = path.parse(wanted)
+    const temporary: string | undefined = (blob as any)[DISK_PATH]
+    for (let n = 1; ; n++) {
+        const target = path.join(folder, n === 1 ? `${name}${ext}` : `${name} ${n}${ext}`)
+        try {
+            if (temporary) {
+                await fs.promises.copyFile(temporary, target, fs.constants.COPYFILE_EXCL)
+                await fs.promises.rm(temporary, { force: true })
+            } else {
+                await fs.promises.writeFile(target, Buffer.from(await blob.arrayBuffer()), { flag: 'wx' })
+            }
+            return target
+        } catch (e: any) {
+            if (e?.code !== 'EEXIST' || n >= 10000) {
+                throw e
+            }
         }
     }
 }

@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: meanaverage <18336095+meanaverage@users.noreply.github.com>
 Date: Wed, 30 Sep 2026 16:48:15 -0700
-Subject: [PATCH 12/16] fix(web): keep clipboard monitoring and focus writes
+Subject: [PATCH 12/17] fix(web): keep clipboard monitoring and focus writes
  per component
 
 The clipboard service stopped its monitoring loop through a module-level

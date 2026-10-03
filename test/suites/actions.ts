@@ -79,7 +79,17 @@ await suite('actions', async t => {
         t.skip('⌃⌘ for the Windows key', 'macOS only')
     }
 
-    // 4. View only.
+    // 4. View only. Keys held when it comes on (a shortcut's own modifiers) are let go on the remote first: their
+    // keyups stop at the plugin from then on.
+    const released = await ev<{ sent: string[], held: number }>(`const s = H.session(H.pane), ui = s.ui, real = ui.sendKeyboardEvent, sent = []
+        ui.sendKeyboardEvent = e => { sent.push(e.type + ' ' + e.code); return real.call(ui, e) }
+        try {
+            RD.desktop.broadcastKey(H.pane, 'keydown', { key: 'Control', code: 'ControlLeft' }); RD.desktop.broadcastKey(H.pane, 'keydown', { key: 'Shift', code: 'ShiftLeft' })
+            RD.desktop.broadcastKey(H.pane, 'keydown', { key: 'a', code: 'KeyA' }); RD.desktop.broadcastKey(H.pane, 'keyup', { key: 'a', code: 'KeyA' })
+            H.inZone(() => RD.desktop.setViewOnly(H.pane, true))
+        } finally { ui.sendKeyboardEvent = real; H.inZone(() => RD.desktop.setViewOnly(H.pane, false)) }
+        return { sent, held: s.keysDown.size }`)
+    check('view only: keys that were down are let go on the remote', released.sent.join() === 'keyup ControlLeft,keyup ShiftLeft' && released.held === 0, released)
     await click(VIEW_ONLY)
     const layer = await ev<{ on: boolean, display: string, label: string, onTop: boolean }>(`const o = H.overlay(H.pane), shield = o.querySelector('.trd-view-only'), cv = H.canvasElement(H.pane).getBoundingClientRect()
         return { on: o.classList.contains('trd-view-only-on'), display: getComputedStyle(shield).display, label: getComputedStyle(shield, '::after').content,

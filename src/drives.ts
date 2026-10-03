@@ -82,7 +82,8 @@ function fail (code: string, message: string): never {
     throw error
 }
 
-const READ_LIMIT = 16 * 1024 * 1024
+/** One read's worth: the server asks for 64 KiB or so; the proxy takes messages up to 32 MiB. */
+const READ_LIMIT = 4 * 1024 * 1024
 
 /**
  * The shared folders as the remote desktop's file system (MS-RDPEFS drive redirection), on Tabby's Node side.
