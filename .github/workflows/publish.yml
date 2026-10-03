@@ -1,7 +1,8 @@
 name: Publish
 
-# Stages a release on npm, with provenance, when a version tag (v1.2.3) is pushed; a maintainer then approves it on
-# npmjs.com (Staged Packages) or with `npm stage approve <id>`, with two-factor authentication, before it goes live.
+# Stages a release on npm, with provenance, when a version tag (v1.2.3) is pushed (a maintainer then approves it on
+# npmjs.com (Staged Packages) or with `npm stage approve <id>`, with two-factor authentication, before it goes live),
+# and creates the GitHub release for the tag from its CHANGELOG.md section.
 # Authenticates by npm trusted publishing (OIDC, no token); see CONTRIBUTING.md for the one-time setup on npmjs.com.
 #
 # vendor/ (IronRDP's build) is committed and published as it is in the tagged commit; CI does not rebuild it.
@@ -38,3 +39,28 @@ jobs:
       - run: npm run build
       # Staged, not live: the trusted publisher is allowed to stage only (npm's recommended setting).
       - run: npm stage publish --provenance --access public
+
+  release:
+    name: GitHub release from the changelog
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # creates the release for the tag
+    steps:
+      - uses: actions/checkout@v4
+      # The tag's section of CHANGELOG.md (## 1.2.3 up to the next ## heading) becomes the release notes, with the
+      # install line the earlier releases carry; "What's new" in the plugin opens this page.
+      - name: Release notes
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          {
+            printf '**Install or update:** Tabby › Settings › Plugins › tabby-rdp, or `npm install tabby-rdp@%s` in Tabby'"'"'s plugin folder. Restart Tabby afterwards.\n\n\n' "$version"
+            awk -v v="## $version" '$0 == v { on = 1; next } /^## / && on { exit } on' CHANGELOG.md | awk 'NF || started { started = 1; print }'
+          } > notes.md
+          if [ "$(wc -l < notes.md)" -lt 4 ]; then
+            echo "CHANGELOG.md has no section '## $version'" >&2
+            exit 1
+          fi
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" --title "${GITHUB_REF_NAME#v}" --latest --notes-file notes.md
