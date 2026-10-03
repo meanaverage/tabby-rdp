@@ -7,7 +7,7 @@ import { createRequire } from 'node:module'
 import { Duplex } from 'node:stream'
 
 const require = createRequire(import.meta.url)
-const { startRDCleanPathProxy, preconnectionPdu } = require('../../dist/rdcleanpath.js')
+const { startRDCleanPathProxy, preconnectionPdu, offersNla } = require('../../dist/rdcleanpath.js')
 const WebSocket = require('ws')
 
 const der = (tag: number, content: Buffer) => {
@@ -195,4 +195,85 @@ test('a request with neither an X.224 request nor a blob is refused', async () =
     assert.equal(proxy.failure, 'malformed request')
     assert.equal(upstream.streams.length, 0)
     proxy.close()
+})
+
+/** A server's answer to the connection request: a confirm choosing this security protocol (or refusing, `failure`). */
+const confirm = (selected: number, failure = false) => Buffer.from([3, 0, 0, 19, 14, 0xd0, 0, 0, 0x12, 0x34, 0, failure ? 3 : 2, 0, 8, 0, selected, 0, 0, 0])
+
+/** An upstream that answers the connection request with `answer`, and keeps what it was sent. */
+function answeringUpstream (answer: Buffer): { open: () => Promise<Duplex>, sent: Buffer[] } {
+    const sent: Buffer[] = []
+    return {
+        sent,
+        open: async () => {
+            const stream: Duplex = new Duplex({
+                read () { },
+                write (chunk, _encoding, done) {
+                    if (!sent.length) {
+                        stream.push(answer)
+                    }
+                    sent.push(Buffer.from(chunk))
+                    done()
+                },
+            })
+            return stream
+        },
+    }
+}
+
+test('Network Level Authentication: what the server chose', () => {
+    assert.equal(offersNla(confirm(2)), true)    // CredSSP
+    assert.equal(offersNla(confirm(8)), true)    // CredSSP with early user authorization
+    assert.equal(offersNla(confirm(1)), false)   // TLS alone: the password would go in the Client Info PDU
+    assert.equal(offersNla(confirm(0)), false)   // standard RDP security
+    assert.equal(offersNla(confirm(2, true)), false)  // a refusal whose code happens to be 2
+    assert.equal(offersNla(Buffer.from([3, 0, 0, 11, 6, 0xd0, 0, 0, 0, 0, 0])), false)  // no negotiation response at all
+})
+
+test('a server without Network Level Authentication: asked about before anything more goes to it', async () => {
+    // Refused: the server got the connection request and nothing else, and the client hears a failure.
+    const refusedUpstream = answeringUpstream(confirm(1))
+    const log: string[] = []
+    let asked = 0
+    const refusing = await startRDCleanPathProxy(refusedUpstream.open, () => { }, (m: string) => log.push(m), {
+        withoutNla: () => { asked++; throw new Error('the server doesn\'t use Network Level Authentication') },
+    })
+    const ws = new WebSocket(refusing.url)
+    ws.on('error', () => { })
+    await opened(ws)
+    const gone = closed(ws)
+    ws.send(request(refusing.token))
+    await gone
+    assert.equal(asked, 1)
+    assert.equal(Buffer.concat(refusedUpstream.sent).length, 11, 'only the connection request went to the server')
+    assert.match(refusing.failure ?? '', /Network Level Authentication/)
+    refusing.close()
+
+    // Allowed: TLS follows.
+    const allowedUpstream = answeringUpstream(confirm(1))
+    const allowing = await startRDCleanPathProxy(allowedUpstream.open, () => { }, () => { }, { withoutNla: () => { asked++ } })
+    const ws2 = new WebSocket(allowing.url)
+    ws2.on('error', () => { })
+    await opened(ws2)
+    ws2.send(request(allowing.token))
+    for (let i = 0; i < 40 && allowedUpstream.sent.length < 2; i++) {
+        await soon(25)
+    }
+    assert.equal(asked, 2)
+    assert.equal(allowedUpstream.sent[1]?.[0], 0x16, 'a TLS handshake follows')
+    allowing.close()
+
+    // A server that chose it isn't asked about.
+    const nlaUpstream = answeringUpstream(confirm(2))
+    const plain = await startRDCleanPathProxy(nlaUpstream.open, () => { }, () => { }, { withoutNla: () => { asked++ } })
+    const ws3 = new WebSocket(plain.url)
+    ws3.on('error', () => { })
+    await opened(ws3)
+    ws3.send(request(plain.token))
+    for (let i = 0; i < 40 && nlaUpstream.sent.length < 2; i++) {
+        await soon(25)
+    }
+    assert.equal(asked, 2)
+    assert.equal(nlaUpstream.sent[1]?.[0], 0x16)
+    plain.close()
 })

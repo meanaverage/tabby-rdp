@@ -177,6 +177,24 @@ await suite('profiles', async t => {
         await new Promise(r => setTimeout(r, 500))
         H.opened.push(...H.panes().filter(p => !before.has(p)))
         return { profile: profile && JSON.parse(JSON.stringify(profile)), count: H.config.store.profiles.filter(p => p.type === 'rdp' && p.name === 'Imported (test)').length }`)
+    // Importing asks first, saying where the file leads: stood in for here, with the answer each step gives.
+    await ev(`const p = RD.injector.get(require('tabby-core').PlatformService); H.origBox = p.showMessageBox; H.answer = 2
+        p.showMessageBox = async o => { H.box = o; return { response: H.answer } }`)
+    t.onCleanup(() => ev(`const p = RD.injector.get(require('tabby-core').PlatformService); if (H.origBox) p.showMessageBox = H.origBox`))
+    const cancelled = await importOnce()
+    const box = await ev<{ message: string, detail: string, buttons: string[] } | null>('return H.box ? { message: H.box.message, detail: H.box.detail, buttons: H.box.buttons } : null')
+    check('import: asks first, naming the file, the address and the account it leads to', /Imported \(test\)\.rdp/.test(box?.message ?? '') && !!box?.detail.includes(`${host}:3389`) && /as tabby/.test(box.detail) &&
+        box.buttons.join() === 'Add and connect,Add only,Cancel', box)
+    check('import: Cancel adds nothing', cancelled.profile === null && cancelled.count === 0, cancelled)
+    const throughGateway = await ev<string>(`H.box = null; await H.inZone(() => RD.desktop.importRdp(Buffer.from('full address:s:pc.example\\ngatewayhostname:s:gw.example\\ngatewayusagemethod:i:1\\n'), 'gw.rdp')); return H.box?.detail ?? ''`)
+    check('import: a file with a gateway names it too', /pc\.example:3389, through the gateway gw\.example/.test(throughGateway) && /that gateway/.test(throughGateway), throughGateway)
+    await ev('H.answer = 1')
+    const only = await ev<{ added: boolean, tab: boolean }>(`const before = new Set(H.panes())
+        const profile = await H.inZone(() => RD.desktop.importRdp(Buffer.from('full address:s:pc.example\\nusername:s:nobody\\n'), 'Added only (test).rdp'))
+        await new Promise(r => setTimeout(r, 500))
+        return { added: !!profile && H.config.store.profiles.some(p => p.type === 'rdp' && p.name === 'Added only (test)'), tab: H.panes().some(p => !before.has(p)) }`)
+    check('import: "Add only" adds the profile without connecting', only.added && !only.tab, only)
+    await ev('H.answer = 0')
     const imported = await importOnce()
     check('import: a profile named after the file, with the address and user name', imported.count === 1 && imported.profile?.type === 'rdp' && imported.profile.options.host === host &&
         imported.profile.options.port === 3389 && imported.profile.options.username === 'tabby' && !imported.profile.options.via, imported)

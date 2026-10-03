@@ -977,7 +977,9 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
         list.replaceChildren(...entries.map(({ desktop, sha256 }) => {
             const [who, address] = desktop.includes('#') ? desktop.split('#', 2) : [desktop, '']
             const title = address ? who === 'gateway' ? `The gateway ${esc(address)}` : who === DIRECT_KEY ? `${esc(address)} (direct)` : `${esc(address)} behind ${esc(who)}` : esc(who)
-            return this.row(title, `SHA-256 ${esc(sha256.slice(0, 23))}…`, [
+            // What else was decided about that server is said here, and forgotten with the certificate.
+            const plain = this.desktop.signsInWithoutNla(desktop) ? '<br>Signs in without Network Level Authentication' : ''
+            return this.row(title, `SHA-256 ${esc(sha256.slice(0, 23))}…${plain}`, [
                 { label: 'Forget', run: () => this.desktop.forgetCertificate(desktop) },
             ])
         }), this.empty(entries.length
