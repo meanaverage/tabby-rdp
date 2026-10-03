@@ -18,6 +18,16 @@
   Manager's Connect does: no network or Remote Desktop needed in the VM. A Windows guest that is up gets an enhanced
   session; otherwise it is the basic console. The sign-in is the host's, asked once per host; an account the host
   signs in but doesn't let open the console (it ends the connection at once) brings the form back, saying so.
+- **RD Gateway** ([#29](https://github.com/meanaverage/tabby-rdp/issues/29)): a remote desktop profile, or a desktop
+  behind an SSH host, can name a Remote Desktop Gateway (**RD Gateway**: `rdgw.example.com`, or `host:port`). The
+  connection then goes to the gateway over HTTPS (its WebSocket transport, Windows Server 2012 R2 and later), signs in
+  there with a user name and password, and is connected on to the desktop, whose address is as the gateway sees it.
+  The desktop's sign-in is the gateway's too unless the profile picks a saved account for the gateway. A sign-in the
+  gateway refuses brings the form back saying it was the gateway, before anything goes to the desktop; a desktop its
+  policy doesn't allow, or that it can't reach, is an error saying which. The gateway's certificate is accepted when
+  valid for its name and otherwise remembered on first use; a changed one stops the connection until it is trusted.
+  The sign-in (NTLMv2) is bound to the gateway's TLS certificate, which gateways require by default. Smart cards,
+  sign-in pages and one-time codes at the gateway aren't supported.
 - IronRDP's web client gains drive redirection (MS-RDPEFS) through a JavaScript file system (patch 15), and its
   static channels send multi-chunk messages Windows accepts (patch 16): a response over 1600 bytes was flagged for the
   receiver to keep the channel header, which Windows' drive redirector didn't expect and dropped the channel on.
