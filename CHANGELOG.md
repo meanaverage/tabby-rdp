@@ -55,6 +55,13 @@
 - **H.264: small changes far apart** (a clock in one corner, a cursor in another) read back everything between them:
   33 MB for a 4K picture to get a few pixels. Regions far apart are read one by one (IronRDP patch 17).
 
+**Also fixed**
+- **Linux without an unlocked keyring: Tabby could stop opening connections.** A keychain call there never returns
+  and keeps one of Node's four worker threads waiting. The plugin gave the keychain up after the first such call, but
+  calls started together (the settings page asking whether each saved account has a password, a desktop signing in
+  meanwhile) each kept a thread first, and with all four taken, Tabby's file access and name lookups waited forever:
+  a new SSH tab stayed at "Connecting". Keychain calls now go one at a time, so at most one thread is ever kept.
+
 ## 0.4.1
 
 Fixes from a review of 0.4.0.
