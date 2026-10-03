@@ -4,6 +4,7 @@ import { AppService, ConfigService, NotificationsService, PlatformService, Profi
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
+import { Duplex } from 'stream'
 import { pathToFileURL } from 'url'
 import { DesktopPane, desktopPaneOf, isRDPTab, RDP_PROFILE_TYPE, RemoteTarget, RemoteTargets } from './targets'
 import { consoleScript, DeskRequest, MACHINE_ID_COMMAND } from './deskScript'
@@ -26,7 +27,9 @@ import {
     storeName, STYLE as SIGNIN_STYLE,
 } from './signin'
 import { isSSHTab } from './ssh'
-import { rdpAnswers, shutDownWhenIdle, waitForRdp, wakeDesktop } from './wake'
+import { desktopUp, shutDownWhenIdle, waitForRdp, wakeDesktop } from './wake'
+import { hyperVState } from './hyperv'
+import { Gateway, GatewaySignInError, openThroughGateway, parseGateway } from './gateway'
 import { scanVMs, vmSpec } from './vms'
 
 /** How long a desktop that was started (`wake`) gets to answer. */
@@ -106,6 +109,21 @@ interface Endpoint {
     domain?: string
     /** The host's own desktop: the fingerprint of the certificate its setup made, the only one to accept. */
     certificate?: string
+    /** A Hyper-V VM's console: the kind of session the guest takes right now (see hyperv.ts). */
+    hyperv?: 'enhanced' | 'basic'
+    /** The desktop's RD Gateway takes a saved account of its own: that sign-in (see gatewayAccountFor). */
+    gatewayAccount?: GatewaySignIn
+}
+
+/** A saved account's sign-in to an RD Gateway, where that isn't the desktop's own. */
+interface GatewaySignIn {
+    credentials: Credentials
+    domain?: string
+    /** Entered just now, to be kept as the account's password once the gateway takes it. */
+    remember: boolean
+    saveKey: string
+    saveLabel: string
+    saveFor: string
 }
 
 /** A server certificate the proxy refused (see checkCertificate). */
@@ -115,6 +133,8 @@ interface CertificateProblem {
     actual: string
     /** The host's own desktop: its certificate is the plugin's, so a different one is never to be accepted. */
     pinned: boolean
+    /** The desktop's RD Gateway's certificate rather than the desktop's: the gateway's address, and what it is remembered under. */
+    gateway?: { address: string, key: string }
 }
 
 /** A SHA-256 fingerprint on two lines of 16 bytes, so it fits a narrow pane. */
@@ -240,6 +260,8 @@ class DesktopSession {
     pinnedCertificate: string | null = null
     /** Set when the proxy refused the server's certificate on the current connection attempt. */
     certificateProblem: CertificateProblem | null = null
+    /** Set when the desktop's RD Gateway refused the sign-in on the current connection attempt: what it said. */
+    gatewayRefused: string | null = null
     /** The connection-status indicator, made the first time it shows. */
     indicator: ConnectionStatus | null = null
     /** How the pictures come (for the indicator): the graphics pipeline, bitmaps, or IronRDP's choice. */
@@ -249,6 +271,14 @@ class DesktopSession {
     /** Resolves when the session is disposed (ends a pending sign-in). */
     readonly disposed: Promise<void>
     private markDisposed!: () => void
+
+    /**
+     * What a sign-in and a certificate are remembered under: the desktop; for a Hyper-V VM, its host, whose account
+     * and certificate they are, the same for all of its VMs.
+     */
+    get authKey (): string {
+        return this.spec.hyperv ? this.key.replace(/#hyperv:[^#]*$/, '#hyperv') : this.key
+    }
 
     /** `key`: see sessionKey(); one desktop per key. */
     constructor (container: HTMLElement, readonly key: string, readonly spec: DesktopSpec) {
@@ -521,7 +551,7 @@ export class RemoteDesktopService {
     async signInAgain (pane: DesktopPane): Promise<void> {
         const session = this.sessions.get(pane)
         if (session && this.signsIn(session.spec)) {
-            await forgetCredentials(session.key)
+            await forgetCredentials(session.authKey)
             // With a saved account, the form asks for its password anew (the saved one stays until then).
             this.askAgain.add(pane)
             await this.reopen(pane, session.spec)
@@ -547,8 +577,8 @@ export class RemoteDesktopService {
         return [...specs, ...found.filter(f => !specs.some(s => s.id === f.id))]
     }
 
-    /** VMs found on SSH hosts (see vms.ts), by target key: when, and as desktops. */
-    private vms = new Map<string, { at: number, specs: DesktopSpec[], scan?: Promise<void> }>()
+    /** VMs found on SSH hosts (see vms.ts), by target key: when, and as desktops; and what the scans learnt of the host. */
+    private vms = new Map<string, { at: number, specs: DesktopSpec[], scan?: Promise<void>, host: { windows?: boolean } }>()
 
     /**
      * Looks for VMs with a desktop on the host (libvirt), unless it did in the last minute or the setting is off.
@@ -565,13 +595,15 @@ export class RemoteDesktopService {
         if (known && Date.now() - known.at < 60000) {
             return Promise.resolve()
         }
-        const scan = scanVMs(target).then(found => {
-            this.vms.set(target.key, { at: Date.now(), specs: found.map(vmSpec) })
+        const host = known?.host ?? { windows: this.ownDesktops.get(target.key)?.kind === 'windows' || undefined }
+        const scan = scanVMs(target, host).then(found => {
+            this.vms.set(target.key, { at: Date.now(), specs: found.map(vmSpec), host })
             this.changed$.next()
         }, () => {
-            this.vms.set(target.key, { at: Date.now(), specs: known?.specs ?? [] })
+            // Not asked, rather than nothing found (the connection wasn't up yet, say): the next look asks again.
+            this.vms.set(target.key, { at: known?.at ?? 0, specs: known?.specs ?? [], host })
         })
-        this.vms.set(target.key, { at: known?.at ?? 0, specs: known?.specs ?? [], scan })
+        this.vms.set(target.key, { at: known?.at ?? 0, specs: known?.specs ?? [], scan, host })
         return scan
     }
 
@@ -582,7 +614,8 @@ export class RemoteDesktopService {
         if (!session?.remote || !spec?.found) {
             return
         }
-        const entry = { name: spec.name, via: session.remote.label, host: spec.host, port: spec.port, kind: spec.kind, ...spec.wake ? { wake: spec.wake } : {} }
+        const entry = spec.hyperv ? { name: spec.name, via: session.remote.label, hyperv: spec.hyperv }
+            : { name: spec.name, via: session.remote.label, host: spec.host, port: spec.port, kind: spec.kind, ...spec.wake ? { wake: spec.wake } : {} }
         this.config.store.remoteDesktop.desktops = [...this.configuredDesktops(), entry]
         this.config.save()
         this.changed$.next()
@@ -628,15 +661,16 @@ export class RemoteDesktopService {
     }
 
     /**
-     * The desktops that sign in with a saved account: configured ones behind SSH hosts, and RDP profiles (their own
-     * choice, or their profile group's default when they make none). Each comes with what opens its editor.
+     * The desktops that sign in with a saved account, or sign in to their RD Gateway with it: configured ones behind
+     * SSH hosts, and RDP profiles (their own choice, or their profile group's default when they make none). Each comes
+     * with what opens its editor.
      */
     accountUses (id: string): { name: string, profileId?: string, desktopIndex?: number }[] {
-        const desktops = this.configuredDesktops().flatMap((d, i) => d.account === id ? [{ name: String(d.name ?? desktopIdOf(d)), desktopIndex: i }] : [])
+        const desktops = this.configuredDesktops().flatMap((d, i) => d.account === id || d.gatewayAccount === id ? [{ name: String(d.name ?? desktopIdOf(d)), desktopIndex: i }] : [])
         const groups: any[] = this.config.store.groups ?? []
         const inherited = (p: any) => p.options?.account === undefined && groups.find(g => g.id === p.group)?.defaults?.[RDP_PROFILE_TYPE]?.options?.account === id
         const profiles = (this.config.store.profiles ?? [])
-            .filter((p: any) => p?.type === RDP_PROFILE_TYPE && (p.options?.account === id || inherited(p)))
+            .filter((p: any) => p?.type === RDP_PROFILE_TYPE && (p.options?.account === id || p.options?.gatewayAccount === id || inherited(p)))
             .map((p: any) => ({ name: String(p.name ?? p.options?.host ?? ''), profileId: p.id ? String(p.id) : undefined }))
         return [...desktops, ...profiles]
     }
@@ -724,18 +758,25 @@ export class RemoteDesktopService {
     async removeAccount (id: string): Promise<void> {
         const store = this.config.store.remoteDesktop
         store.accounts = this.accounts().filter(a => a.id !== id)
-        if (this.configuredDesktops().some(d => d.account === id)) {
+        if (this.configuredDesktops().some(d => d.account === id || d.gatewayAccount === id)) {
             store.desktops = this.configuredDesktops().map(d => {
-                if (d.account !== id) {
-                    return d
+                const rest = { ...d }
+                if (rest.account === id) {
+                    delete rest.account
                 }
-                const { account: _account, ...rest } = d
+                // A gateway that signed in with it takes the desktop's sign-in from now on.
+                if (rest.gatewayAccount === id) {
+                    delete rest.gatewayAccount
+                }
                 return rest
             })
         }
         for (const profile of this.config.store.profiles ?? []) {
             if (profile?.type === RDP_PROFILE_TYPE && profile.options?.account === id) {
                 profile.options.account = ''
+            }
+            if (profile?.type === RDP_PROFILE_TYPE && profile.options?.gatewayAccount === id) {
+                profile.options.gatewayAccount = ''
             }
         }
         // A profile group's default for remote desktop profiles, too.
@@ -932,7 +973,8 @@ export class RemoteDesktopService {
             return null
         }
         const existing = (this.config.store.profiles ?? []).find((p: any) => p?.type === RDP_PROFILE_TYPE && !p.options?.via &&
-            p.options?.host === parsed.host && (p.options.port || 3389) === parsed.port && (p.options.username ?? '') === (parsed.username ?? ''))
+            p.options?.host === parsed.host && (p.options.port || 3389) === parsed.port && (p.options.username ?? '') === (parsed.username ?? '') &&
+            (p.options.gateway ?? '') === (parsed.gateway ?? ''))
         if (existing) {
             this.notifications.info(`Opening "${existing.name}", which is already a profile for ${fileName}`)
             await this.profiles.openNewTabForProfile(existing)
@@ -943,11 +985,21 @@ export class RemoteDesktopService {
             name: fileName.replace(/^.*[\\/]/, '').replace(/\.rdp$/i, '') || parsed.host,
             icon: 'fas fa-desktop',
             group: await this.remoteDesktopGroup(),
-            options: { host: parsed.host, port: parsed.port, kind: 'windows', username: parsed.username ?? '', domain: parsed.domain ?? '', via: '' },
+            options: { host: parsed.host, port: parsed.port, kind: 'windows', username: parsed.username ?? '', domain: parsed.domain ?? '', via: '', gateway: parsed.gateway ?? '', gatewayAccount: '' },
         }
         await this.profiles.newProfile(profile)
+        // The file's display scale, as this desktop's own sharpness (the key a direct desktop's settings are kept by).
+        if (parsed.sharpness) {
+            const store = this.config.store.remoteDesktop
+            const key = `${DIRECT_KEY}#${desktopIdOf(profile.options)}`
+            store.desktopSharpness = [...(Array.isArray(store.desktopSharpness) ? store.desktopSharpness : []).filter((e: any) => e?.desktop !== key), { desktop: key, sharpness: parsed.sharpness }]
+        }
         this.config.save()
         this.notifications.notice(`Added the remote desktop profile "${profile.name}" (Settings › Profiles & connections)`)
+        if (parsed.ignored.length) {
+            // What the file asked for beyond that, so nobody wonders why the desktop doesn't behave as in mstsc.
+            this.notifications.info(`${fileName} also asks for ${parsed.ignored.join('; ')}. Not applied.`)
+        }
         await this.profiles.openNewTabForProfile(profile)
         return profile
     }
@@ -1828,6 +1880,20 @@ export class RemoteDesktopService {
             spec.port = endpoint.port
             spec.username ??= endpoint.username
         }
+        // A Hyper-V VM's console: which session the guest takes right now (enhanced once its Remote Desktop Services
+        // are up, the basic console before that and for guests that have none). The sign-in is the host's.
+        let hyperv: Endpoint['hyperv']
+        if (spec.hyperv) {
+            session.status(`Connecting to ${spec.name} via ${target.label}…`)
+            const state = await hyperVState(target, spec.hyperv)
+            if (!state.running) {
+                throw new Error(`${spec.name} isn't running`)
+            }
+            hyperv = state.enhanced ? 'enhanced' : 'basic'
+            session.log.push(`hyper-v: ${hyperv === 'enhanced' ? 'an enhanced session' : 'the basic console (the guest takes no enhanced session now)'}`)
+            // The SSH user is who to try first: it got to list the VMs.
+            spec.username ??= target.key.replace(/@[^@]*$/, '') || undefined
+        }
         // A saved account (Settings): its user name, and its password from the keychain. One that has none yet, or that
         // this desktop just refused, is asked for here and saved for every desktop that uses the account.
         const account = spec.account ? this.accounts().find(a => a.id === spec.account) : undefined
@@ -1836,7 +1902,7 @@ export class RemoteDesktopService {
         }
         const again = this.askAgain.delete(pane)
         // A desktop whose account is gone asks, rather than falling back to a login of its own saved earlier.
-        let saved = retryError || again || spec.account && !account ? null : await loadCredentials(account ? accountKey(account.id) : session.key)
+        let saved = retryError || again || spec.account && !account ? null : await loadCredentials(account ? accountKey(account.id) : session.authKey)
         if (saved && account && saved.username !== signInName(account)) {
             // Kept for an earlier user name of the account (its change didn't reach the store): not this one's.
             session.log.push(`sign-in: the account's saved password is for ${saved.username}, not ${signInName(account)}; asking`)
@@ -1846,12 +1912,13 @@ export class RemoteDesktopService {
             if (account) {
                 session.log.push(`sign-in: the saved account "${account.name}"`)
             }
-            return { host: spec.host, port: spec.port, credentials: account ? { username: signInName(account), password: saved.password } : saved, remember: false, domain: account ? account.domain ?? '' : undefined }
+            return { host: spec.host, port: spec.port, credentials: account ? { username: signInName(account), password: saved.password } : saved, remember: false, domain: account ? account.domain ?? '' : undefined, hyperv }
         }
         session.status('')
         const asked = askCredentials(session.overlay, {
             // The host's own desktops (its own, or its xrdp besides GNOME) and direct ones need no "via".
-            title: spec.id === OWN_DESKTOP || target.direct || spec.kind === 'xrdp' && spec.host === '127.0.0.1' ? `Sign in to ${spec.name}` : `Sign in to ${spec.name} (via ${target.label})`,
+            title: spec.hyperv ? `Sign in to ${target.label}, to open ${spec.name}`
+                : spec.id === OWN_DESKTOP || target.direct || spec.kind === 'xrdp' && spec.host === '127.0.0.1' ? `Sign in to ${spec.name}` : `Sign in to ${spec.name} (via ${target.label})`,
             username: account ? signInName(account) : spec.username,
             error: retryError,
             canRemember: true,
@@ -1864,6 +1931,7 @@ export class RemoteDesktopService {
         return entered && {
             host: spec.host, port: spec.port, credentials: entered, remember: entered.remember, domain: account ? account.domain ?? '' : undefined,
             saveKey: account && accountKey(account.id), saveLabel: account && `saved account ${account.name}`, saveFor: account && signInName(account),
+            hyperv,
         }
     }
 
@@ -1876,7 +1944,12 @@ export class RemoteDesktopService {
         let woken = false
         let startupRetries = 0
         let endpoint: Endpoint | null = null
+        let gatewayError: string | undefined
         try {
+            const gateway = spec.gateway ? parseGateway(spec.gateway) : null
+            if (spec.gateway && !gateway) {
+                throw new Error(`"${spec.gateway}" isn't a gateway's address (a name or address, or name:port)`)
+            }
             if (spec.wake) {
                 const woke = await this.wakeIfDown(pane, target, spec, session, automatic)
                 if (woke === null) {
@@ -1907,8 +1980,24 @@ export class RemoteDesktopService {
                 endpoint = asked
                 session.remote = target
                 session.pinnedCertificate = asked.certificate ?? null
+                // A gateway with a saved account of its own: its password, asked for when there is none or it was refused.
+                if (gateway && spec.gatewayAccount && !asked.gatewayAccount) {
+                    const signIn = await this.gatewayAccountFor(spec, session, gateway, gatewayError)
+                    if (!alive()) {
+                        return
+                    }
+                    if (signIn === null) {
+                        session.state = 'ended'
+                        this.changed$.next()
+                        this.cancelReconnect(pane)
+                        session.status('Sign-in cancelled.', [{ label: 'Sign in', run: () => this.reopen(pane, spec) }])
+                        return
+                    }
+                    asked.gatewayAccount = signIn
+                }
+                // The proxy outlives an attempt: it reads the sign-in of the attempt it serves.
                 session.proxy ??= await startRDCleanPathProxy(
-                    () => target.openTcp(asked.host, asked.port),
+                    () => gateway ? this.throughGateway(target, spec, session, gateway, endpoint!) : target.openTcp(asked.host, asked.port),
                     fingerprint => this.checkCertificate(session, fingerprint),
                     m => session.log.push(m),
                     { autologon: spec.kind === 'xrdp' })
@@ -1920,10 +2009,16 @@ export class RemoteDesktopService {
                     }
                     return
                 }
+                if (outcome.gatewayRefused && asked.gatewayAccount && attempt < 5 && alive()) {
+                    // The gateway's own account was refused: asked for again, the desktop's sign-in kept.
+                    gatewayError = outcome.signInFailed
+                    asked.gatewayAccount = undefined
+                    continue
+                }
                 if (outcome.signInFailed && this.signsIn(spec) && attempt < 5 && alive()) {
                     // The desktop's own saved account goes. A shared one stays until a new password is entered: this
                     // desktop refusing it doesn't make it wrong for the others.
-                    await forgetCredentials(session.key)
+                    await forgetCredentials(session.authKey)
                     retryError = outcome.signInFailed
                     endpoint = null
                     continue
@@ -1961,6 +2056,98 @@ export class RemoteDesktopService {
     }
 
     /**
+     * The sign-in to a desktop's RD Gateway with the saved account it names: the account's password from the keychain,
+     * or asked for (when none is saved, or `retryError`: the gateway just refused it). Undefined when that account no
+     * longer exists (the desktop's own sign-in is then tried); null when the form was cancelled.
+     */
+    private async gatewayAccountFor (spec: DesktopSpec, session: DesktopSession, gateway: Gateway, retryError?: string): Promise<GatewaySignIn | undefined | null> {
+        const account = this.accounts().find(a => a.id === spec.gatewayAccount)
+        if (!account) {
+            session.log.push('gateway: its saved account no longer exists; signing in with the desktop\'s')
+            return undefined
+        }
+        const signIn = { domain: account.domain, saveKey: accountKey(account.id), saveLabel: `saved account ${account.name}`, saveFor: signInName(account) }
+        const saved = retryError ? null : await loadCredentials(signIn.saveKey)
+        if (saved && saved.username === signInName(account)) {
+            session.log.push(`gateway: the saved account "${account.name}"`)
+            return { ...signIn, credentials: { username: signInName(account), password: saved.password }, remember: false }
+        }
+        session.status('')
+        const asked = askCredentials(session.overlay, {
+            title: `Sign in to the gateway ${gateway.host}, to reach ${spec.name}`,
+            username: signInName(account),
+            error: retryError,
+            canRemember: true,
+            account: account.name,
+        }, session.disposed)
+        if (session.visible) {
+            setTimeout(() => session.visible && session.focusDesktop())
+        }
+        const entered = await asked
+        return entered && { ...signIn, credentials: entered, remember: entered.remember }
+    }
+
+    /**
+     * The proxy's stream to a desktop behind an RD Gateway (see gateway.ts): to the gateway as the SSH host (or this
+     * computer) reaches it, signed in with the gateway's own account or else the desktop's, then on to the desktop.
+     */
+    private async throughGateway (target: RemoteTarget, spec: DesktopSpec, session: DesktopSession, gateway: Gateway, endpoint: Endpoint): Promise<Duplex> {
+        session.gatewayRefused = null
+        const own = endpoint.gatewayAccount
+        const credentials = own?.credentials ?? endpoint.credentials
+        session.log.push(`gateway: ${gateway.host}:${gateway.port}, signing in with ${own ? 'its saved account' : 'the desktop\'s sign-in'}`)
+        try {
+            const stream = await openThroughGateway(
+                () => target.openTcp(gateway.host, gateway.port), gateway,
+                { username: credentials.username, password: credentials.password, domain: (own ? own.domain : endpoint.domain ?? spec.domain) || undefined },
+                { host: endpoint.host, port: endpoint.port },
+                (fingerprint, valid) => this.checkGatewayCertificate(session, gateway, fingerprint, valid),
+                { log: m => session.log.push(m), clientName: os.hostname() })
+            // Entered a moment ago and taken by the gateway: kept, while the account is still what it was signed in as.
+            if (own?.remember) {
+                own.remember = false
+                const accountNow = this.accounts().find(a => accountKey(a.id) === own.saveKey)
+                if (accountNow && signInName(accountNow) === own.saveFor) {
+                    saveCredentials(own.saveKey, own.credentials, own.saveLabel).then(
+                        () => session.log.push(`gateway: saved as the account's password in ${storeName()}`),
+                        e => session.log.push(`gateway: ${storeName()}: ${e?.message ?? e}`))
+                }
+            }
+            return stream
+        } catch (e: any) {
+            if (e instanceof GatewaySignInError) {
+                session.gatewayRefused = e.message
+            }
+            throw e
+        }
+    }
+
+    /**
+     * A gateway's certificate, before the sign-in goes to it. One that is valid for the gateway's name by this
+     * computer's certificate authorities is accepted (a gateway on the internet has one); any other is trusted on
+     * first use, like a desktop's. Either way it is remembered, by the gateway's address: after a valid one, an invalid
+     * one is a change to decide on, not a first use.
+     */
+    private checkGatewayCertificate (session: DesktopSession, gateway: Gateway, raw: string, valid: boolean): void {
+        const fingerprint = normalizeFingerprint(raw)
+        const address = `${gateway.host}:${gateway.port}`
+        const key = `gateway#${address}`
+        const known = this.trustedCertificate(key)
+        if (valid || !known) {
+            if (known !== fingerprint) {
+                this.trustCertificate(key, fingerprint)
+            }
+            session.log.push(`gateway certificate: SHA-256 ${fingerprint}, ${valid ? `valid for ${gateway.host}` : 'remembered (first connection)'}`)
+            return
+        }
+        if (fingerprint !== known) {
+            session.certificateProblem = { expected: known, actual: fingerprint, pinned: false, gateway: { address, key } }
+            throw new Error(`the gateway's certificate SHA-256 ${fingerprint} is not the one remembered (${known})`)
+        }
+        session.log.push(`gateway certificate: SHA-256 ${fingerprint}, as remembered`)
+    }
+
+    /**
      * The proxy's check of the server's certificate, before any credentials go out. The host's own desktop must show
      * the certificate its setup reported. Others (behind a host, a Windows host's own, a remote desktop tab's) are
      * trusted on first use: remembered silently the first time (most connections already run inside SSH, and a prompt
@@ -1979,9 +2166,9 @@ export class RemoteDesktopService {
             session.log.push(`certificate: SHA-256 ${fingerprint}, as set up`)
             return
         }
-        const known = this.trustedCertificate(session.key)
+        const known = this.trustedCertificate(session.authKey)
         if (!known) {
-            this.trustCertificate(session.key, fingerprint)
+            this.trustCertificate(session.authKey, fingerprint)
             session.log.push(`certificate: SHA-256 ${fingerprint}, remembered (first connection)`)
             return
         }
@@ -2062,13 +2249,15 @@ export class RemoteDesktopService {
                 `Something other than GNOME Remote Desktop may be listening on port ${endpoint.port}.`)
             return false
         }
+        // The desktop's, or its gateway's.
+        const whose = problem.gateway ? `${spec.name}'s gateway ${problem.gateway.address}` : spec.name
         if (!session.visible) {
-            this.notifications.notice(`The certificate of ${spec.name}${target.direct ? '' : ` (via ${target.label})`} has changed. Open that desktop to decide.`)
+            this.notifications.notice(`The certificate of ${whose}${target.direct ? '' : ` (via ${target.label})`} has changed. Open that desktop to decide.`)
         }
         const trusted = await new Promise<boolean>(resolve => {
-            session.status(`The certificate of ${spec.name} has changed since it was last used. Nothing has been sent to it.\n\n` +
+            session.status(`The certificate of ${whose} has changed since it was last used. Nothing has been sent to it.\n\n` +
                 `${fingerprints}\n\nReinstalling the machine or renewing its certificate changes it. If neither happened, ` +
-                `something else may be answering at ${spec.host}:${spec.port}.`, [
+                `something else may be answering at ${problem.gateway?.address ?? `${spec.host}:${spec.port}`}.`, [
                 { label: 'Trust the new certificate', run: () => resolve(true) },
                 { label: 'Cancel', run: () => resolve(false) },
             ], true)
@@ -2081,8 +2270,8 @@ export class RemoteDesktopService {
             stop('Not connected: the new certificate was not trusted.')
             return false
         }
-        this.trustCertificate(session.key, problem.actual)
-        session.log.push(`certificate: SHA-256 ${problem.actual}, trusted instead of ${problem.expected}`)
+        this.trustCertificate(problem.gateway?.key ?? session.authKey, problem.actual)
+        session.log.push(`${problem.gateway ? 'gateway ' : ''}certificate: SHA-256 ${problem.actual}, trusted instead of ${problem.expected}`)
         return true
     }
 
@@ -2119,7 +2308,7 @@ export class RemoteDesktopService {
     private async wakeIfDown (pane: DesktopPane, target: RemoteTarget, spec: DesktopSpec, session: DesktopSession, automatic: boolean): Promise<boolean | null> {
         const alive = () => this.sessions.get(pane) === session
         session.status(`Connecting to ${spec.name} via ${target.label}…`)
-        if (await rdpAnswers(target, spec.host, spec.port)) {
+        if (await desktopUp(target, spec.host, spec.port, spec.wake)) {
             return false
         }
         if (!alive()) {
@@ -2144,7 +2333,7 @@ export class RemoteDesktopService {
         const started = Date.now()
         const progress = () => session.status(`Starting ${spec.name}…\nWaiting for it to answer: ${Math.round((Date.now() - started) / 1000)} s`, [cancel])
         progress()
-        const up = await this.zone.runOutsideAngular(() => waitForRdp(target, spec.host, spec.port, WAKE_TIMEOUT_MS, () => cancelled || !alive(), progress))
+        const up = await this.zone.runOutsideAngular(() => waitForRdp(target, spec.host, spec.port, WAKE_TIMEOUT_MS, () => cancelled || !alive(), progress, spec.wake))
         if (up) {
             session.log.push(`wake: answered after ${Math.round((Date.now() - started) / 1000)} s`)
             // Started here, so it can go back off when it's no longer used, if the settings say so (a VM only: a machine
@@ -2165,10 +2354,11 @@ export class RemoteDesktopService {
     /** One RDP connection attempt, until it ends. */
     private async run (
         pane: DesktopPane, target: RemoteTarget, spec: DesktopSpec, session: DesktopSession, rdp: any, endpoint: Endpoint,
-    ): Promise<{ connected: boolean, signInFailed?: string, error?: string, reason?: string, certificate?: CertificateProblem }> {
+    ): Promise<{ connected: boolean, signInFailed?: string, gatewayRefused?: boolean, error?: string, reason?: string, certificate?: CertificateProblem }> {
         const credentials = endpoint.credentials
         const alive = () => this.sessions.get(pane) === session
         session.certificateProblem = null
+        session.gatewayRefused = null
         const el = document.createElement('iron-remote-desktop') as any
         try {
             el.setAttribute('scale', this.screenScale() === 3 ? 'real' : 'fit')
@@ -2203,7 +2393,8 @@ export class RemoteDesktopService {
             const config = session.ui.configBuilder()
                 .withUsername(username)
                 .withPassword(credentials.password)
-                .withDestination(`${spec.id === OWN_DESKTOP ? target.hostname ?? target.label : endpoint.host}:${endpoint.port}`)
+                // The name the server is signed in to as: the SSH host's for its own desktop, and for its VMs' consoles.
+                .withDestination(`${spec.id === OWN_DESKTOP || spec.hyperv ? target.hostname ?? target.label : endpoint.host}:${endpoint.port}`)
                 .withProxyAddress(session.proxy!.url)
                 .withServerDomain(domain)
                 .withAuthToken(session.proxy!.token)
@@ -2213,9 +2404,18 @@ export class RemoteDesktopService {
             // H.264 in the graphics pipeline, decoded by the browser (hardware-accelerated where it can be). A decoder
             // failure ends the connection, which then reconnects without H.264 (see below). Not for xrdp: it encodes
             // H.264 only in some builds, and without it bitmaps do better there than the pipeline.
+            // A Hyper-V VM's console: the VM's id goes ahead of everything, and the sign-in (the host's) before the RDP
+            // handshake. Its basic console is a picture, keyboard and mouse: no channels for sound, files or resizing.
+            const basic = endpoint.hyperv === 'basic'
+            if (spec.hyperv) {
+                if (typeof rdp.vmConnect !== 'function') {
+                    throw new Error('this build of IronRDP has no Hyper-V console support')
+                }
+                config.withExtension(rdp.vmConnect(spec.hyperv, endpoint.hyperv ?? 'basic'))
+            }
             session.h264?.close()
             session.h264 = null
-            if (spec.kind !== 'xrdp' && typeof rdp.graphicsPipeline === 'function' && await this.useH264(rdp, session, settings)) {
+            if (spec.kind !== 'xrdp' && !basic && typeof rdp.graphicsPipeline === 'function' && await this.useH264(rdp, session, settings)) {
                 session.h264 = new rdp.WebCodecsH264Decoder({ onFailure: (reason: string) => session.log.push(`h264: failed: ${reason}`) })
                 config.withExtension(rdp.h264Decoder(session.h264))
             }
@@ -2230,14 +2430,14 @@ export class RemoteDesktopService {
                 session.graphics = 'automatic graphics'
             }
             session.log.push(`graphics: ${session.graphics}`)
-            if (settings.sound) {
+            if (settings.sound && !basic) {
                 session.audio?.close()
                 session.audio = new AudioPlayer()
                 config.withExtension(rdp.audioPlayback(session.audio.callback))
             }
             session.mic?.close()
             session.mic = null
-            if (settings.microphone && typeof rdp.audioInput === 'function') {
+            if (settings.microphone && !basic && typeof rdp.audioInput === 'function') {
                 const ui = session.ui
                 const mic: Microphone = new Microphone(
                     pcm => ui.invokeExtension(rdp.audioInputData(pcm)),
@@ -2253,7 +2453,7 @@ export class RemoteDesktopService {
             session.drives?.dispose()
             session.drives = null
             const folders = this.sharedFolders()
-            if (folders.length && spec.kind !== 'gnome' && typeof rdp.driveRedirection === 'function') {
+            if (folders.length && spec.kind !== 'gnome' && !basic && typeof rdp.driveRedirection === 'function') {
                 session.drives = new SharedDrives(folders, m => session.log.push(m))
                 config.withExtension(rdp.driveRedirection(session.drives))
                 session.log.push(`drives: ${folders.map(f => `${f.name}${f.readOnly ? ' (read-only)' : ''}`).join(', ')}`)
@@ -2266,6 +2466,11 @@ export class RemoteDesktopService {
                 // The proxy refused the server's certificate, before CredSSP (see checkCertificate).
                 if (session.certificateProblem) {
                     return { connected: false, certificate: session.certificateProblem }
+                }
+                // Its gateway refused the sign-in, before anything went to the desktop.
+                if (session.gatewayRefused) {
+                    session.log.push(`gateway: ${session.gatewayRefused}`)
+                    return { connected: false, signInFailed: session.gatewayRefused, gatewayRefused: true }
                 }
                 // IronErrorKind: 1 WrongPassword, 2 LogonFailure.
                 const kind = typeof e?.kind === 'function' ? e.kind() : undefined
@@ -2282,7 +2487,7 @@ export class RemoteDesktopService {
             session.ui.setVisibility(true)
             this.applyKeyboardMode(session)
             session.remoteSize = { width, height, scale: 100 }
-            if (size.scale !== 100 || spec.kind === 'windows') {
+            if (!basic && (size.scale !== 100 || spec.kind === 'windows')) {
                 // Retina: the connection starts unscaled; ask for the matching remote scale right away. Windows also
                 // keeps a signed-in session's scale from the last connection: set it either way.
                 this.applySize(session, size)
@@ -2302,13 +2507,14 @@ export class RemoteDesktopService {
             if (endpoint.remember && endpoint.saveKey && (!accountNow || signInName(accountNow) !== endpoint.saveFor)) {
                 session.log.push(`sign-in: not saved: the account ${accountNow ? 'changed' : 'was removed'} meanwhile`)
             } else if (endpoint.remember) {
-                saveCredentials(endpoint.saveKey ?? session.key, credentials, endpoint.saveLabel).then(
+                saveCredentials(endpoint.saveKey ?? session.authKey, credentials, endpoint.saveLabel).then(
                     () => session.log.push(`sign-in: saved ${endpoint.saveKey ? 'as the account\'s password ' : ''}in ${storeName()}`),
                     e => session.log.push(`sign-in: ${storeName()}: ${e?.message ?? e}`))
             }
             if (session.visible) {
                 session.focusDesktop()
             }
+            const connectedAt = Date.now()
             let end: any
             try {
                 end = await info.run()
@@ -2322,7 +2528,14 @@ export class RemoteDesktopService {
                     this.h264Failed.add(session.key)
                     return { connected: true, error: `H.264 decoding failed (${session.h264.failed}); continuing without it` }
                 }
-                return { connected: true, error: typeof e?.backtrace === 'function' ? e.backtrace().split('\n')[0] : (e?.message ?? String(e)) }
+                const error: string = typeof e?.backtrace === 'function' ? e.backtrace().split('\n')[0] : (e?.message ?? String(e))
+                // A Hyper-V host signs anyone in that it knows, and ends the connection at once when that account may not
+                // open the VM's console: a refused sign-in in effect, so the form comes back, saying so.
+                if (spec.hyperv && Date.now() - connectedAt < 5000 && /disconnect provider ultimatum/i.test(error)) {
+                    session.log.push(`hyper-v: disconnected at once (${error}): the account may not open this VM's console`)
+                    return { connected: false, signInFailed: `${target.label} ended the connection at once: this account may not open ${spec.name}'s console. Use an administrator of the host, a member of its Hyper-V Administrators, or an account given access with Grant-VMConnectAccess.` }
+                }
+                return { connected: true, error }
             } finally {
                 // The server can't close the microphone, or its files, once the connection is gone.
                 session.mic?.close()

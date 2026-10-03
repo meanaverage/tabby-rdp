@@ -105,7 +105,15 @@ function readTlv (buf: Buffer, off: number): Tlv | null {
     return { tag: buf[off], start: p, end: p + len }
 }
 
-interface Request { version?: number, destination?: string, proxyAuth?: string, x224?: Buffer }
+interface Request {
+    version?: number
+    destination?: string
+    proxyAuth?: string
+    /** The pre-connection blob's text (a Hyper-V VM's id, for one): sent to the server before anything else. */
+    pcb?: string
+    /** The X.224 connection request. Absent for a Hyper-V VM's console: there TLS comes first, and the client does X.224 after CredSSP. */
+    x224?: Buffer
+}
 
 function decodeRequest (buf: Buffer): Request {
     const outer = readTlv(buf, 0)
@@ -122,6 +130,7 @@ function decodeRequest (buf: Buffer): Request {
             case 0: req.version = value.readUIntBE(0, value.length); break
             case 2: req.destination = value.toString('utf8'); break
             case 3: req.proxyAuth = value.toString('utf8'); break
+            case 5: req.pcb = value.toString('utf8'); break
             case 6: req.x224 = Buffer.from(value); break
         }
         p = field.end
@@ -129,13 +138,30 @@ function decodeRequest (buf: Buffer): Request {
     return req
 }
 
-function encodeResponse (x224: Buffer, certChain: Buffer[], serverAddr: string): Buffer {
+/** The response: the server's X.224 confirm (none for a Hyper-V VM's console), its certificate chain, its address. */
+function encodeResponse (x224: Buffer | null, certChain: Buffer[], serverAddr: string): Buffer {
     return seq(
         explicit(0, derInteger(VERSION_1)),
-        explicit(6, octets(x224)),
+        ...x224 ? [explicit(6, octets(x224))] : [],
         explicit(7, seq(...certChain.map(octets))),
         explicit(9, utf8(serverAddr)),
     )
+}
+
+/**
+ * A version 2 pre-connection PDU ([MS-RDPEPS] 2.2.1.2) carrying `text`: what a client sends first to a server that
+ * routes by it, as Hyper-V does to a VM's console by the VM's id.
+ */
+export function preconnectionPdu (text: string): Buffer {
+    const blob = Buffer.from(text + '\0', 'utf16le')
+    const pdu = Buffer.alloc(18 + blob.length)
+    pdu.writeUInt32LE(pdu.length, 0)        // cbSize
+    pdu.writeUInt32LE(0, 4)                 // Flags
+    pdu.writeUInt32LE(2, 8)                 // Version
+    pdu.writeUInt32LE(0, 12)                // Id
+    pdu.writeUInt16LE(blob.length / 2, 16)  // cchPCB, with the terminator
+    blob.copy(pdu, 18)
+    return pdu
 }
 
 function encodeError (): Buffer {
@@ -391,24 +417,32 @@ const MAX_MESSAGE = 32 * 1024 * 1024
 const HIGH_WATER = 8 * 1024 * 1024
 
 /**
- * Sends the client's X.224 request upstream, reads the confirm, then does TLS there. `track` hears of each stream
- * as soon as it exists, so the caller can end them if the client goes away meanwhile; `gone` says it has.
+ * Sends the client's X.224 request upstream, reads the confirm, then does TLS there. With a pre-connection blob, that
+ * goes first; without an X.224 request (a Hyper-V VM's console), TLS follows the blob at once and X.224 is the
+ * client's to do later. `track` hears of each stream as soon as it exists, so the caller can end them if the client
+ * goes away meanwhile; `gone` says it has.
  */
 async function handshake (
-    openUpstream: UpstreamFactory, destination: string, x224Request: Buffer, legacyTls: boolean,
+    openUpstream: UpstreamFactory, destination: string, pcb: string | undefined, x224Request: Buffer | undefined, legacyTls: boolean,
     track: (stream: Duplex) => void, gone: () => boolean,
-): Promise<{ raw: Duplex, upstream: tls.TLSSocket, x224: Buffer }> {
+): Promise<{ raw: Duplex, upstream: tls.TLSSocket, x224: Buffer | null }> {
     const raw = await openUpstream(destination)
     track(raw)
     try {
         if (gone()) {
             throw new Error('the client left')
         }
-        raw.write(x224Request)
-        const x224 = await readTpkt(raw)
-        const refused = noTls(x224)
-        if (refused) {
-            throw new NoTlsError(refused)
+        if (pcb) {
+            raw.write(preconnectionPdu(pcb))
+        }
+        let x224: Buffer | null = null
+        if (x224Request) {
+            raw.write(x224Request)
+            x224 = await readTpkt(raw)
+            const refused = noTls(x224)
+            if (refused) {
+                throw new NoTlsError(refused)
+            }
         }
         const upstream = tls.connect({ socket: raw as any, rejectUnauthorized: false, ...legacyTls ? KEY_ENCIPHERMENT_ONLY_TLS : {} })
         track(upstream)
@@ -520,7 +554,7 @@ export async function startRDCleanPathProxy (openUpstream: UpstreamFactory, chec
             try {
                 const req = decodeRequest(buf.subarray(0, outer.end))
                 buf = Buffer.alloc(0)
-                if (req.version !== VERSION_1 || !req.x224 || !req.destination) {
+                if (req.version !== VERSION_1 || !req.destination || !req.x224 && !req.pcb?.trim()) {
                     return fail('malformed request')
                 }
                 if (req.proxyAuth !== token) {
@@ -529,7 +563,7 @@ export async function startRDCleanPathProxy (openUpstream: UpstreamFactory, chec
                 deadline = setTimeout(() => stage === 'handshake' && fail('the server didn\'t answer in time'), HANDSHAKE_TIMEOUT_MS)
                 let up: Awaited<ReturnType<typeof handshake>>
                 try {
-                    up = await handshake(openUpstream, req.destination, req.x224, legacyTls, track, () => closed)
+                    up = await handshake(openUpstream, req.destination, req.pcb, req.x224, legacyTls, track, () => closed)
                 } catch (e: any) {
                     if (closed || legacyTls || !/KEY_USAGE_BIT_INCORRECT/.test(e?.message ?? '')) {
                         throw e
@@ -537,7 +571,7 @@ export async function startRDCleanPathProxy (openUpstream: UpstreamFactory, chec
                     // The X.224 exchange is spent on that connection: start over on a fresh one.
                     log('TLS: the server certificate only allows key encipherment; using TLS 1.2 with RSA key exchange')
                     legacyTls = true
-                    up = await handshake(openUpstream, req.destination, req.x224, legacyTls, track, () => closed)
+                    up = await handshake(openUpstream, req.destination, req.pcb, req.x224, legacyTls, track, () => closed)
                 }
                 // Reached: from here on the time is the user's (a certificate to look at) and the session's.
                 clearTimeout(deadline)
@@ -560,7 +594,8 @@ export async function startRDCleanPathProxy (openUpstream: UpstreamFactory, chec
                 ws.send(encodeResponse(x224, chain, req.destination))
                 stage = 'relay'
                 // PROTOCOL_HYBRID_EX in the server's negotiation response: an Early User Authorization Result follows CredSSP.
-                const frames = serverFraming(x224.length >= 19 && x224[11] === 0x02 && x224.readUInt32LE(15) === 8)
+                // (A Hyper-V VM's console: CredSSP first, then the X.224 exchange, which never asks for HYBRID_EX.)
+                const frames = serverFraming(!!x224 && x224.length >= 19 && x224[11] === 0x02 && x224.readUInt32LE(15) === 8)
                 upstream.on('data', (d: Buffer) => {
                     stats.bytesIn += d.length
                     let pdus: Buffer[]

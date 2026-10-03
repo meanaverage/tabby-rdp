@@ -1,3 +1,4 @@
+import { HYPERV_PORT, vmId } from './hyperv'
 import { RemoteTarget } from './targets'
 import { parseWake, WakeSpec } from './wake'
 
@@ -38,6 +39,18 @@ export interface DesktopSpec {
     wake?: WakeSpec
     /** A VM found on the SSH host (see vms.ts), not configured: whether it was running or off when found. */
     found?: 'running' | 'off'
+    /**
+     * A Hyper-V VM's id: its console, reached through its host (the SSH host, port 2179; see hyperv.ts) rather than a
+     * desktop with an address of its own. The sign-in is the host's.
+     */
+    hyperv?: string
+    /**
+     * An RD Gateway's address (`host` or `host:port`, see gateway.ts) to reach the desktop through: `host` is then as
+     * the gateway sees it, and the gateway as the SSH host (or this computer, for a direct desktop) sees it.
+     */
+    gateway?: string
+    /** A saved account's id to sign in to the gateway with; without it, the desktop's own sign-in is the gateway's too. */
+    gatewayAccount?: string
 }
 
 /**
@@ -53,6 +66,14 @@ export interface DesktopSpec {
  *           username: alice
  *           account: k3f9x2ab      # or a saved account's id, in place of username and domain
  *           wake: { vm: win11 }    # optional: start it when it's off; or { mac: "aa:bb:cc:dd:ee:ff" }
+ *         - name: Build VM
+ *           via: hyperv-host       # a Windows SSH host running Hyper-V
+ *           hyperv: 5f05e000-...   # the VM's id (Get-VM): its console through the host, started when it's off
+ *         - name: Office PC
+ *           via: myhost
+ *           host: pc17.corp.example # as the gateway sees it
+ *           gateway: rdgw.example.com   # an RD Gateway (port 443, or host:port), as seen from the SSH host
+ *           gatewayAccount: k3f9x2ab    # optional: a saved account for the gateway, when not the desktop's sign-in
  */
 export interface ExtraDesktopConfig {
     name?: string
@@ -63,7 +84,10 @@ export interface ExtraDesktopConfig {
     username?: string
     domain?: string
     account?: string
-    wake?: { vm?: string, mac?: string, broadcast?: string, port?: number }
+    wake?: { vm?: string, mac?: string, broadcast?: string, port?: number, hyperv?: string }
+    hyperv?: string
+    gateway?: string
+    gatewayAccount?: string
 }
 
 export const OWN_DESKTOP = 'own'
@@ -79,11 +103,20 @@ export function viaMatches (via: string, target: RemoteTarget): boolean {
 
 /** The desktop an entry describes (a `remoteDesktop.desktops` entry, or an RDP profile's options), or null if unusable. */
 export function specOf (extra: ExtraDesktopConfig): DesktopSpec | null {
+    const hyperv = vmId(extra?.hyperv)
+    if (hyperv) {
+        return hyperVSpec(hyperv, extra.name ? String(extra.name) : hyperv, {
+            username: extra.username ? String(extra.username) : undefined,
+            domain: extra.domain ? String(extra.domain) : undefined,
+            account: extra.account ? String(extra.account) : undefined,
+        })
+    }
     const port = Number(extra?.port || 3389)
     if (!Number.isInteger(port) || port <= 0 || port > 65535) {
         return null
     }
     const host = String(extra.host || '127.0.0.1')
+    const gateway = typeof extra.gateway === 'string' ? extra.gateway.trim() : ''
     return {
         id: `${host}:${port}`,
         name: extra.name ? String(extra.name) : `${host}:${port}`,
@@ -94,7 +127,13 @@ export function specOf (extra: ExtraDesktopConfig): DesktopSpec | null {
         domain: extra.domain ? String(extra.domain) : undefined,
         account: extra.account ? String(extra.account) : undefined,
         wake: parseWake(extra.wake),
+        ...gateway ? { gateway, gatewayAccount: extra.gatewayAccount ? String(extra.gatewayAccount) : undefined } : {},
     }
+}
+
+/** A Hyper-V VM's console as a desktop of its host: the host's VMConnect port, the VM's id, started when it's off. */
+export function hyperVSpec (id: string, name: string, more: Partial<DesktopSpec> = {}): DesktopSpec {
+    return { id: `hyperv:${id}`, name, kind: 'windows', host: '127.0.0.1', port: HYPERV_PORT, hyperv: id, wake: { hyperv: id }, ...more }
 }
 
 /**
@@ -137,7 +176,7 @@ export const DIRECT_KEY = 'rdp'
 
 /** The id of a configured desktop (`host:port`), as its DesktopSpec and session keys have it. */
 export function desktopIdOf (extra: ExtraDesktopConfig): string {
-    return `${extra.host || '127.0.0.1'}:${extra.port || 3389}`
+    return vmId(extra.hyperv) ? `hyperv:${vmId(extra.hyperv)}` : `${extra.host || '127.0.0.1'}:${extra.port || 3389}`
 }
 
 /**
