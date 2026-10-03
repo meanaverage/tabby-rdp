@@ -207,7 +207,7 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
             <h3>Remote Desktop</h3>
             <div class="trd-lead">Linux and Windows desktops in Tabby tabs, through SSH or directly.
                 ${version ? `<span>tabby-rdp ${esc(version)}</span>` : ''}
-                <span class="trd-links"><a href="#" data-link="${REPO}#readme">Guide</a><a href="#" data-link="${REPO}/issues">Report a problem</a></span></div>
+                <span class="trd-links"><a href="#" data-link="${REPO}#readme">Guide</a><a href="#" data-link="${REPO}/issues">Report a problem</a><a href="#" data-link="${REPO}/discussions/categories/q-a">Ask a question</a></span></div>
             <div class="trd-update" data-update></div>
             <ul class="nav nav-tabs" data-nav></ul>
 

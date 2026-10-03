@@ -62,6 +62,7 @@ Making it work with GNOME took fixes in IronRDP, which we contribute upstream ([
 - [Built on IronRDP](#built-on-ironrdp)
 - [Development](#development)
 - [Limitations](#limitations)
+- [Questions and problems](#questions-and-problems)
 - [License](#license)
 
 ## Install
@@ -409,6 +410,12 @@ npm run build:ironrdp        # rebuild vendor/ from IronRDP and ironrdp/patches:
   size**. xrdp's standard RDP security without TLS (`security_layer=rdp`) isn't supported. `desk` needs GNOME.
 - **Waking a desktop** over the network (Wake-on-LAN) starts it but never shuts it down again; for VMs, see
   [Shut down VMs it started](#vms-on-a-host).
+
+## Questions and problems
+
+Questions ("how do I…", "is this expected?") go to [Discussions › Q&A](https://github.com/meanaverage/tabby-rdp/discussions/categories/q-a);
+bugs and feature requests to the [issues](https://github.com/meanaverage/tabby-rdp/issues). A bug report is most useful
+with the connection log: **Settings › Remote Desktop › Troubleshooting › Open desktops › Copy log**.
 
 ## License
 
