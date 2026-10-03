@@ -66,6 +66,18 @@
 - **H.264: small changes far apart** (a clock in one corner, a cursor in another) read back everything between them:
   33 MB for a 4K picture to get a few pixels. Regions far apart are read one by one (IronRDP patch 17).
 
+**Safer with addresses that come from someone else**
+- **Importing an .rdp file asks first**, naming the address, the gateway and the account the file leads to, with
+  **Add and connect**, **Add only** and **Cancel**. It used to add the profile and connect at once. Nothing in a file
+  runs on this computer (and a program it names for the remote isn't asked for), but a file decides where your
+  sign-in goes.
+- **A Windows desktop whose server doesn't use Network Level Authentication stops before the password is sent.**
+  Without it the password goes to the server as it is (encrypted on the way, readable to whatever answered), which a
+  server posing as a Windows machine can ask for; the first certificate being trusted on sight, nothing stood in the
+  way. The connection now stops when the server's answer says so, before TLS, and asks: **Send the password anyway**
+  (remembered for that desktop, shown and forgotten with its certificate under Settings › Remote Desktop ›
+  Certificates) or **Cancel**. xrdp signs in this way by design: desktops of the xrdp kind aren't asked about.
+
 **Also fixed**
 - **Linux without an unlocked keyring: Tabby could stop opening connections.** A keychain call there never returns
   and keeps one of Node's four worker threads waiting. The plugin gave the keychain up after the first such call, but

@@ -7,6 +7,9 @@
 // - The desktop behind the host: remembered silently on first use; a changed one stops before signing in with both
 //   fingerprints; Cancel keeps the remembered one; "Trust the new certificate" connects without asking for the account
 //   again; an automatic reconnect stops at the same question; removing the desktop forgets the certificate.
+// - A server without Network Level Authentication (the host's xrdp, where it has one: testbed/linux/xrdp.sh), as a
+//   Windows desktop: stopped before anything but the connection request went to it, saying the password would go as it
+//   is; Cancel sends nothing; "Send the password anyway" connects and is remembered; as an xrdp desktop it isn't asked.
 import { suite, type StatusInfo } from '../lib/harness.js'
 
 const NAME = 'GNOME as an extra'
@@ -152,4 +155,56 @@ await suite('certificates', async t => {
     await ev(`H.inZone(() => RD.desktop.removeDesktop(${index}))`)
     await sleep(300)
     check('removing the desktop forgets its certificate', index >= 0 && !(await ev(`return H.trusted(${k})`)))
+
+    // 8. A server that doesn't use Network Level Authentication, which a Windows machine does: xrdp, under that name.
+    const xrdpPort = t.env.xrdp.port
+    const listening = async () => (await t.remote('H.pane', `ss -Htln 'sport = :${xrdpPort}' | grep -c . || true`)).trim() !== '0'
+    if (!await listening()) {
+        await t.remote('H.pane', 'sudo -n systemctl start xrdp 2>&1; true')
+        t.onCleanup(() => t.remote('H.pane', 'sudo -n systemctl stop xrdp xrdp-sesman 2>/dev/null; true'))
+        for (let i = 0; i < 10 && !await listening(); i++) {
+            await sleep(1000)
+        }
+    }
+    if (!await listening()) {
+        t.skip('a server without Network Level Authentication', `no xrdp on port ${xrdpPort} of the test host (testbed/linux/xrdp.sh)`)
+        return
+    }
+    const PLAIN = 'No NLA (test)'
+    const plainKey = JSON.stringify(`${ownKey}#127.0.0.1:${xrdpPort}`)
+    const allowed = (key: string) => ev<boolean>(`return (H.config.store.remoteDesktop.withoutNla ?? []).some(e => e?.desktop === ${key})`)
+    const plain = (kind: string) => ev(`H.inZone(() => {
+        H.config.store.remoteDesktop.desktops = [...(H.config.store.remoteDesktop.desktops ?? []).filter(d => d.name !== ${JSON.stringify(PLAIN)}),
+            { name: ${JSON.stringify(PLAIN)}, via: ${JSON.stringify(ownKey)}, host: '127.0.0.1', port: ${xrdpPort}, kind: ${JSON.stringify(kind)}, username: 'someone' }]
+        H.config.save()
+    })`)
+    const withoutNlaBefore = await ev('return JSON.stringify(H.config.store.remoteDesktop.withoutNla ?? [])')
+    t.onCleanup(() => ev(`H.inZone(() => { H.config.store.remoteDesktop.withoutNla = ${withoutNlaBefore}; H.config.save() })`))
+    const asks = () => t.waitFor<StatusInfo>(`const s = H.status(H.pane); return s && /Network Level Authentication/.test(s.text) ? s : null`, 40)
+    await plain('windows')
+    await ev(`H.inZone(() => RD.desktop.showDesktop(H.pane, '127.0.0.1:${xrdpPort}'))`)
+    await t.waitFor('return !!H.signin()', 20) && await ev(`H.signIn('not-a-real-password')`)
+    const question = await asks()
+    check('a Windows desktop whose server has no Network Level Authentication: stopped, saying the password would go as it is',
+        question?.buttons.join() === 'Send the password anyway,Cancel' && /as it is/.test(question.text) && /xrdp/.test(question.text), question ?? await ev('return [H.status(H.pane), H.attempt()]'))
+    check('... before TLS: no certificate seen, nothing relayed', !(await ev('return H.relayed()')) && !(await ev(`return H.attempt().some(l => /^certificate:/.test(l))`)), await ev('return H.attempt()'))
+    await ev(`H.inZone(() => H.clickStatus(H.pane, 'Cancel'))`)
+    await sleep(300)
+    const notSent = await ev<StatusInfo | null>('return H.status(H.pane)')
+    check('Cancel: not connected, "Try again" offered, nothing remembered', /was not sent/.test(notSent?.text ?? '') && notSent?.buttons.join() === 'Try again' && !(await allowed(plainKey)), notSent)
+    await ev(`H.inZone(() => H.clickStatus(H.pane, 'Try again'))`)
+    await t.waitFor('return !!H.signin()', 20) && await ev(`H.signIn('not-a-real-password')`)
+    check('"Try again": the same question', !!(await asks()))
+    await ev(`H.inZone(() => H.clickStatus(H.pane, 'Send the password anyway'))`)
+    check('"Send the password anyway": connects, without asking for the account again', !!(await t.waitFor('return H.up()', 40)) && !(await ev('return !!H.signin()')), await ev('return [H.status(H.pane), H.attempt()]'))
+    check('... and the desktop is remembered as allowed', await allowed(plainKey))
+    await ev('H.inZone(() => RD.desktop.disconnect(H.pane))')
+    await ev(`H.inZone(() => RD.desktop.forgetCertificate(${plainKey}))`)
+    check('forgetting its certificate forgets that too', !(await allowed(plainKey)))
+    // As what it is, an xrdp desktop: no question (that is how xrdp signs in).
+    await plain('xrdp')
+    await ev(`H.inZone(() => RD.desktop.showDesktop(H.pane, '127.0.0.1:${xrdpPort}'))`)
+    await t.waitFor('return !!H.signin()', 20) && await ev(`H.signIn('not-a-real-password')`)
+    check('the same server as an xrdp desktop: connects without the question', !!(await t.waitFor('return H.up()', 40)) && !(await allowed(plainKey)), await ev('return [H.status(H.pane), H.attempt()]'))
+    await ev('H.inZone(() => RD.desktop.disconnect(H.pane))')
 })

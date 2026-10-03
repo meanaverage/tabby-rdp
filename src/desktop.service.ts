@@ -12,7 +12,7 @@ import { AudioPlayer } from './audio'
 import { ConnectionStatus, STYLE as STATS_STYLE } from './connectionStatus'
 import { Microphone } from './microphone'
 import { SharedDrives, SharedFolder, sharedFolders } from './drives'
-import { askDesktop } from './desktopForm'
+import { askDesktop, formatAddress } from './desktopForm'
 import { accountKey, accountsOf, newAccountId, SavedAccount, signInName } from './accounts'
 import { NewAccountInput, STYLE as ACCOUNT_FORM_STYLE } from './accountForm'
 import { FileTransfer, STYLE as FILES_STYLE, uniquePath } from './fileTransfer'
@@ -262,6 +262,8 @@ class DesktopSession {
     certificateProblem: CertificateProblem | null = null
     /** Set when the desktop's RD Gateway refused the sign-in on the current connection attempt: what it said. */
     gatewayRefused: string | null = null
+    /** Set when the proxy stopped at a server without Network Level Authentication on the current connection attempt. */
+    withoutNla = false
     /** The connection-status indicator, made the first time it shows. */
     indicator: ConnectionStatus | null = null
     /** How the pictures come (for the indicator): the graphics pipeline, bitmaps, or IronRDP's choice. */
@@ -914,7 +916,7 @@ export class RemoteDesktopService {
         }
         const moved = (key: string) => direct ? key === `${DIRECT_KEY}#${fromId}` : key.endsWith(`#${fromId}`) && !key.startsWith(`${DIRECT_KEY}#`)
         const store = this.config.store.remoteDesktop
-        for (const list of ['desktopSharpness', 'trustedCertificates']) {
+        for (const list of ['desktopSharpness', 'trustedCertificates', 'withoutNla']) {
             if (Array.isArray(store[list])) {
                 store[list] = store[list].map((e: any) => typeof e?.desktop === 'string' && moved(e.desktop)
                     ? { ...e, desktop: `${e.desktop.slice(0, -fromId.length)}${toId}` }
@@ -980,9 +982,26 @@ export class RemoteDesktopService {
             await this.profiles.openNewTabForProfile(existing)
             return existing
         }
+        // A file is someone else's word for where to connect: where it leads is said before anything goes there. The
+        // account typed into the sign-in form goes to that address, and to the gateway before it.
+        const base = fileName.replace(/^.*[\\/]/, '')
+        const { response } = await this.platform.showMessageBox({
+            type: 'warning',
+            message: `Add a remote desktop from ${base}?`,
+            detail: `It connects to ${formatAddress(parsed.host, parsed.port)}${parsed.gateway ? `, through the gateway ${parsed.gateway}` : ''}` +
+                `${parsed.username ? `, as ${parsed.username}` : ''}. What you sign in with there goes to that address` +
+                `${parsed.gateway ? ' and that gateway' : ''}, and once signed in, the desktop gets the clipboard and the folders you share. ` +
+                'Add it only if you know where it leads, or trust who gave you the file.',
+            buttons: ['Add and connect', 'Add only', 'Cancel'],
+            defaultId: 0,
+            cancelId: 2,
+        })
+        if (response !== 0 && response !== 1) {
+            return null
+        }
         const profile = {
             type: RDP_PROFILE_TYPE,
-            name: fileName.replace(/^.*[\\/]/, '').replace(/\.rdp$/i, '') || parsed.host,
+            name: base.replace(/\.rdp$/i, '') || parsed.host,
             icon: 'fas fa-desktop',
             group: await this.remoteDesktopGroup(),
             options: { host: parsed.host, port: parsed.port, kind: 'windows', username: parsed.username ?? '', domain: parsed.domain ?? '', via: '', gateway: parsed.gateway ?? '', gatewayAccount: '' },
@@ -998,9 +1017,11 @@ export class RemoteDesktopService {
         this.notifications.notice(`Added the remote desktop profile "${profile.name}" (Settings › Profiles & connections)`)
         if (parsed.ignored.length) {
             // What the file asked for beyond that, so nobody wonders why the desktop doesn't behave as in mstsc.
-            this.notifications.info(`${fileName} also asks for ${parsed.ignored.join('; ')}. Not applied.`)
+            this.notifications.info(`${base} also asks for ${parsed.ignored.join('; ')}. Not applied.`)
         }
-        await this.profiles.openNewTabForProfile(profile)
+        if (response === 0) {
+            await this.profiles.openNewTabForProfile(profile)
+        }
         return profile
     }
 
@@ -1688,8 +1709,15 @@ export class RemoteDesktopService {
     forgetCertificate (key: string): void {
         const store = this.config.store.remoteDesktop
         store.trustedCertificates = (Array.isArray(store.trustedCertificates) ? store.trustedCertificates : []).filter((e: any) => e?.desktop !== key)
+        // What else was decided about that server goes with it: it is asked again.
+        store.withoutNla = (Array.isArray(store.withoutNla) ? store.withoutNla : []).filter((e: any) => e?.desktop !== key)
         this.config.save()
         this.changed$.next()
+    }
+
+    /** Whether the desktop was allowed to sign in without Network Level Authentication (see refusedWithoutNla). */
+    signsInWithoutNla (key: string): boolean {
+        return this.allowedWithoutNla(key)
     }
 
     /** Split tabs where keys typed on one desktop go to all of them (see DesktopKeyboard). */
@@ -2000,11 +2028,18 @@ export class RemoteDesktopService {
                     () => gateway ? this.throughGateway(target, spec, session, gateway, endpoint!) : target.openTcp(asked.host, asked.port),
                     fingerprint => this.checkCertificate(session, fingerprint),
                     m => session.log.push(m),
-                    { autologon: spec.kind === 'xrdp' })
+                    { autologon: spec.kind === 'xrdp', withoutNla: () => this.checkWithoutNla(session) })
                 const outcome = await this.run(pane, target, spec, session, rdp, asked)
                 if (outcome.certificate && alive()) {
                     // A changed certificate, now trusted: the same account again, without asking for it again.
                     if (await this.refusedCertificate(pane, target, spec, session, asked, outcome.certificate)) {
+                        continue
+                    }
+                    return
+                }
+                if (outcome.withoutNla && alive()) {
+                    // Allowed now: the same account again, without asking for it again.
+                    if (await this.refusedWithoutNla(pane, target, spec, session)) {
                         continue
                     }
                     return
@@ -2145,6 +2180,67 @@ export class RemoteDesktopService {
             throw new Error(`the gateway's certificate SHA-256 ${fingerprint} is not the one remembered (${known})`)
         }
         session.log.push(`gateway certificate: SHA-256 ${fingerprint}, as remembered`)
+    }
+
+    /** The desktops allowed to sign in without Network Level Authentication (`remoteDesktop.withoutNla`), by session key. */
+    private allowedWithoutNla (key: string): boolean {
+        const list = this.config.store.remoteDesktop?.withoutNla
+        return (Array.isArray(list) ? list : []).some((e: any) => e?.desktop === key)
+    }
+
+    /**
+     * The proxy found a server that doesn't use Network Level Authentication: the password would go to it as it is,
+     * before the server has shown anything but a certificate. That is how xrdp signs in, so an xrdp desktop goes on.
+     * A Windows machine or GNOME Remote Desktop always uses it unless it was turned off, and something posing as one
+     * (the address in a file someone sent) doesn't: those stop here, until the desktop is allowed (refusedWithoutNla).
+     */
+    private checkWithoutNla (session: DesktopSession): void {
+        if (session.spec.kind === 'xrdp') {
+            return
+        }
+        if (this.allowedWithoutNla(session.authKey)) {
+            session.log.push('sign-in: without Network Level Authentication, as allowed for this desktop')
+            return
+        }
+        session.withoutNla = true
+        throw new Error('the server doesn\'t use Network Level Authentication')
+    }
+
+    /**
+     * After the proxy stopped at a server without Network Level Authentication; nothing but the connection request
+     * was sent to it. Says what going on would mean and asks; automatic reconnecting stops here. Resolves true to
+     * connect again (the desktop is then allowed, and remembered as such).
+     */
+    private async refusedWithoutNla (pane: DesktopPane, target: RemoteTarget, spec: DesktopSpec, session: DesktopSession): Promise<boolean> {
+        this.cancelReconnect(pane)
+        const alive = () => this.sessions.get(pane) === session
+        session.log.push('sign-in: the server doesn\'t use Network Level Authentication; asking before the password goes to it')
+        if (!session.visible) {
+            this.notifications.notice(`${spec.name}${target.direct ? '' : ` (via ${target.label})`} would get your password as it is. Open that desktop to decide.`)
+        }
+        const allowed = await new Promise<boolean>(resolve => {
+            session.status(`${spec.name} doesn't use Network Level Authentication, so your password would be sent to it as it is: ` +
+                'encrypted on the way, but readable to whatever answered there, before it has proved anything. Nothing has been sent.\n\n' +
+                'A Windows machine asks for Network Level Authentication unless that was turned off on it. A server posing as one doesn\'t, ' +
+                `and neither does xrdp: if ${spec.name} is an xrdp server, set its kind to xrdp instead.`, [
+                { label: 'Send the password anyway', run: () => resolve(true) },
+                { label: 'Cancel', run: () => resolve(false) },
+            ], true)
+            session.disposed.then(() => resolve(false))
+        })
+        if (!alive()) {
+            return false
+        }
+        if (!allowed) {
+            session.state = 'ended'
+            this.changed$.next()
+            session.status('Not connected: the password was not sent.', [{ label: 'Try again', run: () => this.reopen(pane, spec) }], true)
+            return false
+        }
+        const store = this.config.store.remoteDesktop
+        store.withoutNla = [...(Array.isArray(store.withoutNla) ? store.withoutNla : []).filter((e: any) => e?.desktop !== session.authKey), { desktop: session.authKey }]
+        this.config.save()
+        return true
     }
 
     /**
@@ -2298,6 +2394,7 @@ export class RemoteDesktopService {
         const list = Array.isArray(store.trustedCertificates) ? store.trustedCertificates : []
         const forget = (key: string) => direct ? key === `${DIRECT_KEY}#${desktopId}` : key.endsWith(`#${desktopId}`) && !key.startsWith(`${DIRECT_KEY}#`)
         store.trustedCertificates = list.filter((e: any) => !forget(String(e?.desktop ?? '')))
+        store.withoutNla = (Array.isArray(store.withoutNla) ? store.withoutNla : []).filter((e: any) => !forget(String(e?.desktop ?? '')))
     }
 
     /**
@@ -2354,11 +2451,12 @@ export class RemoteDesktopService {
     /** One RDP connection attempt, until it ends. */
     private async run (
         pane: DesktopPane, target: RemoteTarget, spec: DesktopSpec, session: DesktopSession, rdp: any, endpoint: Endpoint,
-    ): Promise<{ connected: boolean, signInFailed?: string, gatewayRefused?: boolean, error?: string, reason?: string, certificate?: CertificateProblem }> {
+    ): Promise<{ connected: boolean, signInFailed?: string, gatewayRefused?: boolean, withoutNla?: boolean, error?: string, reason?: string, certificate?: CertificateProblem }> {
         const credentials = endpoint.credentials
         const alive = () => this.sessions.get(pane) === session
         session.certificateProblem = null
         session.gatewayRefused = null
+        session.withoutNla = false
         const el = document.createElement('iron-remote-desktop') as any
         try {
             el.setAttribute('scale', this.screenScale() === 3 ? 'real' : 'fit')
@@ -2466,6 +2564,10 @@ export class RemoteDesktopService {
                 // The proxy refused the server's certificate, before CredSSP (see checkCertificate).
                 if (session.certificateProblem) {
                     return { connected: false, certificate: session.certificateProblem }
+                }
+                // The proxy stopped at a server that would get the password as it is (see checkWithoutNla).
+                if (session.withoutNla) {
+                    return { connected: false, withoutNla: true }
                 }
                 // Its gateway refused the sign-in, before anything went to the desktop.
                 if (session.gatewayRefused) {

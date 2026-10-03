@@ -48,6 +48,11 @@ export interface RDCleanPathProxy {
 export interface RDCleanPathOptions {
     /** Set INFO_AUTOLOGON in the client's Client Info PDU (xrdp; see autologon()). */
     autologon?: boolean
+    /**
+     * Called when the server chose TLS without Network Level Authentication (see offersNla), before anything more is
+     * sent to it: the client would go on to send the password as it is. Throws to refuse.
+     */
+    withoutNla?: () => void | Promise<void>
 }
 
 // ---- minimal DER -------------------------------------------------------------------------------
@@ -220,6 +225,16 @@ function certChainOf (socket: tls.TLSSocket): Buffer[] {
  * need): a server with RDP's standard security only (xrdp with security_layer=rdp, for example) answers without a
  * negotiation response, or with PROTOCOL_RDP, or refuses the negotiation. Null when TLS can go ahead.
  */
+/**
+ * Whether the server's answer to the connection request chose Network Level Authentication (CredSSP: HYBRID or
+ * HYBRID_EX). With it, the sign-in is a proof both ways and the password only goes to a server that knows it already.
+ * Without it (plain TLS, as xrdp does), the client sends the password itself in its Client Info PDU: encrypted on the
+ * way, readable to whatever answered.
+ */
+export function offersNla (x224: Buffer): boolean {
+    return x224.length >= 19 && x224[11] === 0x02 && (x224.readUInt32LE(15) & (2 | 8)) !== 0
+}
+
 function noTls (x224: Buffer): string | null {
     // TPKT (4), X.224 Connection Confirm (7), then RDP_NEG_RSP or RDP_NEG_FAILURE (8): type, flags, length, value.
     const standardOnly = 'the RDP server only offers standard RDP security, without TLS (for xrdp: set security_layer=negotiate in /etc/xrdp/xrdp.ini and restart xrdp)'
@@ -424,7 +439,7 @@ const HIGH_WATER = 8 * 1024 * 1024
  */
 async function handshake (
     openUpstream: UpstreamFactory, destination: string, pcb: string | undefined, x224Request: Buffer | undefined, legacyTls: boolean,
-    track: (stream: Duplex) => void, gone: () => boolean,
+    track: (stream: Duplex) => void, gone: () => boolean, withoutNla?: () => void | Promise<void>,
 ): Promise<{ raw: Duplex, upstream: tls.TLSSocket, x224: Buffer | null }> {
     const raw = await openUpstream(destination)
     track(raw)
@@ -442,6 +457,10 @@ async function handshake (
             const refused = noTls(x224)
             if (refused) {
                 throw new NoTlsError(refused)
+            }
+            // Before TLS: a server that isn't to get the password gets nothing more at all.
+            if (!offersNla(x224)) {
+                await withoutNla?.()
             }
         }
         const upstream = tls.connect({ socket: raw as any, rejectUnauthorized: false, ...legacyTls ? KEY_ENCIPHERMENT_ONLY_TLS : {} })
@@ -563,7 +582,7 @@ export async function startRDCleanPathProxy (openUpstream: UpstreamFactory, chec
                 deadline = setTimeout(() => stage === 'handshake' && fail('the server didn\'t answer in time'), HANDSHAKE_TIMEOUT_MS)
                 let up: Awaited<ReturnType<typeof handshake>>
                 try {
-                    up = await handshake(openUpstream, req.destination, req.pcb, req.x224, legacyTls, track, () => closed)
+                    up = await handshake(openUpstream, req.destination, req.pcb, req.x224, legacyTls, track, () => closed, options.withoutNla)
                 } catch (e: any) {
                     if (closed || legacyTls || !/KEY_USAGE_BIT_INCORRECT/.test(e?.message ?? '')) {
                         throw e
@@ -571,7 +590,7 @@ export async function startRDCleanPathProxy (openUpstream: UpstreamFactory, chec
                     // The X.224 exchange is spent on that connection: start over on a fresh one.
                     log('TLS: the server certificate only allows key encipherment; using TLS 1.2 with RSA key exchange')
                     legacyTls = true
-                    up = await handshake(openUpstream, req.destination, req.pcb, req.x224, legacyTls, track, () => closed)
+                    up = await handshake(openUpstream, req.destination, req.pcb, req.x224, legacyTls, track, () => closed, options.withoutNla)
                 }
                 // Reached: from here on the time is the user's (a certificate to look at) and the session's.
                 clearTimeout(deadline)

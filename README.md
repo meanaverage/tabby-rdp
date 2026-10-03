@@ -128,6 +128,7 @@ connecting again.
 | **Sign-in** | GNOME desktops need none: the plugin manages their credentials. Windows and xrdp desktops ask for the account once and can remember it, in Tabby's Vault when that is on and in the system keychain otherwise; **Sign in again…** in the menu replaces it. Desktops that share an account can use a [saved account](#saved-accounts), whose password is kept once. |
 | **Shortcuts** | Switching between the desktop and the console, view only, a screenshot, Ctrl+Alt+Del, typing into or pasting to all desktops of a tab, the connection status and Disconnect each have a hotkey, set on the settings page or in Tabby's Hotkeys. They work while the desktop has the keyboard; a key another hotkey has is refused. |
 | **Certificates** | GNOME desktops accept only the certificate the plugin made for them. Windows and xrdp desktops remember theirs on first use and ask before accepting a different one. |
+| **Passwords stay with servers that know them** | Windows signs in with Network Level Authentication: a proof both ways, where the password only reaches a server that knows it already. A Windows desktop whose server doesn't use it would get the password as it is, so the connection stops and asks first, before anything is sent. xrdp signs in that way by design, so desktops of the xrdp kind aren't asked about. |
 
 <p align="center"><img src="docs/images/files.png" width="760" alt="A file copied on the remote desktop, offered for saving"></p>
 
@@ -200,7 +201,10 @@ command palette) makes such a profile from a file saved by Remote Desktop Connec
 address, port, user name and domain, named after the file, and its [RD Gateway](#through-an-rd-gateway) when it
 connects through one; a `desktopscalefactor` of 150 or more sets that desktop's sharpness to Retina. Settings the
 plugin doesn't apply (sound left on the remote, a fixed window size, drive or printer redirection, several monitors)
-are named in a note on import, so the desktop's behaviour isn't a surprise.
+are named in a note on import, so the desktop's behaviour isn't a surprise. Nothing in a file runs here, and a
+program it names to start on the remote isn't asked for. What a file does decide is where you connect, so importing
+asks first, naming the address, the gateway and the account it leads to: what you sign in with goes there, and once
+signed in that desktop gets the clipboard and the folders you share. **Add only** adds the profile without connecting.
 
 Its **Connect** setting can name an SSH profile instead of connecting directly. The address is then as that host sees
 it, and opening the profile opens that SSH tab and shows the desktop over it once SSH is connected. Such a desktop is
