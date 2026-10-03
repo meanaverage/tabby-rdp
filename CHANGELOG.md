@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+**Added**
+- **Shared folders** ([#26](https://github.com/meanaverage/tabby-rdp/issues/26)): folders from this computer appear as
+  drives on the remote desktop, under `\\tsclient` in Explorer, like mstsc's drive redirection. Settings › Remote
+  Desktop › Settings › Shared folders: **Share a folder…**, each one read-write or read-only. Every desktop you connect
+  to sees them; applies on the next connection. Windows mounts them (xrdp can, with FUSE); GNOME Remote Desktop
+  doesn't serve drives. Files move at the drive's pace through the RDP connection, so this is for working with files
+  in place rather than copying gigabytes; the clipboard still carries files either way.
+- IronRDP's web client gains drive redirection (MS-RDPEFS) through a JavaScript file system (patch 15), and its
+  static channels send multi-chunk messages Windows accepts (patch 16): a response over 1600 bytes was flagged for the
+  receiver to keep the channel header, which Windows' drive redirector didn't expect and dropped the channel on.
+
 ## 0.4.1
 
 Fixes from a review of 0.4.0.

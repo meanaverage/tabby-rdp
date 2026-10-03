@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: meanaverage <18336095+meanaverage@users.noreply.github.com>
 Date: Wed, 30 Sep 2026 16:48:56 -0700
-Subject: [PATCH 13/14] fix(web): sync the clipboard automatically for the
+Subject: [PATCH 13/16] fix(web): sync the clipboard automatically for the
  focused session only
 
 With several sessions on a page, each one polled the local clipboard and sent

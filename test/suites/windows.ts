@@ -1,9 +1,9 @@
 // A Windows desktop behind an SSH host (TRD_TEST_WIN_*): configured under remoteDesktop.desktops and offered in the
 // host's menus; the sign-in form (a wrong password, then the right one); the keychain; its certificate, remembered on
 // first use and a changed one stopped before signing in; the picture; live resize; reconnecting with the saved account.
-// With WinRM (TRD_TEST_WIN_WINRM), also typing, the clipboard both ways, sound, and files both ways with Explorer,
-// each checked inside Windows, and H.264: a window flipping between two colors comes out in those colors. See
-// test/README.md for the test machine.
+// With WinRM (TRD_TEST_WIN_WINRM), also typing, the clipboard both ways, sound, files both ways with Explorer, and
+// shared folders as drives (\\tsclient, read-write and read-only), each checked inside Windows, and H.264: a window
+// flipping between two colors comes out in those colors. See test/README.md for the test machine.
 import { suite, type AudioStats, type CanvasInfo, type H264Stats, type StatusInfo } from '../lib/harness.js'
 import { windowsGuest } from '../lib/windows.js'
 import { sampleFlip, windowsFlip } from '../lib/graphics.js'
@@ -51,6 +51,12 @@ await suite('windows', async t => {
     t.onCleanup(() => ev(`H.inZone(() => { H.config.store.remoteDesktop.desktops = ${desktops}; H.config.save() })`))
     await ev(`H.inZone(() => { H.config.store.remoteDesktop.desktops = [{ name: ${JSON.stringify(NAME)}, via: ${JSON.stringify(win.host)}, host: ${JSON.stringify(winHost)}, port: ${winPort}, kind: 'windows', username: ${JSON.stringify(win.account)} }]; H.config.save() })`)
     await t.settings({ sound: true, macShortcuts: true, sharpness: 'standard', h264: true })
+    // Two folders shared as drives from the start (they apply at connect): one read-write, one read-only.
+    const shareDir = await t.tempDir('trd-share-')
+    await ev(`const fs = require('fs'); for (const d of ['rw', 'ro']) { fs.mkdirSync(${JSON.stringify(shareDir)} + '/' + d); fs.writeFileSync(${JSON.stringify(shareDir)} + '/' + d + '/hello.txt', 'hello from ' + d) }`)
+    const foldersBefore = await ev('return JSON.stringify(H.config.store.remoteDesktop.sharedFolders ?? [])')
+    t.onCleanup(() => ev(`H.inZone(() => { H.config.store.remoteDesktop.sharedFolders = ${foldersBefore}; H.config.save() })`))
+    await ev(`H.inZone(() => RD.desktop.setSharedFolders([{ path: ${JSON.stringify(shareDir)} + '/rw', name: 'trd rw', readOnly: false }, { path: ${JSON.stringify(shareDir)} + '/ro', name: 'trd ro', readOnly: true }]))`)
     check('SSH tab connected', await ev(`H.pane = await H.openSSH({ host: ${JSON.stringify(win.host)}, user: ${JSON.stringify(win.user)} }); return !!H.pane`))
     const key = await ev(`return (await RD.targets.targetOf(H.pane)).key + '#' + ${JSON.stringify(ID)}`)
     const keychainWorks = await t.keychainWorks()
@@ -256,6 +262,39 @@ if (Test-Path $state) { Get-ChildItem $state -File | Where-Object { $keep -notco
         }
         check('files: dropped on the desktop, pasted in Explorer, same content', arrived === content, arrived)
         await t.key('F4', 'F4', 115, ['Alt'])  // close Explorer
+
+        // 8b. Shared folders: drives in the session (\\tsclient\<name>), read and written from Windows; the read-only
+        // one refuses a write. PowerShell in the session reports what it saw.
+        check('drives announced at connect', (await log()).some(l => /^drives: trd rw, trd ro \(read-only\)/.test(l)), (await log()).filter(l => /^drives/.test(l)))
+        await guest('Remove-Item "$env:TEMP\\trd-drive.txt" -ErrorAction SilentlyContinue')
+        const stamp = `from Windows ${Date.now()}`
+        // A few megabytes too: reads and writes at offsets, in the server's pieces.
+        const bigHash = await ev<string>(`const crypto = require('crypto'); const data = crypto.randomBytes(3 * 1024 * 1024 + 12345); require('fs').writeFileSync(${JSON.stringify(shareDir)} + '/rw/big.bin', data); return crypto.createHash('sha256').update(data).digest('hex')`)
+        await inSession('trd-drive', `
+$r = @()
+try { $r += 'read:' + (Get-Content -Raw '\\\\tsclient\\trd rw\\hello.txt') } catch { $r += "read failed: $_" }
+try { [IO.File]::WriteAllText('\\\\tsclient\\trd rw\\from-windows.txt', '${stamp}'); $r += 'written' } catch { $r += "write failed: $_" }
+try { New-Item -ItemType Directory -Path '\\\\tsclient\\trd rw\\made' | Out-Null; Rename-Item '\\\\tsclient\\trd rw\\made' 'renamed'; $r += 'folder' } catch { $r += "folder failed: $_" }
+try { $r += 'list:' + ((Get-ChildItem '\\\\tsclient\\trd rw' | Select-Object -ExpandProperty Name | Sort-Object) -join ',') } catch { $r += "list failed: $_" }
+try { $r += 'hash:' + (Get-FileHash -Algorithm SHA256 '\\\\tsclient\\trd rw\\big.bin').Hash.ToLower() } catch { $r += "hash failed: $_" }
+try { Copy-Item '\\\\tsclient\\trd rw\\big.bin' '\\\\tsclient\\trd rw\\copy.bin'; $r += 'copied' } catch { $r += "copy failed: $_" }
+try { $r += 'ro read:' + (Get-Content -Raw '\\\\tsclient\\trd ro\\hello.txt') } catch { $r += "ro read failed: $_" }
+try { [IO.File]::WriteAllText('\\\\tsclient\\trd ro\\x.txt', 'x'); $r += 'ro write: allowed' } catch { $r += 'ro write: refused' }
+Set-Content "$env:TEMP\\trd-drive.txt" ($r -join '|')`)
+        let report = ''
+        for (let i = 0; i < 40 && !report; i++) {
+            await sleep(500)
+            report = (await guest('Get-Content -Raw "$env:TEMP\\trd-drive.txt" -ErrorAction SilentlyContinue')).trim()
+        }
+        await dropTask('trd-drive')
+        check('drives: Windows reads a file from the shared folder', /read:hello from rw/.test(report), report)
+        check('drives: Windows writes a file into it, same content here', await t.readFile(`${shareDir}/rw/from-windows.txt`) === stamp, report)
+        check('drives: a folder made and renamed from Windows', /\|folder\|/.test(report) && await ev(`return require('fs').existsSync(${JSON.stringify(shareDir)} + '/rw/renamed')`), report)
+        check('drives: Windows lists the folder', /list:big.bin,from-windows.txt,hello.txt,renamed/.test(report), report)
+        check('drives: a 3 MB file read on Windows hashes the same', report.includes(`hash:${bigHash}`), report)
+        const copyHash = await ev<string>(`try { return require('crypto').createHash('sha256').update(require('fs').readFileSync(${JSON.stringify(shareDir)} + '/rw/copy.bin')).digest('hex') } catch (e) { return String(e) }`)
+        check('drives: ... and copied on Windows, back here, the same', copyHash === bigHash, { report, copyHash })
+        check('drives: the read-only folder reads but refuses a write', /ro read:hello from ro\|ro write: refused/.test(report) && !(await ev(`return require('fs').existsSync(${JSON.stringify(shareDir)} + '/ro/x.txt')`)), report)
     }
 
     // 9. Live resize: Windows follows the pane.
