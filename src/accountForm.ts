@@ -72,6 +72,8 @@ export function newAccountOption (
         field('cancel').addEventListener('click', () => {
             close()
             select.value = last
+            // As a choice made by hand: the form around it follows (its user name fields show again).
+            select.dispatchEvent(new Event('change'))
         })
         form.addEventListener('submit', async event => {
             event.preventDefault()
@@ -86,10 +88,9 @@ export function newAccountOption (
                 const account = await save({ name: field('name').value.trim(), username, domain: field('domain').value.trim(), password: field('password').value })
                 const option = new Option(label(account), account.id)
                 select.insertBefore(option, select.querySelector(`option[value="${NEW_ACCOUNT}"]`))
-                select.value = account.id
-                last = account.id
                 close()
-                onChange(account.id)
+                select.value = account.id
+                select.dispatchEvent(new Event('change'))
             } catch (e: any) {
                 error.textContent = `Couldn't save it: ${e?.message ?? e}`
             }

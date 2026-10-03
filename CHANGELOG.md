@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.4.1
+
+Fixes from a review of 0.4.0.
+
+**Fixed**
+- **Two desktops saving a password at the same moment** could lose one of them: Tabby's Vault rewrites its whole
+  contents per change. The plugin's Vault changes now go one after another.
+- **A saved account took the desktop's old domain:** an account with a plain user name and no domain was signed in with
+  the domain the desktop had been given before, a field the form hides once an account is chosen. The account's domain
+  (also none) is what is used.
+- **A profile group's account didn't reach profiles reached through an SSH profile** in that host's tab menu; it does
+  now, as it did when opening the profile itself.
+- **"Ask for the account" on a new profile from the settings page** could be overridden by the "Remote desktops"
+  group's default, since the group was assigned after the editor closed. The profile is in the group before the editor
+  opens.
+- **Removing an account** also clears a profile group default that named it, and says so when the password itself
+  couldn't be removed. A desktop whose account is gone asks for one, rather than signing in with a login of its own
+  saved earlier. A sign-in prompt left open while its account was removed or renamed no longer saves under it.
+- **Editing an account's user name** keeps the old name when the old password couldn't be removed, so the two never
+  disagree; a password kept for an account's earlier user name isn't used for the new one. A new account whose password
+  couldn't be saved isn't added.
+- **Hotkey collisions** are found among all of Tabby's bindings, per-profile and per-group hotkeys included, and named
+  by the profile or group; the note says only one of the two would act.
+- The settings page checks the accounts' passwords one after another, and not at all once the keychain has stopped
+  answering, so a Linux keyring that doesn't answer can't hold every keychain worker.
+- Cancelling or finishing **New account…** brings the user name fields back; the Vault lists a saved account's
+  password by the account's name, as intended.
+
 ## 0.4.0
 
 **New**

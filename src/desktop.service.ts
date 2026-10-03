@@ -21,7 +21,7 @@ import { parseRdpFile } from './rdpFile'
 import { prepareRemoteDesktop } from './remoteSetup'
 import { normalizeFingerprint, RDCleanPathProxy, startRDCleanPathProxy } from './rdcleanpath'
 import {
-    askCredentials, Credentials, forgetCredentials, forgetCredentialsFor, hasCredentials, loadCredentials, moveCredentialsFor, saveCredentials,
+    askCredentials, Credentials, forgetCredentials, forgetCredentialsFor, forgetCredentialsOrFail, hasCredentials, loadCredentials, moveCredentialsFor, saveCredentials,
     storeName, STYLE as SIGNIN_STYLE,
 } from './signin'
 import { isSSHTab } from './ssh'
@@ -99,6 +99,10 @@ interface Endpoint {
     saveKey?: string
     /** How the Vault lists them when saved under `saveKey`. */
     saveLabel?: string
+    /** The account's sign-in name when the prompt was made: saved only while the account still has it. */
+    saveFor?: string
+    /** A saved account's domain (empty: none), in place of the desktop's own `domain`. */
+    domain?: string
     /** The host's own desktop: the fingerprint of the certificate its setup made, the only one to accept. */
     certificate?: string
 }
@@ -496,9 +500,10 @@ export class RemoteDesktopService {
         if (target.direct) {
             return [target.direct]
         }
+        // With their group's defaults (an account for the whole group), as Tabby resolves a profile when opening it.
         const viaProfile = target.profileId
             ? (this.config.store.profiles ?? []).filter((p: any) => p?.type === RDP_PROFILE_TYPE && p.options?.host && p.options.via === target.profileId)
-                .map((p: any) => ({ ...p.options, name: p.name }))
+                .map((p: any) => ({ ...this.profiles.getConfigProxyForProfile(p).options, name: p.name }))
             : []
         const specs = desktopsFor(target, this.config.store.remoteDesktop?.desktops, this.ownDesktops.get(target.key), viaProfile)
         // Found VMs come last, and not where a configured desktop has the same address.
@@ -614,15 +619,30 @@ export class RemoteDesktopService {
             username: account.username.trim(),
             ...account.domain?.trim() ? { domain: account.domain.trim() } : {},
         }
-        this.config.store.remoteDesktop.accounts = old ? list.map(a => a === old ? entry : a) : [...list, entry]
-        this.config.save()
-        this.changed$.next()
+        // The password first: a new user name must not be written while the old password (for the old name) stays, nor
+        // a new password reported as saved when the store refused it.
         let keychainError: string | undefined
         if (password !== undefined && password !== '') {
-            await saveCredentials(accountKey(entry.id), { username: signInName(entry), password }).catch(e => { keychainError = String(e?.message ?? e) })
+            await saveCredentials(accountKey(entry.id), { username: signInName(entry), password }, `saved account ${entry.name}`).catch(e => { keychainError = String(e?.message ?? e) })
         } else if (old && signInName(old) !== signInName(entry)) {
-            await forgetCredentials(accountKey(entry.id))
+            await forgetCredentialsOrFail(accountKey(entry.id)).catch(e => { keychainError = `the old password couldn't be removed: ${e?.message ?? e}` })
         }
+        if (keychainError && !old) {
+            // Not added at all: a retry would otherwise make a second account.
+            return { id: entry.id, keychainError: `${keychainError}. The account wasn't added` }
+        }
+        if (keychainError && old && signInName(old) !== signInName(entry)) {
+            // The sign-in name stays as it was; the account's name can still change.
+            entry.username = old.username
+            if (old.domain) {
+                entry.domain = old.domain
+            } else {
+                delete entry.domain
+            }
+        }
+        this.config.store.remoteDesktop.accounts = old ? list.map(a => a === old ? entry : a) : [...list, entry]
+        await this.config.save()
+        this.changed$.next()
         return { id: entry.id, keychainError }
     }
 
@@ -682,9 +702,16 @@ export class RemoteDesktopService {
                 profile.options.account = ''
             }
         }
-        this.config.save()
+        // A profile group's default for remote desktop profiles, too.
+        for (const group of this.config.store.groups ?? []) {
+            const options = group?.defaults?.[RDP_PROFILE_TYPE]?.options
+            if (options?.account === id) {
+                options.account = ''
+            }
+        }
+        await this.config.save()
         this.changed$.next()
-        await forgetCredentials(accountKey(id))
+        await forgetCredentialsOrFail(accountKey(id)).catch(e => this.notifications.error(`The account is removed, but its password could not be: ${e?.message ?? e}`))
     }
 
     /** `remoteDesktop.desktops`: the desktops configured behind SSH hosts. */
@@ -1736,12 +1763,18 @@ export class RemoteDesktopService {
             session.log.push('sign-in: its saved account no longer exists; asking')
         }
         const again = this.askAgain.delete(pane)
-        const saved = retryError || again ? null : await loadCredentials(account ? accountKey(account.id) : session.key)
+        // A desktop whose account is gone asks, rather than falling back to a login of its own saved earlier.
+        let saved = retryError || again || spec.account && !account ? null : await loadCredentials(account ? accountKey(account.id) : session.key)
+        if (saved && account && saved.username !== signInName(account)) {
+            // Kept for an earlier user name of the account (its change didn't reach the store): not this one's.
+            session.log.push(`sign-in: the account's saved password is for ${saved.username}, not ${signInName(account)}; asking`)
+            saved = null
+        }
         if (saved) {
             if (account) {
                 session.log.push(`sign-in: the saved account "${account.name}"`)
             }
-            return { host: spec.host, port: spec.port, credentials: account ? { username: signInName(account), password: saved.password } : saved, remember: false }
+            return { host: spec.host, port: spec.port, credentials: account ? { username: signInName(account), password: saved.password } : saved, remember: false, domain: account ? account.domain ?? '' : undefined }
         }
         session.status('')
         const asked = askCredentials(session.overlay, {
@@ -1756,7 +1789,10 @@ export class RemoteDesktopService {
             setTimeout(() => session.visible && session.focusDesktop())
         }
         const entered = await asked
-        return entered && { host: spec.host, port: spec.port, credentials: entered, remember: entered.remember, saveKey: account && accountKey(account.id) }
+        return entered && {
+            host: spec.host, port: spec.port, credentials: entered, remember: entered.remember, domain: account ? account.domain ?? '' : undefined,
+            saveKey: account && accountKey(account.id), saveLabel: account && `saved account ${account.name}`, saveFor: account && signInName(account),
+        }
     }
 
     private async connect (pane: DesktopPane, target: RemoteTarget, spec: DesktopSpec, session: DesktopSession): Promise<void> {
@@ -2089,7 +2125,7 @@ export class RemoteDesktopService {
             const { width, height } = size
 
             // DOMAIN\user or user@domain go to the server as typed; only the former needs splitting.
-            const [domain, username] = /^([^\\]+)\\(.+)$/.exec(credentials.username)?.slice(1) ?? [spec.domain ?? '', credentials.username]
+            const [domain, username] = /^([^\\]+)\\(.+)$/.exec(credentials.username)?.slice(1) ?? [endpoint.domain ?? spec.domain ?? '', credentials.username]
             session.status(spec.id === OWN_DESKTOP ? `Connecting to ${target.label}…`
                 : target.direct ? `Connecting to ${spec.name}…` : `Connecting to ${spec.name} via ${target.label}…`)
             const config = session.ui.configBuilder()
@@ -2177,7 +2213,12 @@ export class RemoteDesktopService {
             this.syncIndicator(session)
             this.changed$.next()
             this.reconnects.delete(pane)  // connected again: a later drop starts over
-            if (endpoint.remember) {
+            // Under a saved account only while that account is still there with the same sign-in name: the prompt may
+            // have been open while it was removed or changed in Settings.
+            const accountNow = endpoint.saveKey ? this.accounts().find(a => accountKey(a.id) === endpoint.saveKey) : undefined
+            if (endpoint.remember && endpoint.saveKey && (!accountNow || signInName(accountNow) !== endpoint.saveFor)) {
+                session.log.push(`sign-in: not saved: the account ${accountNow ? 'changed' : 'was removed'} meanwhile`)
+            } else if (endpoint.remember) {
                 saveCredentials(endpoint.saveKey ?? session.key, credentials, endpoint.saveLabel).then(
                     () => session.log.push(`sign-in: saved ${endpoint.saveKey ? 'as the account\'s password ' : ''}in ${storeName()}`),
                     e => session.log.push(`sign-in: ${storeName()}: ${e?.message ?? e}`))

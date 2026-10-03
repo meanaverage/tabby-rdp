@@ -312,10 +312,13 @@ if (Test-Path $state) { Get-ChildItem $state -File | Where-Object { $keep -notco
     const vaultWas = await ev<boolean>('return RD.injector.get(require("tabby-core").VaultService).isEnabled()')
     if (!vaultWas) {
         // Tabby remembers the passphrase only through its unlock prompt: answered here by the service itself.
-        await ev(`const V = RD.injector.get(require("tabby-core").VaultService); V.getPassphrase = async () => "trd-test-vault"; V.isOpen = () => true
+        await ev(`const V = RD.injector.get(require("tabby-core").VaultService); H.vaultMethods = { getPassphrase: V.getPassphrase, isOpen: V.isOpen }
+            V.getPassphrase = async () => "trd-test-vault"; V.isOpen = () => true
             await V.setEnabled(true, "trd-test-vault")`)
-        // Off again afterwards, and out of the config: a Vault left on would make every later SSH connection ask for it.
-        t.onCleanup(() => ev('H.inZone(() => { RD.injector.get(require("tabby-core").VaultService).setEnabled(false); delete H.config.store.vault; H.config.save() })'))
+        // Off again afterwards, its methods put back, and out of the config: a Vault left on would make every later SSH
+        // connection ask for it.
+        t.onCleanup(() => ev(`H.inZone(() => { const V = RD.injector.get(require("tabby-core").VaultService); V.setEnabled(false); Object.assign(V, H.vaultMethods)
+            H.config.store.vault = null; H.config.save() })`))
     }
     const accountsBefore = await ev('return JSON.stringify(H.config.store.remoteDesktop.accounts ?? [])')
     t.onCleanup(() => ev(`H.inZone(() => { H.config.store.remoteDesktop.accounts = ${accountsBefore}; H.config.save() })`))

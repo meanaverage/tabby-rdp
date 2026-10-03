@@ -625,6 +625,9 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
             return
         }
         const accounts = this.desktop.accounts()
+        // The password checks one after another: each can wait on a keychain that doesn't answer (10 s), and all at once
+        // they would hold every keytar worker.
+        let checks: Promise<unknown> = Promise.resolve()
         list.replaceChildren(...accounts.map(a => {
             const uses = this.desktop.accountUses(a.id)
             // Each name opens its editor: Tabby's for a profile, the plugin's form for a desktop behind an SSH host.
@@ -639,7 +642,7 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
             row.querySelectorAll<HTMLElement>('[data-profile]').forEach(el => el.addEventListener('click', () => this.zone.run(() => this.editProfile(el.dataset.profile!))))
             row.querySelectorAll<HTMLElement>('[data-desktop]').forEach(el => el.addEventListener('click', () => this.zone.run(() => this.desktop.editDesktopIn(this.root, Number(el.dataset.desktop), true))))
             // Without a password saved, the first desktop to connect asks for it and saves it.
-            this.desktop.accountHasPassword(a.id).then(has => {
+            checks = checks.then(() => row.isConnected ? this.desktop.accountHasPassword(a.id) : 'unknown').then(has => {
                 const note = row.querySelector('[data-password]')
                 if (note && has === 'no') {
                     note.innerHTML = '<br>No password saved: asked for on the next connection'
@@ -704,7 +707,7 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
                 const saved = await this.desktop.saveAccount({ id: account?.id, name, username, domain: field('domain').value.trim() }, field('password').value)
                 close()
                 if (saved.keychainError) {
-                    this.injector.get(NotificationsService).error(`The password wasn't saved: ${saved.keychainError}`)
+                    this.injector.get(NotificationsService).error(`The password wasn't saved: ${saved.keychainError}.`)
                 }
             })
         })
@@ -721,12 +724,27 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
         return Array.isArray(value) ? value.map((b: string | string[]) => Array.isArray(b) ? b : [b]).filter((b: string[]) => b.length) : []
     }
 
-    /** The other hotkeys bound to the same strokes (Tabby's and this plugin's), by id. */
+    /**
+     * The other hotkeys bound to the same strokes (Tabby's and this plugin's), by id. Tabby's bindings are a tree:
+     * `hotkeys.profile.<id>` and `hotkeys['group-selectors'].<id>` hold bindings too, and a single binding may be a
+     * string rather than a list, as Tabby's matcher reads them.
+     */
     private collisions (id: string, strokes: string[]): string[] {
         const key = strokes.join(' ')
-        return Object.entries(this.config.store.hotkeys ?? {})
-            .filter(([other, value]) => other !== id && Array.isArray(value) && value.some((b: string | string[]) => (Array.isArray(b) ? b : [b]).join(' ') === key))
-            .map(([other]) => other)
+        const found: string[] = []
+        const walk = (node: any, path: string) => {
+            if (typeof node === 'string') {
+                if (node === key) found.push(path)
+            } else if (Array.isArray(node)) {
+                if (node.some(b => (Array.isArray(b) ? b : [b]).join(' ') === key)) found.push(path)
+            } else if (node && typeof node === 'object') {
+                for (const [k, v] of Object.entries(node)) {
+                    walk(v, path ? `${path}.${k}` : k)
+                }
+            }
+        }
+        walk(this.config.store.hotkeys ?? {}, '')
+        return found.filter(other => other !== id)
     }
 
     private writeBindings (id: string, bindings: string[][]): void {
@@ -806,7 +824,7 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
             if (conflicts.length) {
                 const note = document.createElement('div')
                 note.className = 'col-12 pb-2 trd-conflict'
-                note.textContent = `${conflicts.join('; ')}: both would fire. Change one of them.`
+                note.textContent = `${conflicts.join('; ')}: only one of them would act. Change one of them.`
                 row.appendChild(note)
             }
             return row
@@ -816,7 +834,19 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
     /** A hotkey's name for a conflict note: one of ours by its short name, Tabby's as Tabby's Hotkeys page lists it. */
     private hotkeyName (id: string): string {
         const own = HOTKEYS.find(h => h.id === id)
-        return own ? `"${own.name}" (above or below)` : `Tabby's "${this.hotkeyNames?.get(id) ?? id}"`
+        if (own) {
+            return `"${own.name}" (above or below)`
+        }
+        // Tabby's per-profile and per-group hotkeys are keyed by the profile's or group's id.
+        const profile = /^profile\.(.+)$/.exec(id)?.[1]
+        const group = /^group-selectors\.(.+)$/.exec(id)?.[1]
+        if (profile) {
+            return `Tabby's hotkey for the profile "${(this.config.store.profiles ?? []).find((p: any) => p?.id === profile)?.name ?? profile}"`
+        }
+        if (group) {
+            return `Tabby's hotkey for the profile group "${(this.config.store.groups ?? []).find((g: any) => g?.id === group)?.name ?? group}"`
+        }
+        return `Tabby's "${this.hotkeyNames?.get(id) ?? id}"`
     }
 
     /** Asks for a binding for one of our hotkeys, and refuses one that another hotkey has: both would fire. */
@@ -1015,21 +1045,23 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
         const profiles = this.injector.get(ProfilesService)
         const template = (await profiles.getProfiles()).find(p => p.type === RDP_PROFILE_TYPE && p.isTemplate)
         const provider = template && profiles.providerForProfile(template)
+        // The group first: the editor reads its profile as soon as it opens.
+        const group = provider ? await this.desktop.remoteDesktopGroup() : ''
         const modal = provider ? this.openModal() : null
         if (!modal || !template || !provider) {
             this.showTabbySettings('profiles')
             return
         }
         const { id: _id, isBuiltin: _b, isTemplate: _t, ...base } = JSON.parse(JSON.stringify(template))
-        modal.componentInstance.partialProfile = { ...base, name: '' }
+        // In the plugin's group from the start, so the editor shows that group's defaults (an account, say) and a choice
+        // made against them ("Ask for the account") is kept as the override it is.
+        modal.componentInstance.partialProfile = { ...base, name: '', group }
         modal.componentInstance.profileProvider = provider
         const result = await modal.result.catch(() => null)
         if (!result) {
             return
         }
         result.type = RDP_PROFILE_TYPE
-        // Into the plugin's group unless the editor's Group field was used.
-        result.group ||= await this.desktop.remoteDesktopGroup()
         if (!result.name) {
             result.name = provider.getSuggestedName(profiles.getConfigProxyForProfile(result)) ?? 'Remote desktop'
         }
