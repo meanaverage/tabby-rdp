@@ -26,6 +26,7 @@
   "main": "dist/index.js",
   "files": [
     "dist",
+    "!dist/**/*.map",
     "vendor",
     "remote",
     "LICENSE",
@@ -36,7 +37,7 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "watch": "tsc -p tsconfig.json --watch",
+    "watch": "tsc -p tsconfig.json --watch --sourceMap",
     "typecheck": "tsc -p tsconfig.json --noEmit && npm run typecheck:test",
     "typecheck:test": "tsc -p tsconfig.test.json",
     "test": "tsx test/run.ts",
