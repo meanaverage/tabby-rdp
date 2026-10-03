@@ -30,6 +30,16 @@ function vaultOn (): boolean {
 export function storeName (): string {
     return vaultOn() ? 'Tabby\'s Vault' : 'the keychain'
 }
+/**
+ * Vault changes one after another: each of Tabby's loads the whole encrypted contents, changes them and writes them
+ * back, so two at once (two desktops signing in together) would lose one's change.
+ */
+let vaultQueue: Promise<unknown> = Promise.resolve()
+function queued<T> (work: () => Promise<T>): Promise<T> {
+    const next = vaultQueue.then(work, work)
+    vaultQueue = next.catch(() => null)
+    return next
+}
 /** How a Vault entry is found: by the same key as the keychain's; its `description` is only for a listing. */
 function vaultKey (key: string): { key: string } {
     return { key }
@@ -105,6 +115,9 @@ export async function loadCredentials (key: string): Promise<Credentials | null>
  * entries can't be seen then: 'unknown'), where loadCredentials would prompt for the passphrase.
  */
 export async function hasCredentials (key: string): Promise<'yes' | 'no' | 'unknown'> {
+    if (keychainStuck && !vaultOn()) {
+        return 'unknown'
+    }
     if (vaultOn()) {
         try {
             if (!vault.isOpen()) {
@@ -127,7 +140,7 @@ export async function hasCredentials (key: string): Promise<'yes' | 'no' | 'unkn
 
 export async function saveCredentials (key: string, credentials: Credentials, label?: string): Promise<void> {
     if (vaultOn()) {
-        await vault.addSecret({ type: VAULT_SECRET_TYPE, key: { ...vaultKey(key), description: label ?? vaultName(key) }, value: JSON.stringify(credentials) })
+        await queued(() => vault.addSecret({ type: VAULT_SECRET_TYPE, key: { ...vaultKey(key), description: label ?? vaultName(key) }, value: JSON.stringify(credentials) }))
         // Not in two places: what the keychain had for it goes.
         try { await answered(keytar()?.deletePassword(KEYCHAIN_SERVICE, key)) } catch { }
         return
@@ -136,12 +149,24 @@ export async function saveCredentials (key: string, credentials: Credentials, la
 }
 
 export async function forgetCredentials (key: string): Promise<void> {
+    try {
+        await forgetCredentialsOrFail(key)
+    } catch { }
+}
+
+/** As forgetCredentials, but a store that wouldn't (a Vault prompt cancelled, a keychain not answering) is reported. */
+export async function forgetCredentialsOrFail (key: string): Promise<void> {
     if (vaultOn()) {
-        try { await vault.removeSecret(VAULT_SECRET_TYPE, vaultKey(key)) } catch { }
+        await queued(() => vault.removeSecret(VAULT_SECRET_TYPE, vaultKey(key)))
     }
     try {
         await answered(keytar()?.deletePassword(KEYCHAIN_SERVICE, key))
-    } catch { }
+    } catch (e) {
+        // No keychain at all is not a failure to forget; one that didn't answer is.
+        if (keytar()) {
+            throw e
+        }
+    }
 }
 
 /** Every saved entry's key and value, from the Vault (when on) and the keychain. */
