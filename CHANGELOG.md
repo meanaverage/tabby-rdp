@@ -8,6 +8,13 @@
   scanners flag as "long strings" (possibly packed code). The package is about 450 KB smaller unpacked. `npm run
   watch` still writes them, for debugging from the repository.
 
+**Fixed**
+- **"Send the password anyway" wasn't remembered.** The choice is meant to stay with that desktop (listed with its
+  certificate under Settings › Remote Desktop › Certificates), but the setting it's kept in was missing from the
+  plugin's defaults, and Tabby only saves settings a plugin's defaults name. The choice held until Tabby restarted and
+  was never written to the config, so a desktop without Network Level Authentication asked again after every restart.
+  A unit test now checks that every setting the plugin writes is in its defaults.
+
 ## 0.5.0
 
 Shared folders, desktops behind an RD Gateway, Hyper-V VMs' consoles, more of what an .rdp file says, text sent as

@@ -59,6 +59,9 @@ export class RemoteDesktopConfig extends ConfigProvider {
             sharedFolders: [],
             // Certificates of desktops behind hosts, trusted on first use: [{ desktop: <session key>, sha256 }].
             trustedCertificates: [],
+            // Desktops allowed to sign in without Network Level Authentication ("Send the password anyway"):
+            // [{ desktop: <session key> }]. Tabby saves only keys named here (test/unit/config-defaults.ts).
+            withoutNla: [],
             // The on-screen display naming a desktop for a moment (see osd.ts).
             osd: { show: 'auto', font: 'condensed', size: 'medium', position: 'top-right', color: '', seconds: 2.5 },
             // Look for VMs with a desktop on SSH hosts (libvirt) and offer them in the menus (see vms.ts).
