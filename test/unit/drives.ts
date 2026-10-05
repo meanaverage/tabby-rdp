@@ -168,20 +168,29 @@ test('a shared folder\'s file copied over a slow link arrives whole, the room sp
     // Room for 8 MB, a link that takes 1 MB at a time.
     const link = new Link(8 * MB, 2 * MB, 64 * 1024)
     const drives = new SharedDrives([{ path: dir, name: 'Share', readOnly: true }], () => null, link)
-    const h = await drives.open(1, '\\big.bin', open())
-    const copy = copying(drives, h, link, 24 * MB)
-    let waits = 0
-    for (let round = 0; round < 1000 && copy.parts.length < 6; round++) {
-        for (let i = 0; i < 5; i++) {
-            await new Promise(resolve => setImmediate(resolve))
+    try {
+        const h = await drives.open(1, '\\big.bin', open())
+        const copy = copying(drives, h, link, 24 * MB)
+        let waits = 0
+        // The reads fill the room before the server reads any of it, as long as the disk takes (10 seconds at most).
+        for (const end = performance.now() + 10000; link.room() && performance.now() < end;) {
+            await new Promise(resolve => setTimeout(resolve, 1))
         }
-        waits += link.room() ? 0 : 1
-        link.tick(MB)
+        for (const end = performance.now() + 20000; copy.parts.length < 6 && performance.now() < end;) {
+            for (let i = 0; i < 5; i++) {
+                await new Promise(resolve => setImmediate(resolve))
+            }
+            waits += link.room() ? 0 : 1
+            link.tick(MB)
+        }
+        await drained(link, copy.stop())
+        assert.ok(waits > 0, 'the reads waited for room')
+        assert.ok(Buffer.concat(copy.parts.slice(0, 6)).equals(bytes))
+        await drives.close(h)
+    } finally {
+        // Whatever happened: the window's count of open files is the next test's too.
+        drives.dispose()
     }
-    await drained(link, copy.stop())
-    assert.ok(waits > 0, 'the reads waited for room')
-    assert.ok(Buffer.concat(copy.parts.slice(0, 6)).equals(bytes))
-    await drives.close(h)
 })
 
 test('files read and write at offsets, through handles', async () => {
