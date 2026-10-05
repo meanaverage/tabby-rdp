@@ -35,7 +35,7 @@ jobs:
     outputs:
       sha256: ${{ steps.pack.outputs.sha256 }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
@@ -67,7 +67,7 @@ jobs:
       id-token: write   # the OIDC token for trusted publishing and provenance, in this job only
     steps:
       # The tagged commit, to check the package against, and scripts/check-vendor.mjs (Node.js and git only).
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       # Node.js 26.8.2 exactly, for the npm that comes with it, 11.19.1: staged publishing needs npm 11.15.0 or later
@@ -112,7 +112,7 @@ jobs:
     permissions:
       contents: write   # creates the release for the tag
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       # The tag's section of CHANGELOG.md (## 1.2.3 up to the next ## heading) becomes the release notes, with the
