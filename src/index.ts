@@ -60,7 +60,8 @@ export default class RemoteDesktopModule {
             'remote-desktop-disconnect': pane => desktop.disconnect(pane),
         }
         hotkeys.hotkey$.subscribe((id: string) => {
-            const action = actions[id] as ((pane: DesktopPane) => void) | undefined
+            // Tabby fires any key bound under `hotkeys` in the config ('constructor' too): the table's own entries only.
+            const action = Object.prototype.hasOwnProperty.call(actions, id) ? actions[id] : undefined
             const pane = action && desktopPaneOf(app.activeTab)
             if (!action || !pane) {
                 return

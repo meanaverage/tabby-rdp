@@ -1,0 +1,127 @@
+name: IronRDP
+
+# vendor/ is committed as scripts/build-ironrdp.sh builds it: IronRDP at ironrdp/BASE_COMMIT (a commit of IronRDP's
+# own, which the build checks) with ironrdp/patches applied. This rebuilds it on a clean machine and checks that it is
+# byte for byte what is committed, every file either side has (scripts/check-vendor.mjs), and runs the tests of what
+# the series changes: the Rust crates it patches, and the RDP package's (H.264, microphone, files). It runs when the
+# series, the build or vendor/ change, before a release is staged (publish.yml, whatever changed), and by hand
+# (Actions › IronRDP › Run workflow). GitHub matches the paths below against a pull request's first 300 changed files
+# only, so a larger one can skip it; the unit tests still check vendor/ against its list, and the release runs it.
+#
+# Actions are pinned to a commit, their tag in the comment: a tag can be moved to other code, a commit can't
+# (CONTRIBUTING.md, "Actions").
+
+on:
+  pull_request:
+    paths:
+      - 'ironrdp/**'
+      - 'vendor/**'
+      - 'scripts/build-ironrdp.sh'
+      - 'scripts/check-vendor.mjs'
+      - '.github/workflows/ironrdp.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'ironrdp/**'
+      - 'vendor/**'
+      - 'scripts/build-ironrdp.sh'
+      - 'scripts/check-vendor.mjs'
+      - '.github/workflows/ironrdp.yml'
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  rebuild:
+    name: vendor/ rebuilt from the series
+    # An Apple Silicon Mac, as vendor/ is built on: cargo mixes the build machine's platform into what it compiles,
+    # so a Linux build of the same sources differs (ironrdp/README.md, "Reproducing vendor/").
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+      - name: IronRDP at the base commit
+        run: |
+          git init -q "$RUNNER_TEMP/ironrdp"
+          git -C "$RUNNER_TEMP/ironrdp" fetch -q --depth 1 https://github.com/Devolutions/IronRDP.git "$(cat ironrdp/BASE_COMMIT)"
+      - name: Build
+        id: build
+        # Into an empty vendor/, so that a committed file the build doesn't make shows up as one.
+        run: |
+          find vendor -mindepth 1 -delete
+          IRONRDP_SRC="$RUNNER_TEMP/ironrdp" scripts/build-ironrdp.sh
+      - name: Compare with the commit
+        id: compare
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        # Every file either side has, hidden ones and any name included (git's list NUL-delimited), byte for byte, and
+        # the two vendor/SHA256SUMS' entries: a difference is a file these sources don't build to. The lists' comments
+        # name the machine and tools that built each (Node.js among them, which doesn't change the bytes), so there
+        # only the entries count. The table goes to the run's summary.
+        run: node scripts/check-vendor.mjs rebuilt
+      - name: Keep the rebuilt vendor/
+        if: ${{ !cancelled() && steps.compare.outcome == 'failure' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: vendor-rebuilt
+          path: vendor/
+          if-no-files-found: error
+      - name: The RDP package's tests
+        # They import wasm-pack's output, which the build made.
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        working-directory: ${{ runner.temp }}/ironrdp/web-client/iron-remote-desktop-rdp
+        run: npx vitest run
+
+  rust-tests:
+    name: Rust tests of the patched crates
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Apply the series to the base commit
+        run: |
+          git init -q "$RUNNER_TEMP/ironrdp"
+          cd "$RUNNER_TEMP/ironrdp"
+          git fetch -q --depth 1 https://github.com/Devolutions/IronRDP.git "$(cat "$GITHUB_WORKSPACE/ironrdp/BASE_COMMIT")"
+          git checkout -q FETCH_HEAD
+          for patch in "$GITHUB_WORKSPACE"/ironrdp/patches/*.patch; do
+            git apply --whitespace=nowarn "$patch"
+          done
+      - name: cargo test
+        # ironrdp-testsuite-core, where IronRDP keeps most tests, and the tests in every crate a patch changes, with
+        # the toolchain IronRDP pins. --lib: most of these crates set `test = false`, and a plain cargo test would
+        # skip their own tests, such as drive redirection's (ironrdp-web).
+        working-directory: ${{ runner.temp }}/ironrdp
+        run: |
+          RUSTUP_TOOLCHAIN=$(sed -n 's/^channel = "\(.*\)"/\1/p' rust-toolchain.toml)
+          export RUSTUP_TOOLCHAIN
+          rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal
+          crates=$({ echo ironrdp-testsuite-core; sed -n 's#^diff --git a/crates/\([^/]*\)/.*#\1#p' "$GITHUB_WORKSPACE"/ironrdp/patches/*.patch; } | sort -u | grep -vx ironrdp-web)
+          echo "Testing ironrdp-web and:" $crates
+          failed=0
+          # Skipped, by its exact name: IronRDP's own test of drive announcements expects the drive name in UTF-16,
+          # and patch 15 sends it in ANSI on purpose (Windows reads it so).
+          cargo test --locked --no-fail-fast --lib --tests $(printf -- '-p %s ' $crates) \
+            -- --exact --skip rdpdr::filesystem_drive_announce_encodes_unicode_data_and_valid_dos_name || failed=1
+          # Skipped, each by its exact name: ironrdp-web's clipboard tests that call into JavaScript, which only a
+          # browser has (here they panic: "cannot call wasm-bindgen imported functions on non-wasm targets"). The
+          # module's other tests run; a new one that needs a browser fails here until it is added to this list.
+          browser_only='
+            test_deferred_file_paste_after_text_formats test_empty_clipboard test_local_clipboard_html_formats
+            test_local_clipboard_image_formats test_local_clipboard_text_formats test_multiple_clipboard_items
+            test_new_format_list_clears_pending_file_paste test_process_event_files_only_triggers_immediate_paste
+            test_process_event_force_clipboard_update test_process_event_force_clipboard_update_fallback
+            test_process_event_local_clipboard_changed test_process_event_remote_data_request
+            test_process_event_remote_data_request_error test_process_remote_data_request_no_local_clipboard
+            test_process_remote_data_request_text test_remote_clipboard_changed_detects_file_format_in_mixed_list
+            test_remote_clipboard_changed_files_only test_unsupported_mime_type test_wasm_clipboard_backend_new'
+          cargo test --locked --no-fail-fast --lib -p ironrdp-web -- --exact $(printf -- '--skip clipboard::tests::%s ' $browser_only) || failed=1
+          exit "$failed"

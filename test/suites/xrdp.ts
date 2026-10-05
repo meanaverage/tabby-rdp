@@ -1,9 +1,10 @@
 // Linux desktops served by xrdp (TRD_TEST_XRDP_*; testbed/linux/xrdp.sh sets up the test host): found by the setup
 // next to GNOME and offered as a second desktop; a host without GNOME (simulated: the setup runs with a PATH without
-// grdctl and gnome-shell) gets xrdp as its own desktop: the sign-in form, the Linux password, xrdp signing in by
+// grdctl and gnome-shell) gets xrdp as its own desktop: the sign-in form, the Linux password, the question before it
+// goes without Network Level Authentication (that the host's desktop is xrdp is the host's word), xrdp signing in by
 // itself (INFO_AUTOLOGON), the picture, typing and the clipboard in the XFCE session, the keychain, "Sign in again…",
 // live resize (xrdp 0.10 and later); and the error with its hint when neither runs.
-import { suite, type CanvasInfo } from '../lib/harness.js'
+import { suite, type CanvasInfo, type StatusInfo } from '../lib/harness.js'
 
 await suite('xrdp', async t => {
     const { ev, check, sleep } = t
@@ -39,6 +40,8 @@ await suite('xrdp', async t => {
     const desktops = await ev('return JSON.stringify(H.config.store.remoteDesktop.desktops ?? [])')
     t.onCleanup(() => ev(`H.inZone(() => { H.config.store.remoteDesktop.desktops = ${desktops}; H.config.save() })`))
     await ev(`H.inZone(() => { H.config.store.remoteDesktop.desktops = []; H.config.save() })`)
+    const withoutNla = await ev('return JSON.stringify(H.config.store.remoteDesktop.withoutNla ?? [])')
+    t.onCleanup(() => ev(`H.inZone(() => { H.config.store.remoteDesktop.withoutNla = ${withoutNla}; H.config.save() })`))
 
     // 0. xrdp runs only for this suite (testbed/linux/xrdp.sh leaves it stopped), through the test user's sudo.
     check('SSH tab for the test user connected', await ev('H.admin = await H.openSSH(); return !!H.admin'))
@@ -102,9 +105,17 @@ await suite('xrdp', async t => {
     check('the own desktop asks for the Linux account, user name filled in, password focused', form?.user === x.user && form?.focused === 'password' && form?.title === `Sign in to ${host} desktop`, form)
     check('its kind is xrdp', await ev('return RD.desktop.desktopOf(H.pane)?.kind') === 'xrdp')
     const t1 = Date.now()
-    const before = (await log('H.pane')).length
+    await ev(`H.inZone(() => { H.config.store.remoteDesktop.withoutNla = (H.config.store.remoteDesktop.withoutNla ?? []).filter(e => e?.desktop !== ${JSON.stringify(key)}) })`)
     await ev(`H.submit(H.pane, ${JSON.stringify(x.password)})`)
-    check('xrdp desktop connected', /Z $/.test(await outcome('H.pane', before) ?? ''), (await log('H.pane')).slice(-4))
+    // That the host's own desktop is xrdp is what its setup said: asked once before the password goes as it is.
+    const plain = await t.waitFor<StatusInfo>(`const s = H.status(H.pane); return s && /Network Level Authentication/.test(s.text) ? s : null`, 40)
+    check('the host\'s own xrdp: asked once before the password goes without NLA, in xrdp\'s terms',
+        plain?.buttons.join() === 'Send the password anyway,Cancel' && /xrdp signs in this way by design\. That .* desktop is xrdp is what/.test(plain.text), plain)
+    // Counted from the answer: the attempt before it ended at the question ("RDCleanPath failed: …").
+    const answered = (await log('H.pane')).length
+    await ev(`H.inZone(() => H.clickStatus(H.pane, 'Send the password anyway'))`)
+    check('xrdp desktop connected', /Z $/.test(await outcome('H.pane', answered) ?? ''), (await log('H.pane')).slice(-4))
+    check('... and allowed from now on, with its certificate', await ev(`return (H.config.store.remoteDesktop.withoutNla ?? []).some(e => e?.desktop === ${JSON.stringify(key)} && !!e.sha256)`))
     t.time('sign-in → connected', Date.now() - t1)
     const session = (await t.remote('H.pane', `for i in $(seq 80); do p=$(pgrep -u "$(id -u)" -x xfce4-session) && break; sleep 0.25; done; echo "$p"`)).trim()
     check('xrdp signed in by itself (no login window): an XFCE session runs', /^\d+/.test(session), session)

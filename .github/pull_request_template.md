@@ -4,4 +4,4 @@
 
 - [ ] New behavior has checks in the suites (test/README.md), or says here why it can't
 - [ ] README and docs follow what changed
-- [ ] IronRDP changes are in the patch series (ironrdp/README.md), with `npm run build:ironrdp` output committed
+- [ ] IronRDP changes are in the patch series (ironrdp/README.md), with `npm run build:ironrdp` output committed if you built it on an Apple Silicon Mac (CI rebuilds it on one and compares); built elsewhere, it comes out different, so leave `vendor/` to a maintainer

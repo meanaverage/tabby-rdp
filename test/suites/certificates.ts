@@ -9,7 +9,8 @@
 //   again; an automatic reconnect stops at the same question; removing the desktop forgets the certificate.
 // - A server without Network Level Authentication (the host's xrdp, where it has one: testbed/linux/xrdp.sh), as a
 //   Windows desktop: stopped before anything but the connection request went to it, saying the password would go as it
-//   is; Cancel sends nothing; "Send the password anyway" connects and is remembered; as an xrdp desktop it isn't asked.
+//   is; Cancel sends nothing; "Send the password anyway" connects and is remembered with the server's certificate,
+//   until a changed certificate is trusted (asked again then); as an xrdp desktop it isn't asked.
 import { suite, type StatusInfo } from '../lib/harness.js'
 
 const NAME = 'GNOME as an extra'
@@ -153,8 +154,12 @@ await suite('certificates', async t => {
     // 7. Removing the desktop forgets its certificate.
     const index = await ev<number>(`return RD.desktop.configuredDesktops().findIndex(d => d.name === ${JSON.stringify(NAME)})`)
     await ev(`H.inZone(() => RD.desktop.removeDesktop(${index}))`)
-    await sleep(300)
-    check('removing the desktop forgets its certificate', index >= 0 && !(await ev(`return H.trusted(${k})`)))
+    // After its saved password: the certificate stays while a store of passwords can't be read (a keychain not there).
+    if (await t.keychainWorks()) {
+        check('removing the desktop forgets its certificate', index >= 0 && !!(await t.waitFor(`return !H.trusted(${k})`, 10)))
+    } else {
+        t.skip('removing the desktop forgets its certificate', 'the system keychain doesn\'t answer here, so the certificate stays')
+    }
 
     // 8. A server that doesn't use Network Level Authentication, which a Windows machine does: xrdp, under that name.
     const xrdpPort = t.env.xrdp.port
@@ -172,7 +177,9 @@ await suite('certificates', async t => {
     }
     const PLAIN = 'No NLA (test)'
     const plainKey = JSON.stringify(`${ownKey}#127.0.0.1:${xrdpPort}`)
-    const allowed = (key: string) => ev<boolean>(`return (H.config.store.remoteDesktop.withoutNla ?? []).some(e => e?.desktop === ${key})`)
+    // Allowed, and kept with the certificate remembered for it: the permission is for the server with that one.
+    const allowed = (key: string) => ev<boolean>(`return (H.config.store.remoteDesktop.withoutNla ?? []).some(e => e?.desktop === ${key} &&
+        e.sha256 === (H.config.store.remoteDesktop.trustedCertificates ?? []).find(c => c?.desktop === ${key})?.sha256)`)
     const plain = (kind: string) => ev(`H.inZone(() => {
         H.config.store.remoteDesktop.desktops = [...(H.config.store.remoteDesktop.desktops ?? []).filter(d => d.name !== ${JSON.stringify(PLAIN)}),
             { name: ${JSON.stringify(PLAIN)}, via: ${JSON.stringify(ownKey)}, host: '127.0.0.1', port: ${xrdpPort}, kind: ${JSON.stringify(kind)}, username: 'someone' }]
@@ -197,7 +204,21 @@ await suite('certificates', async t => {
     check('"Try again": the same question', !!(await asks()))
     await ev(`H.inZone(() => H.clickStatus(H.pane, 'Send the password anyway'))`)
     check('"Send the password anyway": connects, without asking for the account again', !!(await t.waitFor('return H.up()', 40)) && !(await ev('return !!H.signin()')), await ev('return [H.status(H.pane), H.attempt()]'))
-    check('... and the desktop is remembered as allowed', await allowed(plainKey))
+    check('... and the desktop is remembered as allowed, with its certificate', await allowed(plainKey))
+    await ev('H.inZone(() => RD.desktop.disconnect(H.pane))')
+    // The permission went with the certificate it was given for: trusting a changed one asks about it again.
+    await ev(`H.setTrusted(${plainKey}, ${JSON.stringify(BOGUS)})`)
+    await ev(`H.inZone(() => RD.desktop.showDesktop(H.pane, '127.0.0.1:${xrdpPort}'))`)
+    await t.waitFor('return !!H.signin()', 20) && await ev(`H.signIn('not-a-real-password')`)
+    const renewed = await t.waitFor<StatusInfo>('return H.changed()', 40)
+    check('allowed, then a changed certificate: the question says the permission goes with the old one',
+        /allowed to sign in without Network Level Authentication, which goes with the old certificate/.test(renewed?.text ?? ''), renewed ?? await ev('return [H.status(H.pane), H.attempt()]'))
+    await ev(`H.inZone(() => H.clickStatus(H.pane, 'Trust the new certificate'))`)
+    const again = await t.waitFor<StatusInfo>(`const s = H.status(H.pane); return s?.buttons.join() === 'Send the password anyway,Cancel' ? s : null`, 40)
+    check('... trusted: asked about Network Level Authentication again, before anything more is sent',
+        !!again && !(await allowed(plainKey)) && !(await ev('return H.relayed()')), again ?? await ev('return [H.status(H.pane), H.attempt()]'))
+    await ev(`H.inZone(() => H.clickStatus(H.pane, 'Send the password anyway'))`)
+    check('... "Send the password anyway" connects, allowed again', !!(await t.waitFor('return H.up()', 40)) && await allowed(plainKey), await ev('return [H.status(H.pane), H.attempt()]'))
     await ev('H.inZone(() => RD.desktop.disconnect(H.pane))')
     await ev(`H.inZone(() => RD.desktop.forgetCertificate(${plainKey}))`)
     check('forgetting its certificate forgets that too', !(await allowed(plainKey)))

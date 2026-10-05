@@ -4,8 +4,11 @@ import {
     TabContextMenuItemProvider,
 } from 'tabby-core'
 import { BaseTerminalTabComponent, TerminalDecorator } from 'tabby-terminal'
+import { CLIPBOARD_LABELS, ClipboardMode, narrowest } from './clipboard'
 import { DesktopSettings, RemoteDesktopService } from './desktop.service'
+import { entryText, isDesktopEntry } from './desktops'
 import { HOTKEYS, RemoteDesktopHelp, TOGGLE_HOTKEY } from './help'
+import { MAX_VMS } from './hyperv'
 import { DesktopKeyboard, SEND_KEYS } from './keyboard'
 import { UpdateCheck } from './updates'
 import { isSSHTab } from './ssh'
@@ -34,6 +37,9 @@ export class RemoteDesktopConfig extends ConfigProvider {
             sharpness: 'standard',
             // `desk`: installs a login hook on remotes (applied the next time a desktop opens there).
             desk: false,
+            // The keys `desk` sends on each host, as that host's setup reported them: [{ desktop: <host account>,
+            // sha256 }] (a digest, not the key). Requests without the host's key are ignored (see openConsole).
+            deskKeys: [],
             // macOS: ⌘ acts as Ctrl on the remote desktop (false: ⌘ is the Windows/Super key).
             macShortcuts: true,
             // Send the characters typed (Unicode) rather than key positions: dead keys, layouts the remote lacks.
@@ -46,8 +52,12 @@ export class RemoteDesktopConfig extends ConfigProvider {
             zoom: 'fit',
             // A small indicator on the desktop: throughput, frames per second, SSH round trip, connection path.
             connectionStatus: false,
-            // Send the microphone to the remote desktop while an application there records (applies on the next connect).
+            // Send the microphone to a remote desktop that asks for it, as one does while an app there records
+            // (applies on the next connect).
             microphone: false,
+            // Which ways the clipboard (text, pictures, files) goes, unless a desktop has its own: 'both' | 'fromRemote'
+            // (only from the remote desktop to this computer) | 'off' (applies on the next connect; see clipboard.ts).
+            clipboard: 'both',
             // More desktops behind SSH hosts (e.g. a Windows VM whose RDP port the host forwards); see desktops.ts.
             desktops: [],
             // Saved accounts desktops can sign in with: [{ id, name, username, domain }]; passwords are in the keychain
@@ -57,11 +67,17 @@ export class RemoteDesktopConfig extends ConfigProvider {
             desktopSharpness: [],
             // Folders shared with remote desktops as drives (\\tsclient\<name>): [{ path, name, readOnly }]; see drives.ts.
             sharedFolders: [],
-            // Certificates of desktops behind hosts, trusted on first use: [{ desktop: <session key>, sha256 }].
+            // Certificates remembered for desktops and RD Gateways: [{ desktop: <session key, or gateway#host:port>, sha256,
+            // authority }]; `authority` true where a certificate authority vouched for it, false where the user trusted
+            // it, none where it was trusted on first use (desktops behind hosts). See RemoteDesktopService.checkTrusted.
             trustedCertificates: [],
-            // Desktops allowed to sign in without Network Level Authentication ("Send the password anyway"):
-            // [{ desktop: <session key> }]. Tabby saves only keys named here (test/unit/config-defaults.ts).
+            // Desktops allowed to sign in without Network Level Authentication ("Send the password anyway"), each with
+            // the certificate it was allowed with: [{ desktop: <session key>, sha256 }]. Tabby saves only keys named
+            // here (test/unit/config-defaults.ts).
             withoutNla: [],
+            // Machines reached with ssh typed in an SSH tab whose desktop was chosen there "from now on" (see remoteFor):
+            // [{ via: <that tab's key>, destination }]. Desktop opens such a one at once; others are asked about first.
+            nestedSSH: [],
             // The on-screen display naming a desktop for a moment (see osd.ts).
             osd: { show: 'auto', font: 'condensed', size: 'medium', position: 'top-right', color: '', seconds: 2.5 },
             // Look for VMs with a desktop on SSH hosts (libvirt) and offer them in the menus (see vms.ts).
@@ -74,6 +90,10 @@ export class RemoteDesktopConfig extends ConfigProvider {
             updateNoted: '',
             // The tip shown the first time a desktop connects (see help.ts) has been shown.
             tipShown: false,
+            // The passwords 0.5.0 saved for desktops reached through an RD Gateway, under keys that are now those of the
+            // same addresses without one, have been forgotten from the Vault (see
+            // RemoteDesktopService.gatewayPasswords; each computer's keychain keeps a mark of its own).
+            gatewayPasswordsMigrated: false,
         },
     }
 
@@ -101,17 +121,21 @@ export function toggleLabel (desktop: RemoteDesktopService, pane: DesktopPane): 
 }
 
 /**
- * The host's other desktops (besides the one the toggle acts on): open one here, replacing the current one.
- * Then "Add a desktop behind <host>…".
+ * The host's other desktops (besides the one the toggle acts on, see RemoteDesktopService.choicesOf): open one here,
+ * replacing the current one, a machine's reached through the host included. Then "Add a desktop behind <host>…".
  */
 export function desktopChoices (desktop: RemoteDesktopService, pane: DesktopPane, targetLabel?: string): MenuItemOptions[] {
-    const { specs, current } = desktop.choicesOf(pane)
-    const items: MenuItemOptions[] = specs.filter(spec => spec.id !== current?.id).map(spec => ({
+    const { specs, chosen } = desktop.choicesOf(pane)
+    const items: MenuItemOptions[] = specs.filter(spec => !chosen(spec)).map(spec => ({
         label: desktop.isOpenElsewhere(pane, spec) ? `Switch to ${spec.name} (open in another tab)`
             // Found on the host (see vms.ts): say so, and that opening one that's off starts it.
             : spec.found === 'off' ? `Start and open ${spec.name} (VM, shut off)` : spec.found ? `Open ${spec.name} (VM)` : `Open ${spec.name}`,
         click: () => desktop.showDesktop(pane, spec.id),
     }))
+    // A host with more VMs than a menu lists: the rest are left out, and that is said rather than hidden.
+    if (desktop.vmsCut(pane)) {
+        items.push({ label: `Only the first ${MAX_VMS} VMs found are listed`, enabled: false })
+    }
     // Not in a remote desktop tab: it isn't an SSH host.
     if (targetLabel && desktop.hasConsole(pane)) {
         items.push({ label: `Add a desktop behind ${targetLabel}…`, click: () => desktop.addDesktop(pane) })
@@ -119,13 +143,17 @@ export function desktopChoices (desktop: RemoteDesktopService, pane: DesktopPane
     return items
 }
 
-/** What can be done with the pane's connected desktop: send keys, view only, a screenshot. Shared by the menus. */
+/**
+ * What can be done with the pane's connected desktop: send keys, view only, its microphone, a screenshot. Shared by
+ * the menus.
+ */
 export function desktopActions (desktop: RemoteDesktopService, keyboard: DesktopKeyboard, pane: DesktopPane): MenuItemOptions[] {
     const spec = desktop.desktopOf(pane)
     if (!spec || !desktop.isConnected(pane)) {
         return []
     }
     const viewOnly = desktop.isViewOnly(pane)
+    const microphoneStopped = desktop.microphoneStoppedFor(pane)
     return [
         {
             label: 'Send keys',
@@ -138,6 +166,14 @@ export function desktopActions (desktop: RemoteDesktopService, keyboard: Desktop
             checked: viewOnly,
             click: () => desktop.setViewOnly(pane, !viewOnly),
         },
+        // With the setting on, every desktop gets the microphone when it asks for it; this one can be left out,
+        // reconnects included, and taken back in (see RemoteDesktopService.stopMicrophone).
+        ...desktop.settings().microphone ? [{
+            type: 'checkbox' as const,
+            label: 'Send the microphone (when this desktop asks for it)',
+            checked: !microphoneStopped,
+            click: () => microphoneStopped ? desktop.resumeMicrophone(pane) : desktop.stopMicrophone(pane),
+        }] : [],
         { label: 'Save a screenshot (to Downloads and the clipboard)', click: () => desktop.saveScreenshot(pane) },
     ]
 }
@@ -190,19 +226,23 @@ export class RemoteDesktopContextMenu extends TabContextMenuItemProvider {
         if (this.desktop.isConnected(pane)) {
             items.push({ label: 'Send files…', click: () => this.desktop.sendFiles(pane) })
             items.push(...desktopActions(this.desktop, this.keyboard, pane))
-            // Several desktops in this tab: paste on all of them, or type into all of them.
+            // Several desktops showing in this tab: paste on all of them, or type into all of them. Typing into all, once
+            // on, stays here to be turned off while fewer of them show (those hidden get nothing: see
+            // RemoteDesktopService.takesAll).
             const all = this.desktop.desktopsInTab(pane)
             if (all > 1) {
                 items.push({ label: `Paste to all ${all} desktops in this tab`, click: () => this.desktop.pasteToAll(pane) })
+            }
+            if (all > 1 || this.desktop.isBroadcast(pane)) {
                 items.push({
                     type: 'checkbox',
-                    label: `Type into all ${all} desktops in this tab`,
+                    label: all > 1 ? `Type into all ${all} desktops in this tab` : 'Type into all desktops in this tab',
                     checked: this.desktop.isBroadcast(pane),
                     click: () => this.desktop.setBroadcast(pane, !this.desktop.isBroadcast(pane)),
                 })
             }
         }
-        if (this.desktop.desktopOf(pane)?.found) {
+        if (this.desktop.canSaveFoundDesktop(pane)) {
             items.push({ label: `Save ${this.desktop.desktopOf(pane)!.name} to this host's desktops`, click: () => this.desktop.saveFoundDesktop(pane) })
         }
         if (this.desktop.canSignInAgain(pane)) {
@@ -240,6 +280,11 @@ export function settingsMenu (desktop: RemoteDesktopService, pane?: DesktopPane 
     // The desktop open in this pane can have its own sharpness (for example, Retina for Windows only).
     const spec = pane ? desktop.desktopOf(pane) : null
     const own = pane ? desktop.ownSharpness(pane) : null
+    // Narrowed while it was open, by another way of opening it (see DesktopSession.clipboardCap): said only where that
+    // is narrower than what the desktop would have otherwise, its own setting or this one.
+    const capOf = pane ? desktop.clipboardCapOf(pane) : 'both'
+    const otherwise = spec?.clipboard ?? current.clipboard
+    const cap = narrowest(capOf, otherwise) !== otherwise ? narrowest(capOf, otherwise) : 'both'
     const ownRadio = (value: DesktopSettings['sharpness'] | null, label: string): MenuItemOptions => ({
         type: 'radio',
         label,
@@ -252,6 +297,12 @@ export function settingsMenu (desktop: RemoteDesktopService, pane?: DesktopPane 
         ownRadio('standard', 'Standard'),
         ownRadio('retina', 'Retina'),
     ] : []
+    // The configured desktops, each with its place in the list (what editing and removing take); an item that is no
+    // entry describes no desktop, and isn't listed. Shown as text whatever an entry holds (see entryText): this menu is
+    // part of every SSH tab's, which Tabby builds from every plugin's items at once, so one entry that can't be shown
+    // would take Tabby's own items too.
+    const entries = desktop.configuredDesktops().flatMap((d, i) => isDesktopEntry(d) ? [{ index: i, ...entryText(d) }] : [])
+    const entryLabel = (e: { name: string, via: string }) => `${e.name}${e.via ? ` (behind ${e.via})` : ''}…`
     return [
         ...help ? [
             { label: 'All settings, keys and help…', click: () => help.open() },
@@ -288,9 +339,24 @@ export function settingsMenu (desktop: RemoteDesktopService, pane?: DesktopPane 
         },
         {
             type: 'checkbox',
-            label: 'Send the microphone while an app on the remote desktop records (applies on the next connect)',
+            label: 'Send the microphone to remote desktops that ask for it (on applies on the next connect, off at once)',
             checked: current.microphone,
             click: () => desktop.updateSettings({ microphone: !current.microphone }),
+        },
+        {
+            // A desktop's own (its profile, or its edit form) takes the place of this: the one open here says so.
+            label: 'Clipboard (applies on the next connect)',
+            submenu: [
+                // Its own: from its profile (or that profile's group's or type's defaults), or its entry behind a host.
+                ...spec?.clipboard ? [
+                    { label: `${spec.name} doesn't follow this: its profile or its own settings say ${CLIPBOARD_LABELS[spec.clipboard].toLowerCase()}`, enabled: false },
+                ] : [],
+                ...cap !== 'both' ? [
+                    { label: `Clipboard sharing with ${spec?.name ?? 'this desktop'} is ${CLIPBOARD_LABELS[cap].toLowerCase()} until it is closed, as another way of opening it asked`, enabled: false },
+                ] : [],
+                ...spec?.clipboard || cap !== 'both' ? [{ type: 'separator' as const }] : [],
+                ...(Object.entries(CLIPBOARD_LABELS) as [ClipboardMode, string][]).map(([mode, label]) => radio('clipboard', mode, label)),
+            ],
         },
         {
             type: 'checkbox',
@@ -315,18 +381,18 @@ export function settingsMenu (desktop: RemoteDesktopService, pane?: DesktopPane 
         {
             // The form shows over a console (a remote desktop tab edits its desktop in Tabby's profile settings).
             label: 'Edit a desktop',
-            enabled: !!pane && desktop.hasConsole(pane) && desktop.configuredDesktops().length > 0,
-            submenu: desktop.configuredDesktops().map((d, i) => ({
-                label: `${d.name ?? `${d.host}:${d.port}`} (behind ${d.via})…`,
-                click: () => pane && desktop.editDesktop(pane, i),
+            enabled: !!pane && desktop.hasConsole(pane) && entries.length > 0,
+            submenu: entries.map(e => ({
+                label: entryLabel(e),
+                click: () => pane && desktop.editDesktop(pane, e.index),
             })),
         },
         {
             label: 'Remove a desktop',
-            enabled: desktop.configuredDesktops().length > 0,
-            submenu: desktop.configuredDesktops().map((d, i) => ({
-                label: `${d.name ?? `${d.host}:${d.port}`} (behind ${d.via})…`,
-                click: () => desktop.confirmRemoveDesktop(i),
+            enabled: entries.length > 0,
+            submenu: entries.map(e => ({
+                label: entryLabel(e),
+                click: () => desktop.confirmRemoveDesktop(e.index),
             })),
         },
     ]

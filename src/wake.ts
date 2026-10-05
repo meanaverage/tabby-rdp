@@ -1,5 +1,6 @@
 import { shq } from './deskScript'
 import { hyperVState, startHyperV, vmId } from './hyperv'
+import { configNumber } from './osd'
 import { RemoteTarget } from './targets'
 
 /**
@@ -23,7 +24,7 @@ export function parseWake (raw: any): WakeSpec | undefined {
     }
     const mac = typeof raw?.mac === 'string' ? raw.mac.trim() : ''
     if (MAC.test(mac)) {
-        const port = Number(raw.port ?? 9)
+        const port = configNumber(raw.port ?? 9)
         return {
             mac,
             ...typeof raw.broadcast === 'string' && IPV4.test(raw.broadcast.trim()) ? { broadcast: raw.broadcast.trim() } : {},
@@ -105,11 +106,13 @@ const IDLE_SCRIPT = String.raw`
 command -v virsh >/dev/null 2>&1 || { echo "RD_ERR virsh is not installed on the SSH host"; exit 0; }
 command -v ss >/dev/null 2>&1 || { echo "RD_ERR ss (iproute2) is not installed on the SSH host"; exit 0; }
 # The pid file: with the plugin's other files, or where the home folder isn't writable, in a folder of its own in /tmp.
+# Private either way, as the desktop's setup keeps it (this may be the first to make it).
 D="$HOME/.local/share/tabby-rdp"
-if ! mkdir -p "$D" 2>/dev/null; then
+if ! { mkdir -p "$D" && chmod 700 "$D"; } 2>/dev/null; then
     D="/tmp/tabby-rdp-$(id -u)"
     mkdir -p -m 700 "$D" 2>/dev/null
-    [ -d "$D" ] && [ -O "$D" ] && [ ! -L "$D" ] || { echo "RD_ERR could not create a folder for the watcher's pid file"; exit 0; }
+    # One that was there already keeps its mode (mkdir -m only sets one it makes): made private here, or not used.
+    [ -d "$D" ] && [ -O "$D" ] && [ ! -L "$D" ] && chmod 700 "$D" 2>/dev/null || { echo "RD_ERR could not create a folder for the watcher's pid file"; exit 0; }
 fi
 PIDF="$D/idle-$(printf %s "$VM" | tr -c 'A-Za-z0-9._-' _).pid"
 if [ -s "$PIDF" ] && kill -0 "$(cat "$PIDF")" 2>/dev/null; then
@@ -121,8 +124,11 @@ for u in qemu:///system qemu:///session; do
 done
 [ -n "$URI" ] || { echo "RD_ERR $VM is not running"; exit 0; }
 A=$(getent ahostsv4 "$H" 2>/dev/null | awk 'NR == 1 { print $1 }')
+# The watcher writes its pid file anew (umask 077): one left by an earlier version keeps its mode otherwise.
+rm -f "$PIDF"
 nohup setsid sh -c '
 VM=$1 URI=$2 A=$3 P=$4 IDLE=$5 PIDF=$6
+umask 077
 echo $$ > "$PIDF"
 trap "rm -f \"$PIDF\"" EXIT
 idle=0 asked=0
@@ -151,11 +157,12 @@ echo "RD_OK $VM shuts down after $((IDLE / 60)) min without a desktop open ($URI
  */
 export async function shutDownWhenIdle (target: RemoteTarget, vm: string, host: string, port: number, idleSeconds: number): Promise<string> {
     const out = await target.exec('sh -s', `VM=${shq(vm)}\nH=${shq(host)}\nP=${port}\nIDLE=${Math.max(1, Math.round(idleSeconds / 30)) * 30}\n${IDLE_SCRIPT}`)
-    const err = /^RD_ERR (.*)$/m.exec(out)
+    // The host's words, as much of them as the log shows: the host decides how long its lines are.
+    const err = /^RD_ERR (.{0,1000})/m.exec(out)
     if (err) {
         throw new Error(err[1].trim())
     }
-    return /^RD_OK (.*)$/m.exec(out)?.[1] ?? 'no result'
+    return /^RD_OK (.{0,1000})/m.exec(out)?.[1] ?? 'no result'
 }
 
 /** Whether the RDP server at host:port answers, as seen from the SSH host. */
@@ -178,11 +185,12 @@ export async function wakeDesktop (target: RemoteTarget, wake: WakeSpec): Promis
         ? `VM=${shq(wake.vm)}\n${VM_SCRIPT}`
         : `MAC=${shq(wake.mac)}\nBCAST=${shq(wake.broadcast ?? '255.255.255.255')}\nPORT=${wake.port ?? 9}\n${WOL_SCRIPT}`
     const out = await target.exec('sh -s', script)
-    const err = /^RD_ERR (.*)$/m.exec(out)
+    // The host's words, as much of them as a status line shows (see shutDownWhenIdle).
+    const err = /^RD_ERR (.{0,1000})/m.exec(out)
     if (err) {
         throw new Error(err[1].trim())
     }
-    return /^RD_OK (.*)$/m.exec(out)?.[1] ?? 'no result'
+    return /^RD_OK (.{0,1000})/m.exec(out)?.[1] ?? 'no result'
 }
 
 /**

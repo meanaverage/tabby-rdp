@@ -1,7 +1,9 @@
 // Microphone, on a Linux desktop host (TRD_TEST_HOST): with the microphone setting on, recording from GNOME Remote
 // Desktop's audio source on the remote opens the microphone here, and a tone fed in as the local microphone (a fake
-// getUserMedia) arrives there as sound; when the recording stops, the microphone is released. With the setting off,
-// none is set up.
+// getUserMedia) arrives there as sound; when the recording stops, the microphone is released. A recording that starts
+// with the console in front still gets the microphone, shown in Tabby's header and said in a note; Stop in the header's
+// menu ends it, and holds when the desktop connects again, until it is turned back on. With the setting off, none is
+// set up.
 import { suite, type MicrophoneStats } from '../lib/harness.js'
 
 const SECONDS = 8
@@ -89,6 +91,57 @@ await suite('microphone', async t => {
 
     const released = await t.waitFor('const m = H.session(H.pane)?.mic; return m && !m.capturing && H.fakeMic.tracks.every(track => track.readyState === "ended")', 15, 250)
     check('recording stopped: the microphone is released and the indicator hidden', !!released && (await mic())?.indicator === false, await mic())
+
+    // With the console in front, the desktop's dot is out of sight: the microphone in Tabby's header shows the capture,
+    // and a note says it started. Capturing goes on (a call isn't cut short); Stop in the header's menu ends it.
+    const headerMic = () => ev<{ shown: boolean, title: string } | null>(`await new Promise(r => setTimeout(r, 150))
+        const b = document.querySelector('app-root .trd-header-mic')
+        return b ? { shown: getComputedStyle(b).display !== 'none' && b.getBoundingClientRect().width > 0, title: b.title } : null`)
+    await ev(`const n = RD.injector.get(require('tabby-core').NotificationsService)
+        H.notes = []
+        H.realInfo = n.info
+        n.info = function (text, details) { H.notes.push(text); return H.realInfo.call(this, text, details) }`)
+    t.onCleanup(() => ev(`const n = RD.injector.get(require('tabby-core').NotificationsService); if (H.realInfo) n.info = H.realInfo`))
+    check('no microphone in the header while nothing records', (await headerMic())?.shown === false, await headerMic())
+    await ev('H.inZone(() => RD.desktop.showConsole(H.pane))')
+    const hiddenRecording = t.remote('H.pane', 'python3 -', RECORD)
+    const hidden = await t.waitFor('const m = H.session(H.pane)?.mic; return m?.capturing && !RD.desktop.isVisible(H.pane) || null', SECONDS - 1, 250)
+    check('console in front: the remote still gets the microphone', !!hidden, await mic())
+    const header = await headerMic()
+    check('... and Tabby\'s header shows the microphone, naming the desktop', !!header?.shown && header.title.includes(await ev<string>('return RD.desktop.desktopOf(H.pane).name')), header)
+    check('... and a note says it started while the desktop isn\'t showing', await ev<boolean>('return H.notes.some(n => /is receiving your microphone/.test(n))'), await ev('return H.notes'))
+    // Stop, as the header's microphone offers it: its menu (a native one, so the pick is made here) has Stop for the
+    // desktop.
+    const picked = await ev<string | null>(`const platform = RD.injector.get(require('tabby-core').PlatformService)
+        const real = platform.popupContextMenu
+        let picked = null
+        platform.popupContextMenu = function (items) {
+            platform.popupContextMenu = real
+            const stop = items.find(i => /^Stop sending the microphone to /.test(i.label ?? ''))
+            picked = stop?.label ?? null
+            stop?.click()
+        }
+        document.querySelector('app-root .trd-header-mic').click()
+        platform.popupContextMenu = real
+        return picked`)
+    check('the header\'s microphone menu offers Stop for the desktop', !!picked, picked)
+    const stopped = await t.waitFor('const m = H.session(H.pane)?.mic; return m && !m.capturing && H.fakeMic.tracks.every(track => track.readyState === "ended")', 5, 250)
+    check('Stop: the microphone is released and the header\'s microphone goes', !!stopped && (await headerMic())?.shown === false, await mic())
+    await hiddenRecording
+
+    // The desktop connects again (as it does by itself when its server drops the connection): the Stop holds.
+    await ev('H.inZone(() => RD.desktop.disconnect(H.pane))')
+    await ev('await H.inZone(() => RD.desktop.showDesktop(H.pane))')
+    check('desktop connected again (microphone on)', !!(await connected()))
+    check('... and the desktop\'s menu says its microphone is stopped', await ev<boolean>('return RD.desktop.microphoneStoppedFor(H.pane)'))
+    const refusedRecording = t.remote('H.pane', 'python3 -', RECORD)
+    const refused = await t.waitFor('const m = H.session(H.pane)?.mic; return m?.format && !m.capturing || null', SECONDS - 1, 250)
+    check('the remote asks for the microphone, and gets nothing', !!refused && (await ev<number>('return H.session(H.pane).mic.sent')) === 0, await mic())
+    // Send the microphone, turned back on in the desktop's menu: what the remote has open gets it at once.
+    await ev('H.inZone(() => RD.desktop.resumeMicrophone(H.pane))')
+    const resumed = await t.waitFor('const m = H.session(H.pane)?.mic; return m?.capturing && m.sent > 0.5 || null', SECONDS - 2, 250)
+    check('turned back on: the remote gets the microphone again', !!resumed, await mic())
+    await refusedRecording
 
     await ev('H.inZone(() => RD.desktop.disconnect(H.pane))')
     await t.settings({ microphone: false })

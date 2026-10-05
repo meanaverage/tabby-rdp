@@ -4,13 +4,15 @@ import { Subscription } from 'rxjs'
 import { AppService, ConfigService, HotkeyDescription, HotkeysService, NotificationsService, PlatformService, ProfilesService } from 'tabby-core'
 import { SettingsTabComponent, SettingsTabProvider } from 'tabby-settings'
 import { SavedAccount, signInName } from './accounts'
+import { CLIPBOARD_LABELS, ownClipboard } from './clipboard'
 import { DesktopSettings, RemoteDesktopService } from './desktop.service'
-import { DIRECT_KEY } from './desktops'
+import { configText, DIRECT_KEY, entryText, isDesktopEntry, shownKey } from './desktops'
 import { driveName } from './drives'
 import { OSD_FONTS, OSD_POSITIONS, OSD_SIZES, OSD_STYLE, OsdSettings, renderOsd } from './osd'
 import { esc, HelpTopic, HOTKEYS, RemoteDesktopHelp, SETTINGS_TAB_ID, TROUBLESHOOTING } from './help'
 import { installedVersion, UpdateCheck } from './updates'
 import { RDP_PROFILE_TYPE } from './targets'
+import { showable } from './unshowable'
 
 const REPO = 'https://github.com/meanaverage/tabby-rdp'
 
@@ -52,7 +54,7 @@ const STYLE = `
 .trd-settings .trd-card { display: flex; flex-direction: column; gap: 8px; padding: 12px; border-radius: 6px;
     border: 1px solid rgba(128, 128, 128, 0.25); }
 .trd-settings .trd-card .trd-card-title { font-weight: 600; display: flex; align-items: center; gap: 6px; }
-.trd-settings h4 .trd-info, .trd-settings .trd-lead .trd-info { margin-left: 4px; vertical-align: middle; font-size: 13px; }
+.trd-settings h4 .trd-info, .trd-settings .trd-lead .trd-info, .trd-settings .form-line .title .trd-info { margin-left: 4px; vertical-align: middle; font-size: 13px; }
 .trd-settings .trd-info { position: relative; display: inline-flex; opacity: 0.55; cursor: help; outline: none; font-weight: normal; }
 .trd-settings .trd-info:hover, .trd-settings .trd-info:focus { opacity: 1; }
 .trd-settings .trd-info::after { content: attr(data-tip); position: absolute; left: 0; top: calc(100% + 6px); z-index: 20; width: 260px;
@@ -268,7 +270,20 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
 
                 <h5>Sound</h5>
                 ${this.toggleLine('sound', 'Sound', 'Play the remote desktop\'s sound here. Applies on the next connection.')}
-                ${this.toggleLine('microphone', 'Microphone', 'Send your microphone while an app there records, with a red dot in the corner meanwhile. Applies on the next connection.')}
+                ${this.toggleLine('microphone', 'Microphone', 'Send your microphone to a remote desktop that asks for it, as one does while an app there records (a call, say). Meanwhile a red dot shows in the desktop\'s corner, and a red microphone in Tabby\'s header (in full screen, at the top of the window), also while the desktop is hidden. Its menu shows that desktop, or stops sending the microphone there until Send the microphone is turned back on in the desktop\'s menu, or Tabby quits. Turning the setting on applies on the next connection; off stops it at once.')}
+
+                <h5>Clipboard</h5>
+                <div class="form-line">
+                    <div class="header">
+                        <div class="title">Clipboard sharing ${this.info('A desktop that gets your clipboard sees what is on it whenever it has the keyboard: what you copy then, and what you copied elsewhere before clicking back into it, passwords included. One that sends its clipboard here can put anything on yours, such as a command for you to paste into a terminal. Off leaves the clipboard out of the connection altogether. Narrowed while a desktop is open, what you copy from then on stays here and the files offered there are taken back; the change applies in full once that desktop reconnects.')}</div>
+                        <div class="description">Which ways text, pictures and files copied on either side go. A desktop can have its
+                            own, in its profile or its edit form. Applies on the next connection; narrowing it also stops the
+                            sending from here at once to open desktops that follow the setting.</div>
+                    </div>
+                    <select class="form-control" data-setting="clipboard">
+                        ${Object.entries(CLIPBOARD_LABELS).map(([mode, label]) => `<option value="${mode}">${esc(label)}</option>`).join('')}
+                    </select>
+                </div>
 
                 <h5>Shared folders</h5>
                 <div class="trd-lead">Folders from this computer as drives on the remote desktop, under <code>\\\\tsclient</code> in
@@ -381,7 +396,7 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
             <section data-topic="desktops">
                 <h4>Desktops</h4>
                 <div class="trd-lead">Remote desktop profiles, and desktops added from SSH tabs.
-                    ${this.info('A desktop added from an SSH tab\'s menu belongs to that host. That is for hosts without a profile, such as an ssh typed in a terminal.')}</div>
+                    ${this.info('A desktop added from an SSH tab\'s menu belongs to that host. That is for hosts without a profile, such as ssh run in a local terminal.')}</div>
                 <div class="trd-list" data-list="desktops"></div>
                 <div class="trd-add"><button class="btn btn-secondary btn-sm" data-action="desktop">Add a desktop…</button></div>
             </section>
@@ -594,41 +609,53 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
             return
         }
         const accounts = this.desktop.accounts()
-        const accountOf = (id: string | undefined) => id ? accounts.find(a => a.id === id) : undefined
+        const accountOf = (id: string | null | undefined) => id ? accounts.find(a => a.id === id) : undefined
         // Remote desktop profiles first (Tabby's editor), then the desktops added from SSH tabs (the plugin's form).
         const profiles: any[] = (this.config.store.profiles ?? []).filter((p: any) => p?.type === RDP_PROFILE_TYPE && p.options?.host)
         const groups: any[] = this.config.store.groups ?? []
+        // Every field as text whatever the config holds (see configText): one that can't be shown would leave this list,
+        // and the lists after it on the page, unbuilt.
         const profileRows = profiles.map(p => {
             const o = p.options
-            const address = `${o.host}:${o.port || 3389}`
-            const via = o.via ? (this.config.store.profiles ?? []).find((x: any) => x.id === o.via)?.name ?? 'an SSH profile' : null
+            const address = `${configText(o.host)}:${configText(o.port || 3389)}`
+            const via = o.via ? configText((this.config.store.profiles ?? []).find((x: any) => x.id === o.via)?.name) || 'an SSH profile' : null
             const inherited = o.account === undefined ? groups.find(g => g.id === p.group)?.defaults?.[RDP_PROFILE_TYPE]?.options?.account : undefined
             const account = accountOf(o.account || inherited)
+            // Its own clipboard, or its group's or the type's default: what it connects with, as Tabby resolves the profile.
+            const clipboard = ownClipboard(this.injector.get(ProfilesService).getConfigProxyForProfile(p).options?.clipboard)
+            const [username, kind, gateway] = [configText(o.username), configText(o.kind), configText(o.gateway)]
             const details = [
-                account ? `Signs in as ${esc(account.name)}` : o.username ? `Signs in as ${esc(o.username)}` : '',
-                o.kind && o.kind !== 'windows' ? esc(o.kind) : '',
-                o.gateway ? `Through the gateway ${esc(o.gateway)}${accountOf(o.gatewayAccount) ? `, as ${esc(accountOf(o.gatewayAccount)!.name)}` : ''}` : '',
+                account ? `Signs in as ${esc(account.name)}` : username ? `Signs in as ${esc(username)}` : '',
+                kind && kind !== 'windows' ? esc(kind) : '',
+                gateway ? `Through the gateway ${esc(gateway)}${accountOf(o.gatewayAccount) ? `, as ${esc(accountOf(o.gatewayAccount)!.name)}` : ''}` : '',
+                clipboard ? `Clipboard: ${esc(CLIPBOARD_LABELS[clipboard].toLowerCase())}` : '',
             ].filter(Boolean).join('<br>')
-            return this.row(esc(p.name ?? address), `${esc(address)}${via ? ` via ${esc(via)}` : ''}${details ? `<br>${details}` : ''}`, [
+            return this.row(esc(configText(p.name) || address), `${esc(address)}${via ? ` via ${esc(via)}` : ''}${details ? `<br>${details}` : ''}`, [
                 { label: 'Edit…', run: () => { this.editProfile(p.id) } },
                 { label: 'Remove…', danger: true, run: () => { this.removeProfile(p.id) } },
             ])
         })
         const desktops = this.desktop.configuredDesktops()
-        const desktopRows = desktops.map((d, i) => {
+        // An item that is no entry describes no desktop, and isn't listed (see isDesktopEntry).
+        const desktopRows = desktops.flatMap((d, i) => {
+            if (!isDesktopEntry(d)) {
+                return []
+            }
             // A Hyper-V VM has no address of its own: its console is its host's to give.
-            const address = d.hyperv ? 'Hyper-V VM' : `${d.host ?? '127.0.0.1'}:${d.port ?? 3389}`
+            const { name, address, via, hyperv } = entryText(d)
             const account = accountOf(d.account)
+            const [username, kind, gateway, vm, mac] = [configText(d.username), configText(d.kind), configText(d.gateway), configText(d.wake?.vm), configText(d.wake?.mac)]
             const details = [
-                account ? `Signs in as ${esc(account.name)}` : d.username ? `Signs in as ${esc(d.username)}` : '',
-                d.kind && d.kind !== 'windows' ? esc(d.kind) : '',
-                d.gateway && !d.hyperv ? `Through the gateway ${esc(d.gateway)}${accountOf(d.gatewayAccount) ? `, as ${esc(accountOf(d.gatewayAccount)!.name)}` : ''}` : '',
-                d.wake?.vm ? `Starts VM ${esc(d.wake.vm)} when off` : d.wake?.mac ? `Wakes ${esc(d.wake.mac)} when off` : '',
+                account ? `Signs in as ${esc(account.name)}` : username ? `Signs in as ${esc(username)}` : '',
+                kind && kind !== 'windows' ? esc(kind) : '',
+                gateway && !hyperv ? `Through the gateway ${esc(gateway)}${accountOf(d.gatewayAccount) ? `, as ${esc(accountOf(d.gatewayAccount)!.name)}` : ''}` : '',
+                vm ? `Starts VM ${esc(vm)} when off` : mac ? `Wakes ${esc(mac)} when off` : '',
+                ownClipboard(d.clipboard) ? `Clipboard: ${esc(CLIPBOARD_LABELS[ownClipboard(d.clipboard)!].toLowerCase())}` : '',
             ].filter(Boolean).join('<br>')
-            return this.row(esc(d.name ?? address), `${esc(address)} ${d.hyperv ? 'on' : 'behind'} ${esc(d.via)}${details ? `<br>${details}` : ''}`, [
+            return [this.row(esc(name), `${hyperv ? 'Hyper-V VM' : esc(address)}${via ? ` ${hyperv ? 'on' : 'behind'} ${esc(via)}` : ''}${details ? `<br>${details}` : ''}`, [
                 { label: 'Edit…', run: () => { this.desktop.editDesktopIn(this.root, i, true) } },
                 { label: 'Remove…', danger: true, run: () => { this.desktop.confirmRemoveDesktop(i) } },
-            ])
+            ])]
         })
         list.replaceChildren(...profileRows, ...desktopRows, this.empty(profileRows.length + desktopRows.length
             ? 'Profiles are also in Profiles &amp; connections; a desktop behind a host also in that host\'s SSH tab: right-click › Settings.'
@@ -655,7 +682,7 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
             }))
             row.insertBefore(check, row.querySelector('button'))
             return row
-        }), ...folders.length ? [] : [this.empty('None shared. The clipboard still carries files either way: drop them on the desktop, or copy them there and save them here.')])
+        }), ...folders.length ? [] : [this.empty('None shared. The clipboard carries files too, the ways it goes: drop them on the desktop, or copy them there and save them here.')])
     }
 
     /** Asks for a folder and shares it under its own name (numbered when another share has it). */
@@ -974,17 +1001,21 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
             return
         }
         const entries = this.desktop.trustedCertificates()
-        list.replaceChildren(...entries.map(({ desktop, sha256 }) => {
+        list.replaceChildren(...entries.map(({ desktop, sha256, authority }) => {
             const [who, address] = desktop.includes('#') ? desktop.split('#', 2) : [desktop, '']
-            const title = address ? who === 'gateway' ? `The gateway ${esc(address)}` : who === DIRECT_KEY ? `${esc(address)} (direct)` : `${esc(address)} behind ${esc(who)}` : esc(who)
-            // What else was decided about that server is said here, and forgotten with the certificate.
+            // A host's key as it reads; a machine reached through one is named as that host's ssh resolved it, which is
+            // its word: what could reorder or hide part of it shows as U+FFFD.
+            const host = esc(showable(shownKey(who)))
+            const title = address ? who === 'gateway' ? `The gateway ${esc(address)}` : who === DIRECT_KEY ? `${esc(address)} (direct)` : `${esc(address)} behind ${host}` : host
+            // How it came to be trusted, where that is known, and what else was decided about that server: forgotten with it.
+            const how = authority === true ? '<br>Valid for its name by a certificate authority' : authority === false ? '<br>Trusted by you' : ''
             const plain = this.desktop.signsInWithoutNla(desktop) ? '<br>Signs in without Network Level Authentication' : ''
-            return this.row(title, `SHA-256 ${esc(sha256.slice(0, 23))}…${plain}`, [
+            return this.row(title, `SHA-256 ${esc(sha256.slice(0, 23))}…${how}${plain}`, [
                 { label: 'Forget', run: () => this.desktop.forgetCertificate(desktop) },
             ])
         }), this.empty(entries.length
-            ? 'A forgotten certificate is remembered again, without asking, on the next connection.'
-            : 'None yet. Windows and xrdp desktops\' certificates are remembered on first use and checked every time after; GNOME desktops only accept the one the plugin made.'))
+            ? 'A forgotten certificate is asked about again on the next connection, unless a certificate authority vouches for it; one behind an SSH host is remembered again without asking.'
+            : 'None yet. A desktop connected to directly, and a gateway, are asked about the first time unless a certificate authority vouches for them; a desktop behind an SSH host is remembered on first use. Each is checked every time after. GNOME desktops only accept the one the plugin made.'))
     }
 
     private renderSessions (): void {
@@ -1051,7 +1082,10 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
         }
     }
 
-    /** "Remove…" on a remote desktop profile: asks, then deletes it as Tabby's Profiles page would (saved account and certificate go too). */
+    /**
+     * "Remove…" on a remote desktop profile: asks, then deletes it as Tabby's Profiles page would (a direct one's saved
+     * passwords and certificate go too; see RDPProfilesService.deleteProfile).
+     */
     private async removeProfile (id: string): Promise<void> {
         const profiles = this.injector.get(ProfilesService)
         const profile = (await profiles.getProfiles()).find(p => p.id === id)
@@ -1061,7 +1095,10 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
         const { response } = await this.platform.showMessageBox({
             type: 'warning',
             message: `Remove the profile "${profile.name}"?`,
-            detail: 'Its saved account and remembered certificate are forgotten too.',
+            // A saved account isn't the profile's: other desktops may sign in with it, and it stays.
+            detail: (profile.options as any)?.via
+                ? 'Its saved password and remembered certificate stay: they are those of the same desktop behind its SSH profile\'s host.'
+                : 'Its saved password and remembered certificate are forgotten too.',
             buttons: ['Remove', 'Keep'],
             defaultId: 1,
             cancelId: 1,

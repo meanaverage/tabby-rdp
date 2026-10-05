@@ -2,19 +2,24 @@ import { Injectable } from '@angular/core'
 import { execFile, spawn } from 'child_process'
 import * as net from 'net'
 import { Duplex } from 'stream'
-import { BaseTabComponent, SplitTabComponent } from 'tabby-core'
-import { DesktopSpec, DIRECT_KEY, specOf } from './desktops'
+import { BaseTabComponent, ConfigService, ProfilesService, SplitTabComponent } from 'tabby-core'
+import { DesktopSpec, DIRECT_KEY, isTargetKey, keyFromConfig, legacyKeyFromConfig, nestedKey, rekeyed, specOf } from './desktops'
 import { formatAddress } from './desktopForm'
 import { shq } from './deskScript'
 import { probesIn } from './probe'
-import { execRemote, execStream, isConnected, isSSHTab, openTcpStream, pingRemote, SSHTab } from './ssh'
+import { forgetFormerKey, renameCredentials } from './signin'
+import { UNSHOWABLE } from './unshowable'
+import { execRemote, execStream, isConnected, isSSHTab, openTcpStream, Output, pingRemote, SSHTab, tooMuchOutput } from './ssh'
 
 /** Tabby profile type of remote desktop tabs (see rdpProfile.ts). */
 export const RDP_PROFILE_TYPE = 'rdp'
 
 /** Somewhere a remote desktop can be reached: a remote account, plus how to talk to it. */
 export interface RemoteTarget {
-    /** Canonical `user@hostname:port` (resolved with `ssh -G`); one desktop per key. DIRECT_KEY for a direct connection. */
+    /**
+     * Canonical `user@hostname:port` (resolved with `ssh -G`); one desktop per key. DIRECT_KEY for a direct connection;
+     * for a machine reached with ssh typed in an SSH tab, under that tab's key (see nestedKey).
+     */
     key: string
     /** Short name for status messages, the on-screen display and menus: what the user calls it (a profile's name). */
     label: string
@@ -127,19 +132,17 @@ export function parseSSHCommand (tokens: string[]): SSHCommand | null {
     return destination ? { options, destination } : null
 }
 
-/** `user@hostname:port` from `ssh -G` output (config aliases, defaults resolved). */
-function keyFromConfig (out: string, destination: string): string {
-    const get = (k: string) => new RegExp(`^${k} (.+)$`, 'm').exec(out)?.[1]?.trim()
-    return `${get('user') ?? ''}@${(get('hostname') ?? destination).toLowerCase()}:${get('port') ?? '22'}`
-}
-
-/** `user@hostname:port` as ssh itself resolves it (config aliases, defaults). */
-async function resolveKey (options: string[], destination: string): Promise<string> {
-    return keyFromConfig(await run('ssh', [...options, '-G', destination]), destination)
+/**
+ * `user@hostname:port` as ssh itself resolves it (config aliases, defaults; see keyFromConfig), and the key the plugin
+ * made of the same answer up to 0.5.0 (see RemoteTargets.keyChanged).
+ */
+async function resolveKey (options: string[], destination: string): Promise<{ key: string, former: string }> {
+    const out = await run('ssh', [...options, '-G', destination])
+    return { key: keyFromConfig(out, destination), former: legacyKeyFromConfig(out, destination) }
 }
 
 /** A target reached with the system `ssh`, non-interactively (keys/agent/control master only). */
-class SystemSSHTarget implements RemoteTarget {
+export class SystemSSHTarget implements RemoteTarget {
     constructor (readonly key: string, readonly label: string, private cmd: SSHCommand) { }
 
     private args (...extra: string[]): string[] {
@@ -148,8 +151,10 @@ class SystemSSHTarget implements RemoteTarget {
 
     async openTcp (host: string, port: number): Promise<Duplex> {
         const child = spawn('ssh', this.args('-o', 'ExitOnForwardFailure=yes', '-W', `${host.includes(':') ? `[${host}]` : host}:${port}`), { stdio: ['pipe', 'pipe', 'pipe'] })
+        // Only the end, whose last line says why ssh stopped, as for exec: ssh prints what the server sends while
+        // signing in (its banners), for as long as the tunnel lasts, and the server decides how much.
         let stderr = ''
-        child.stderr.on('data', d => { stderr += d })
+        child.stderr.on('data', d => { stderr = (stderr + d).slice(-4096) })
         const stream = Duplex.from({ readable: child.stdout, writable: child.stdin })
         stream.on('close', () => child.kill())
         child.on('exit', () => stream.destroy())
@@ -169,15 +174,32 @@ class SystemSSHTarget implements RemoteTarget {
     exec (command: string, stdin: string): Promise<string> {
         return new Promise((resolve, reject) => {
             const child = spawn('ssh', [...this.args('-T'), command], { stdio: ['pipe', 'pipe', 'pipe'] })
-            let stdout = ''
+            const stdout = new Output()
             let stderr = ''
-            child.stdout.on('data', d => { stdout += d })
-            child.stderr.on('data', d => { stderr += d })
-            const timer = setTimeout(() => child.kill(), 60000)
+            // Why ssh was stopped, if it was: what it printed is then no answer.
+            let stopped: Error | null = null
+            const stop = (e: Error) => {
+                stopped ??= e
+                child.kill()
+            }
+            // As much as execRemote takes (see MAX_OUTPUT), and of stderr only the end, whose last line says why.
+            child.stdout.on('data', (d: Buffer) => {
+                if (!stdout.add(d)) {
+                    stop(tooMuchOutput())
+                }
+            })
+            child.stderr.on('data', d => { stderr = (stderr + d).slice(-4096) })
+            const timer = setTimeout(() => stop(new Error('Remote command timed out after 60s')), 60000)
             child.on('error', reject)
             child.on('exit', code => {
                 clearTimeout(timer)
-                code === 255 ? reject(new Error(sshFailure(this.label, stderr, code))) : resolve(stdout)
+                if (stopped) {
+                    reject(stopped)
+                } else if (code === 255) {
+                    reject(new Error(sshFailure(this.label, stderr, code)))
+                } else {
+                    resolve(stdout.bytes().toString('utf8'))
+                }
             })
             child.stdin.end(stdin)
         })
@@ -185,7 +207,9 @@ class SystemSSHTarget implements RemoteTarget {
 }
 
 function sshFailure (label: string, stderr: string, code: number | null): string {
-    const last = stderr.trim().split('\n').pop() ?? ''
+    // What the host said last (a refused channel's reason, its banner): as much of it as a host's error is shown
+    // elsewhere.
+    const last = (stderr.trim().split('\n').pop() ?? '').slice(0, 1000)
     if (/permission denied|password|keyboard-interactive/i.test(last)) {
         return `Couldn't open a second SSH connection to ${label} without a password. Use an SSH key or agent (or a ControlMaster), or open the host as a Tabby SSH profile.`
     }
@@ -235,6 +259,37 @@ done
 `
 
 /**
+ * How many `ssh` clients in a pane nestedSSH() reports at most: a terminal runs one in its foreground (a jump host's
+ * makes two), and each is a menu item, or a command to run, there.
+ */
+const MAX_NESTED = 16
+
+const HOP = '\n__trd_hop '
+
+/**
+ * A command's output through the host's ssh, and how that ssh ended: the line NestedSSHTarget.exec adds at the end,
+ * `__trd_hop <exit status> <ssh's last line of errors>`. Found from the end and taken apart by hand, not with a pattern
+ * whose parts can take the same characters, which a long last line of the host's making could make cost the square of
+ * its length. The error keeps any CR in it (OpenSSH ends its messages with CR LF). Null without that line.
+ */
+function hopResult (out: string): { output: string, status: string, error: string } | null {
+    const at = out.lastIndexOf(HOP)
+    if (at < 0) {
+        return null
+    }
+    let line = out.slice(at + HOP.length)
+    if (line.endsWith('\n')) {
+        line = line.slice(0, -1)
+    }
+    const space = line.indexOf(' ')
+    const status = space < 0 ? line : line.slice(0, space)
+    if (!/^\d+$/.test(status) || line.includes('\n')) {
+        return null
+    }
+    return { output: out.slice(0, at), status, error: space < 0 ? '' : line.slice(space + 1) }
+}
+
+/**
  * A machine reached from an SSH tab's host with the `ssh` typed there: each command and tunnel runs that host's own
  * ssh, non-interactively (its keys, or a forwarded agent). Like SystemSSHTarget, one hop further.
  */
@@ -255,13 +310,15 @@ class NestedSSHTarget implements RemoteTarget {
         // ssh's exit status and last error line come after the output, so a failed login says why.
         const out = await this.outer.exec(`e=$(mktemp); ${this.ssh('-T')} ${shq(command)} 2>"$e"; r=$?; ` +
             `printf '\n__trd_hop %s %s\n' "$r" "$(tail -n 1 "$e")"; rm -f "$e"`, stdin)
-        const m = /\n__trd_hop (\d+) ?(.*)\n?$/.exec(out)
-        if (m?.[1] === '255') {
-            throw new Error(/permission denied|password|keyboard-interactive|host key/i.test(m[2])
-                ? `${this.outer.label} couldn't log in to ${this.label} by itself (${m[2].trim()}). The desktop goes through ${this.outer.label}'s own ssh, which needs a key for ${this.label} there, or agent forwarding.`
-                : `ssh from ${this.outer.label} to ${this.label} failed${m[2] ? `: ${m[2].trim()}` : ''}`)
+        const hop = hopResult(out)
+        if (hop?.status === '255') {
+            // The host's ssh's words, as long as it likes: as much as a status line shows.
+            const why = hop.error.trim().slice(0, 1000)
+            throw new Error(/permission denied|password|keyboard-interactive|host key/i.test(why)
+                ? `${this.outer.label} couldn't log in to ${this.label} by itself (${why}). The desktop goes through ${this.outer.label}'s own ssh, which needs a key for ${this.label} there, or agent forwarding.`
+                : `ssh from ${this.outer.label} to ${this.label} failed${why ? `: ${why}` : ''}`)
         }
-        return m ? out.slice(0, m.index) : out
+        return hop ? hop.output : out
     }
 
     isOpen (): boolean { return this.outer.isOpen() }
@@ -301,6 +358,16 @@ class DirectTarget implements RemoteTarget {
 // ---- detection ---------------------------------------------------------------------------------
 
 /**
+ * Whether a name a host gave can be shown as it is: none of the characters that could hide part of it or show it in
+ * another order without showing themselves (UNSHOWABLE: control and format characters, the other default-ignorable
+ * ones such as variation selectors and Hangul fillers, separators, blanks other than the space). The .rdp import
+ * refuses the same in the addresses a file names.
+ */
+function shownAsIs (name: string): boolean {
+    return !UNSHOWABLE.test(name)
+}
+
+/**
  * Works out which remote a pane is logged into. SSH tabs: their profile. Local terminals: an `ssh`
  * process running under the shell. Results are cached so the header can be updated synchronously.
  */
@@ -308,6 +375,8 @@ class DirectTarget implements RemoteTarget {
 export class RemoteTargets {
     private cache = new WeakMap<DesktopPane, { target: RemoteTarget | null, pid?: number }>()
     private keys = new Map<string, Promise<string>>()
+
+    constructor (private config: ConfigService, private profiles: ProfilesService) { }
 
     /** Last known target of a pane (undefined: not looked up yet). */
     cached (pane: DesktopPane): RemoteTarget | null | undefined {
@@ -319,10 +388,12 @@ export class RemoteTargets {
         let pid: number | undefined
         try {
             if (isRDPTab(pane)) {
-                // Made afresh each time (it holds no state), so that an edited profile applies on the next connection.
-                const profile = pane.profile as { name?: string, options?: any }
-                // No `wake` for a direct one: starting a machine takes an SSH host to do it from.
-                const spec = specOf({ ...profile.options, name: profile.name, wake: undefined })
+                // Made afresh each time (it holds no state), from the profile as saved now, so that an edited profile
+                // applies on the next connection.
+                const profile = this.savedProfile(pane)
+                // No `wake` for a direct one: starting a machine takes an SSH host to do it from. None for a profile that
+                // goes through an SSH profile (`via`): its address is as that host sees it, and it opens over that tab.
+                const spec = profile.options?.via ? null : specOf({ ...profile.options, name: profile.name, wake: undefined })
                 target = spec && new DirectTarget(formatAddress(spec.host, spec.port), spec)
             } else if (isSSHTab(pane)) {
                 const o = pane.profile?.options ?? {}
@@ -350,6 +421,18 @@ export class RemoteTargets {
     }
 
     /**
+     * A remote desktop tab's profile as saved now, with its type's and group's defaults as Tabby resolves a profile
+     * when opening it. Not the tab's own: Tabby's proxy of that keeps the options of when the tab opened (saving the
+     * profile editor puts new ones in their place), and a restored tab has a copy. The tab's own where it isn't a saved
+     * profile (quick connect).
+     */
+    private savedProfile (pane: DesktopPane): { name?: string, options?: any } {
+        const own = pane.profile as { id?: string, name?: string, options?: any }
+        const saved = own.id ? (this.config.store.profiles ?? []).find((p: any) => p?.id === own.id && p.type === RDP_PROFILE_TYPE) : null
+        return saved ? { name: saved.name, options: this.profiles.getConfigProxyForProfile(saved).options } : own
+    }
+
+    /**
      * `ssh` clients typed at a prompt in this pane, on its SSH tab's host: only those whose terminal there is this pane's
      * (see probe.ts), since other panes and tabs can be on the same host. Empty elsewhere.
      */
@@ -360,38 +443,100 @@ export class RemoteTargets {
         }
         const probe = `trd${Math.random().toString(36).slice(2, 10)}`
         const { result: out, ids } = await probesIn(pane, probe, () => outer.exec('sh -s', nestedSSHScript(probe)))
+        // One per destination (the host says what its lines are, and can repeat them), MAX_NESTED at most. A destination
+        // is shown as the machine's name (in the question which desktop to open, in the sign-in form): one that can't be
+        // shown as it is, no ssh a user typed would have, isn't offered.
         const found: NestedSSH[] = []
+        const destinations = new Set<string>()
         for (const line of out.split('\n')) {
             const m = /^TRD_SSH (\d+)\|([^|]*)\|(.*)$/.exec(line.trim())
             const args = m?.[3].split('\x1f').filter(Boolean) ?? []
             const cmd = /(^|\/)ssh$/.test(args[0] ?? '') ? parseSSHCommand(args.slice(1)) : null
-            if (m && cmd && ids.has(`${probe}-${m[1]}`)) {
+            if (m && cmd && ids.has(`${probe}-${m[1]}`) && !destinations.has(cmd.destination) && shownAsIs(cmd.destination)) {
+                destinations.add(cmd.destination)
                 found.push({ cmd, tty: m[2] })
+                if (found.length === MAX_NESTED) {
+                    break
+                }
             }
         }
-        // One per destination.
-        return found.filter((f, i, all) => all.findIndex(g => g.cmd.destination === f.cmd.destination) === i)
+        return found
     }
 
-    /** A target for an `ssh` found by nestedSSH(), going through the pane's SSH connection. */
+    /**
+     * A target for an `ssh` found by nestedSSH(), going through the pane's SSH connection. Its key is under the pane's
+     * (see nestedKey): what the host there says about the machine, `ssh -G` included, is only that host's word.
+     */
     async nestedTarget (pane: DesktopPane, nested: NestedSSH): Promise<RemoteTarget | null> {
         const outer = await this.targetOf(pane)
         if (!(outer instanceof TabbySSHTarget)) {
             return null
         }
         const config = await outer.exec(`${['ssh', ...nested.cmd.options, '-G', nested.cmd.destination].map(shq).join(' ')} 2>/dev/null`, '')
-        return new NestedSSHTarget(keyFromConfig(config, nested.cmd.destination), nested.cmd.destination, outer, nested.cmd)
+        return new NestedSSHTarget(nestedKey(outer.key, config, nested.cmd.destination), nested.cmd.destination, outer, nested.cmd)
     }
 
     private key (options: string[], destination: string): Promise<string> {
         const id = JSON.stringify([options, destination])
         let key = this.keys.get(id)
         if (!key) {
-            key = resolveKey(options, destination)
+            key = resolveKey(options, destination).then(resolved => {
+                this.keyChanged(resolved.former, resolved.key)
+                return resolved.key
+            })
             key.catch(() => this.keys.delete(id))
             this.keys.set(id, key)
         }
         return key
+    }
+
+    /**
+     * A target whose key reads otherwise than up to 0.5.0: one of its fields has a character keyFromConfig now writes
+     * as `%xx` (the `%` of an IPv6 address's zone, a `#` in a user name). It is the same target, resolved here by ssh
+     * from this computer's own config, so what was kept under its former key moves to the new one: the certificates
+     * remembered for its desktops and their sharpness now, a saved password the first time it is looked for (see
+     * renameCredentials). An entry already kept under the new key stays as it is. What else was kept by its key (desk's
+     * key, a "from now on" choice of a machine reached through it) stays behind, and is asked about again: neither
+     * gives anything away. Nothing moves where the former key could be another target's key now (see isTargetKey):
+     * what is kept under it may then be that one's, and this target's desktops ask again instead.
+     *
+     * Nor do the saved passwords of a former key with a `#` in it (a user name's): a desktop's key splits at its first
+     * `#` (see keyParts), so its desktops' passwords there read as no desktop's, and nothing that forgets or moves a
+     * desktop's passwords by its address (removing it, a new user name, gateway or address, the gateway passwords 0.5.0
+     * kept, see RemoteDesktopService.gatewayPasswords) has touched them. Moved now, a password forgotten that way would
+     * come back. That host's desktops ask for their passwords again instead, and those passwords are forgotten (see
+     * forgetFormerKey): no key a target has now has a `#` there, so what is kept under that one can only be this
+     * target's, and would otherwise stay kept for good, unused.
+     */
+    private keyChanged (from: string, to: string): void {
+        if (from === to || isTargetKey(from)) {
+            return
+        }
+        if (!from.includes('#')) {
+            renameCredentials(from, to)
+        } else {
+            forgetFormerKey(from)
+        }
+        const store = this.config.store.remoteDesktop
+        let moved = false
+        // The permission to sign in without NLA with them: it holds for one certificate (see holdWithoutNla), which moves.
+        // (None under a former key has one, which it needs: 0.5.0 never saved them, and builds since gave them one only
+        // under the new keys. Moved all the same, they count for nothing.)
+        for (const list of ['trustedCertificates', 'desktopSharpness', 'withoutNla']) {
+            const entries: any[] = Array.isArray(store?.[list]) ? store[list] : []
+            const taken = new Set(entries.map(e => e?.desktop))
+            const renamed = entries.map(e => {
+                const desktop = typeof e?.desktop === 'string' ? rekeyed(e.desktop, from, to) : null
+                return desktop && !taken.has(desktop) ? { ...e, desktop } : e
+            })
+            if (renamed.some((e, i) => e !== entries[i])) {
+                store[list] = renamed
+                moved = true
+            }
+        }
+        if (moved) {
+            this.config.save()
+        }
     }
 
     /**
@@ -413,11 +558,13 @@ export class RemoteTargets {
         // pid, ppid, full command line (ps loses quoting; ssh arguments rarely need it)
         const children = new Map<number, { pid: number, args: string[] }[]>()
         for (const line of (await run('ps', ['-ax', '-ww', '-o', 'pid=,ppid=,args='])).split('\n')) {
-            const m = /^\s*(\d+)\s+(\d+)\s+(.*)$/.exec(line)
-            if (m) {
-                const list = children.get(Number(m[2])) ?? []
-                list.push({ pid: Number(m[1]), args: m[3].trim().split(/\s+/) })
-                children.set(Number(m[2]), list)
+            // Split at whitespace, not matched with a pattern whose parts can take the same spaces: any program here
+            // decides what its arguments are, and a long run of spaces in them could take the square of its length.
+            const [pid, ppid, ...args] = line.trim().split(/\s+/)
+            if (/^\d+$/.test(pid) && /^\d+$/.test(ppid ?? '')) {
+                const list = children.get(Number(ppid)) ?? []
+                list.push({ pid: Number(pid), args })
+                children.set(Number(ppid), list)
             }
         }
         // Breadth first, so the nearest ssh wins (e.g. the one typed at the prompt, not one it spawned).

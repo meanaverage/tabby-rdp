@@ -3,9 +3,12 @@
 // (a plain socket here, an SSH direct-tcpip channel later), forwards the X.224 request,
 // terminates TLS, checks the server's certificate, hands the cert chain back to the client (for CredSSP), then relays.
 import * as tls from 'tls'
-import { createHash, randomBytes } from 'crypto'
+import { createHash, randomBytes, timingSafeEqual } from 'crypto'
+import { IncomingMessage } from 'http'
 import { Duplex } from 'stream'
-import { AddressInfo } from 'net'
+import { AddressInfo, isIP } from 'net'
+import { CertificateDetails, certificateAuthorities, certificateDetails } from './authorities'
+import { ByteQueue } from './byteQueue'
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const { WebSocketServer } = require('ws')
@@ -13,14 +16,23 @@ const { WebSocketServer } = require('ws')
 const VERSION_1 = 3390
 const GENERAL_ERROR = 1
 
-export type UpstreamFactory = (destination: string) => Promise<Duplex>
+/**
+ * Opens the stream to the server at `destination`. `signal` aborts once the client it is for has gone (see the
+ * connection's end), so that what takes time to open one (an RD Gateway's sign-in, say) can stop rather than go on,
+ * with its sockets, for no one.
+ */
+export type UpstreamFactory = (destination: string, signal?: AbortSignal) => Promise<Duplex>
 
 /**
- * Decides on the server's certificate, given its SHA-256 fingerprint (`AB:CD:…`); throws to refuse it. Upstream TLS
- * accepts any certificate (RDP servers are self-signed), so this is what stands between the client and an impostor.
- * It runs before the client hears back from the proxy, and so before CredSSP: no credentials have been sent yet.
+ * Decides on the server's certificate, given its SHA-256 fingerprint (`AB:CD:…`), whether it is valid for the
+ * server's name by this computer's certificate authorities (see RDCleanPathOptions.serverName), why not (Node's code
+ * for the TLS library's verdict, such as DEPTH_ZERO_SELF_SIGNED_CERT; '' when it is), and what the certificate says of
+ * itself (whom it was issued to and by, and its dates; see CertificateDetails); throws to refuse it. Upstream TLS
+ * accepts any certificate (RDP servers make their own), so this is what stands between the client and an impostor. It
+ * runs before the client hears back from the proxy, and so before CredSSP: no credentials have been sent yet, nor the
+ * user name (see withoutUserCookie).
  */
-export type CertificateCheck = (fingerprint: string) => void | Promise<void>
+export type CertificateCheck = (fingerprint: string, valid: boolean, reason: string, details?: CertificateDetails) => void | Promise<void>
 
 /** A SHA-256 fingerprint as `AB:CD:…` (openssl and Node print it so), from any hex spelling; '' if it isn't one. */
 export function normalizeFingerprint (value: string): string {
@@ -32,7 +44,8 @@ function fingerprintOf (der: Buffer): string {
     return normalizeFingerprint(createHash('sha256').update(der).digest('hex'))
 }
 
-export interface RDCleanPathProxy {
+export interface RDCleanPathProxy extends ServerFlow {
+    /** Where the client connects: the token is its path (and goes in its request too). */
     url: string
     token: string
     /**
@@ -45,14 +58,73 @@ export interface RDCleanPathProxy {
     close (): void
 }
 
+/**
+ * Room for what answers the remote desktop's requests with far more than they are: a part of a file sent from here
+ * (FileTransfer), a shared folder's read (SharedDrives). What is handed to the connection goes to the server as the
+ * proxy reads it from the connection's WebSocket, and waits in Tabby's window until then; the proxy reads no further
+ * ahead of the server than HIGH_WATER (see send). A server that keeps asking and reads slowly, or not at all, could
+ * have those answers fill the window's memory, so each takes room before it is read for the remote, and waits while
+ * there is none. The room is FLOW_WINDOW less what was taken and the proxy hasn't read from the connection since:
+ * whatever it reads counts, the connection's other messages too. Room is taken while there is any, so what is taken
+ * can pass FLOW_WINDOW by one answer; what an answer didn't use (a short read, an error, none at all) is given back.
+ * A server that reads nothing at all has no more than that kept for it. One that reads while it keeps asking can have
+ * more: each byte of the connection's other messages the proxy reads makes room for a byte of answers, so what waits
+ * can grow past FLOW_WINDOW by as much as the proxy reads of them meanwhile.
+ * RDCleanPathProxy gives it, for the connection it relays.
+ */
+export interface ServerFlow {
+    /** Whether there is room now. */
+    room (): boolean
+    /** Takes `bytes` of room, for an answer about to be read for the remote and handed to the connection. */
+    spend (bytes: number): void
+    /** Gives back `bytes` taken and not handed to the connection after all. */
+    refund (bytes: number): void
+    /** Resolves once there is room (at once if there is), or the connection ends. */
+    whenRoom (): Promise<void>
+}
+
+/**
+ * What answers to the remote's requests may have taken of the window's memory, read for it or handed to the connection,
+ * beyond what the proxy has read from the connection (see ServerFlow): four of the largest parts of files a request
+ * gets. A link stays busy with far less, as the proxy lets no more than HIGH_WATER wait for the server.
+ */
+export const FLOW_WINDOW = 64 * 1024 * 1024
+
 export interface RDCleanPathOptions {
     /** Set INFO_AUTOLOGON in the client's Client Info PDU (xrdp; see autologon()). */
     autologon?: boolean
     /**
      * Called when the server chose TLS without Network Level Authentication (see offersNla), before anything more is
-     * sent to it: the client would go on to send the password as it is. Throws to refuse.
+     * sent to it: the client would go on to send the password as it is. Throws to refuse. Not optional, so that no
+     * caller lets such servers through by leaving it out; without options at all, they are refused (refuseWithoutNla).
      */
-    withoutNla?: () => void | Promise<void>
+    withoutNla: () => void | Promise<void>
+    /**
+     * Called for a server that withoutNla let through, once the certificate check has taken its certificate: that
+     * certificate's fingerprint, before the client hears back and so before the password goes to it. Throws to stop
+     * there. withoutNla decides before TLS, with no certificate to go by; this holds what it decided to the server that
+     * then showed one (a permission given for one certificate isn't one for another). Left out, nothing is held to a
+     * certificate: a caller whose withoutNla lets a server through on a permission it remembered (as the desktop
+     * service's does) has to give this, or that permission goes to whatever answers there next, whatever certificate
+     * it shows.
+     */
+    withoutNlaCertificate?: (fingerprint: string) => void | Promise<void>
+    /**
+     * The name the server goes by here (a host name, or an IP address): its certificate is checked against it and
+     * this computer's certificate authorities, for the certificate check to weigh, and a host name goes in the TLS
+     * handshake (SNI) as other clients send it. Without one, nothing is checked that way, and the certificate is never
+     * taken for valid: the desktops reached through an SSH host, whose names are that host's.
+     */
+    serverName?: string
+    /** TLS options for the connection to the server (tests: an authority of their own, as `ca`). */
+    tls?: tls.ConnectionOptions
+    /** How long reaching the server, TLS included, may take before the connection is given up on (tests: less). */
+    handshakeTimeoutMs?: number
+}
+
+/** The answer to a server without Network Level Authentication where nobody decides otherwise: refused. */
+function refuseWithoutNla (): never {
+    throw new Error('the server doesn\'t use Network Level Authentication')
 }
 
 // ---- minimal DER -------------------------------------------------------------------------------
@@ -178,7 +250,7 @@ function encodeError (): Buffer {
 // Reads exactly one TPKT-framed PDU (the X.224 Connection Confirm) without consuming TLS bytes.
 function readTpkt (stream: Duplex): Promise<Buffer> {
     return new Promise((resolve, reject) => {
-        let acc = Buffer.alloc(0)
+        const acc = new ByteQueue()
         const cleanup = () => {
             stream.off('data', onData)
             stream.off('error', onError)
@@ -188,20 +260,30 @@ function readTpkt (stream: Duplex): Promise<Buffer> {
         const onError = (e: Error) => { cleanup(); reject(e) }
         const onClose = () => { cleanup(); reject(new Error('upstream closed during X.224')) }
         const onData = (chunk: Buffer) => {
-            acc = Buffer.concat([acc, chunk])
+            acc.push(chunk)
             if (acc.length < 4) {
                 return
             }
-            const len = acc.readUInt16BE(2)
+            const header = acc.peek(4)
+            const len = header.readUInt16BE(2)
+            // TPKT is version 3, and an X.224 TPDU takes three bytes at least: anything else is not an RDP server
+            // answering (a web server on that port, say), and isn't waited on for the length it seems to give.
+            if (header[0] !== 3 || len < 7) {
+                cleanup()
+                reject(new Error('the server\'s answer isn\'t RDP (is that the desktop\'s port?)'))
+                return
+            }
             if (acc.length < len) {
                 return
             }
             stream.pause()
             cleanup()
-            if (acc.length > len) {
-                stream.unshift(acc.subarray(len))
+            // A copy: it is kept for the connection, and is a few bytes of the queue's storage.
+            const pdu = Buffer.from(acc.take(len))
+            if (acc.length) {
+                stream.unshift(acc.take(acc.length))
             }
-            resolve(acc.subarray(0, len))
+            resolve(pdu)
         }
         stream.on('data', onData)
         stream.on('error', onError)
@@ -223,11 +305,19 @@ function certChainOf (socket: tls.TLSSocket): Buffer[] {
     return chain
 }
 
+/** selectedProtocol's flags in the server's negotiation response (RDP_NEG_RSP). */
+const PROTOCOL_HYBRID = 0x02
+const PROTOCOL_HYBRID_EX = 0x08
+
 /**
- * The server's answer to the client's security negotiation, when it rules out TLS (which IronRDP and RDCleanPath
- * need): a server with RDP's standard security only (xrdp with security_layer=rdp, for example) answers without a
- * negotiation response, or with PROTOCOL_RDP, or refuses the negotiation. Null when TLS can go ahead.
+ * The security protocol the server chose (RDP_NEG_RSP's selectedProtocol), or 0 when its answer to the connection
+ * request has no negotiation response. Tested by its flags, as IronRDP does, so that the proxy and the client never
+ * read the same answer differently.
  */
+function selectedProtocol (x224: Buffer): number {
+    return x224.length >= 19 && x224[11] === 0x02 ? x224.readUInt32LE(15) : 0
+}
+
 /**
  * Whether the server's answer to the connection request chose Network Level Authentication (CredSSP: HYBRID or
  * HYBRID_EX). With it, the sign-in is a proof both ways and the password only goes to a server that knows it already.
@@ -235,9 +325,53 @@ function certChainOf (socket: tls.TLSSocket): Buffer[] {
  * way, readable to whatever answered.
  */
 export function offersNla (x224: Buffer): boolean {
-    return x224.length >= 19 && x224[11] === 0x02 && (x224.readUInt32LE(15) & (2 | 8)) !== 0
+    return (selectedProtocol(x224) & (PROTOCOL_HYBRID | PROTOCOL_HYBRID_EX)) !== 0
 }
 
+/**
+ * Whether an Early User Authorization Result follows CredSSP: the server chose HYBRID_EX (see serverFraming). IronRDP
+ * expects one whenever that flag is set, alone or not.
+ */
+export function earlyUserAuthorization (x224: Buffer): boolean {
+    return (selectedProtocol(x224) & PROTOCOL_HYBRID_EX) !== 0
+}
+
+/** The routing cookie that names the user (see withoutUserCookie). */
+const COOKIE = Buffer.from('Cookie: mstshash=')
+
+/**
+ * The client's X.224 connection request without its routing cookie, `Cookie: mstshash=<user name>`, which IronRDP fills
+ * in with the user name. It goes before TLS, in the clear, and before the certificate check and the stop at a server
+ * without Network Level Authentication: the account's name would reach whoever watches the way there, and servers the
+ * proxy then refuses. The cookie is optional, and what it is for, routing by user name in a load balancer in front of
+ * several servers, the plugin doesn't take part in (it sends no load-balancing info either). A request that isn't a
+ * connection request with such a cookie comes back as it is; so does a broker's routing token (`Cookie: msts=`), which
+ * names no user. The proxy sends none that still has the cookie (see handshake).
+ */
+export function withoutUserCookie (request: Buffer): Buffer {
+    // TPKT (4: version 3, 0, length), then X.224: length indicator (the rest of the header), the CR code, DST-REF,
+    // SRC-REF and class (6), then the cookie, the negotiation request and the rest.
+    const li = request[4]
+    if (request.length < 11 + COOKIE.length || request[0] !== 3 || request.readUInt16BE(2) !== request.length ||
+        (request[5] & 0xf0) !== 0xe0 || 5 + li !== request.length || !request.subarray(11, 11 + COOKIE.length).equals(COOKIE)) {
+        return request
+    }
+    const end = request.indexOf('\r\n', 11 + COOKIE.length)
+    if (end < 0) {
+        return request
+    }
+    const cut = end + 2 - 11
+    const out = Buffer.concat([request.subarray(0, 11), request.subarray(end + 2)])
+    out.writeUInt16BE(request.length - cut, 2)
+    out[4] = li - cut
+    return out
+}
+
+/**
+ * The server's answer to the client's security negotiation, when it rules out TLS (which IronRDP and RDCleanPath
+ * need): a server with RDP's standard security only (xrdp with security_layer=rdp, for example) answers without a
+ * negotiation response, or with PROTOCOL_RDP, or refuses the negotiation. Null when TLS can go ahead.
+ */
 function noTls (x224: Buffer): string | null {
     // TPKT (4), X.224 Connection Confirm (7), then RDP_NEG_RSP or RDP_NEG_FAILURE (8): type, flags, length, value.
     const standardOnly = 'the RDP server only offers standard RDP security, without TLS (for xrdp: set security_layer=negotiate in /etc/xrdp/xrdp.ini and restart xrdp)'
@@ -323,9 +457,11 @@ function autologon (): (data: Buffer) => Buffer {
  * function from server data to the PDUs it completes; it throws on data that is none of these.
  */
 export function serverFraming (earlyAuth: boolean): (data: Buffer) => Buffer[] {
-    const MAX_DER = 16 * 1024 * 1024
+    // A server's CredSSP messages are small: its NTLM challenge or Kerberos reply, and its proof of the public key, a
+    // few kilobytes at most. A larger claim is no server's: it would only have Tabby keep whatever comes, and wait.
+    const MAX_DER = 256 * 1024
     let rdp = false
-    let pending: Buffer = Buffer.alloc(0)
+    const pending = new ByteQueue()
     const invalid = () => new Error('invalid RDP server frame')
     /** The length of the PDU at the start of `b`, 0 while its header is incomplete. */
     const lengthOf = (b: Buffer): number => {
@@ -384,23 +520,22 @@ export function serverFraming (earlyAuth: boolean): (data: Buffer) => Buffer[] {
         throw invalid()
     }
     return data => {
-        pending = pending.length ? Buffer.concat([pending, data]) : data
+        pending.push(data)
         const out: Buffer[] = []
         for (;;) {
-            const length = lengthOf(pending)
+            // Six bytes hold any of these headers: DER's tag and length with up to four length octets.
+            const head = pending.peek(6)
+            const length = lengthOf(head)
             if (!length || pending.length < length) {
                 break
             }
-            if (!rdp && earlyAuth && pending[0] !== 0x30) {
+            if (!rdp && earlyAuth && head[0] !== 0x30) {
                 earlyAuth = false
-            } else if (pending[0] === 0x03) {
+            } else if (head[0] === 0x03) {
                 rdp = true
             }
-            out.push(pending.subarray(0, length))
-            pending = pending.subarray(length)
+            out.push(pending.take(length))
         }
-        // A copy of the rest: it would otherwise keep the whole chunk it came in alive.
-        pending = Buffer.from(pending)
         return out
     }
 }
@@ -416,6 +551,67 @@ export function serverFraming (earlyAuth: boolean): (data: Buffer) => Buffer[] {
 const KEY_ENCIPHERMENT_ONLY_TLS: tls.ConnectionOptions = {
     maxVersion: 'TLSv1.2',
     ciphers: 'AES256-GCM-SHA384:AES128-GCM-SHA256:AES256-SHA256:AES128-SHA256',
+}
+
+/**
+ * The TLS library turned the server's certificate down for its key usage, the one failure KEY_ENCIPHERMENT_ONLY_TLS is
+ * for. Known by the library's own reason (Node's code is made from it), never by an error's text: that can carry what
+ * a gateway or an SSH host put in it, which would take forward secrecy away from a server that has no need to lose it.
+ * And only when the TLS socket raised it itself: an error the stream under it failed with reaches the TLS socket as it
+ * is, code and all (Electron's BoringSSL raises its own refusal with that stream untouched).
+ */
+class KeyUsageRefused extends Error { }
+
+const isKeyUsageRefusal = (e: any) => e?.code === 'ERR_SSL_KEY_USAGE_BIT_INCORRECT' || e?.reason === 'KEY_USAGE_BIT_INCORRECT'
+
+const KEY_USAGE = Buffer.from([0x55, 0x1d, 0x0f])  // the key usage extension's OID, 2.5.29.15
+
+/**
+ * Whether a certificate (DER) shows that it leaves digital signatures out of its key usage, as Windows' self-signed RDP
+ * certificate does (key and data encipherment only): the certificates KEY_ENCIPHERMENT_ONLY_TLS is for. False for one
+ * that allows them, has no key usage at all (anything goes), or can't be read here: the fallback, which gives up
+ * forward secrecy, is only for a certificate shown to need it.
+ */
+export function signsNothing (der: Buffer): boolean {
+    const at = (offset: number, end: number): Tlv => {
+        const t = readTlv(der, offset)
+        if (!t || t.end > end) {
+            throw new Error('not DER')
+        }
+        return t
+    }
+    const children = (parent: Tlv): Tlv[] => {
+        const list: Tlv[] = []
+        for (let p = parent.start; p < parent.end; p = list[list.length - 1].end) {
+            list.push(at(p, parent.end))
+        }
+        return list
+    }
+    try {
+        // Certificate: SEQUENCE { tbsCertificate: SEQUENCE { ..., extensions: [3] { SEQUENCE OF Extension } }, ... }
+        const certificate = at(0, der.length)
+        for (const field of children(at(certificate.start, certificate.end))) {
+            if (field.tag !== 0xa3) {
+                continue
+            }
+            for (const extension of children(at(field.start, field.end))) {
+                // Extension: SEQUENCE { extnID OID, critical BOOLEAN (optional), extnValue OCTET STRING }
+                const [id, ...rest] = children(extension)
+                if (id.tag === 0x06 && der.subarray(id.start, id.end).equals(KEY_USAGE)) {
+                    const value = rest[rest.length - 1]
+                    const bits = at(value.start, value.end)
+                    if (bits.tag !== 0x03) {
+                        throw new Error('not a key usage')
+                    }
+                    // A BIT STRING: the count of unused bits, then the bits; digitalSignature is the first.
+                    return bits.end - bits.start < 2 || !(der[bits.start + 1] & 0x80)
+                }
+            }
+        }
+        return false
+    } catch {
+        return false
+    }
 }
 
 class NoTlsError extends Error { }
@@ -438,13 +634,21 @@ const HIGH_WATER = 8 * 1024 * 1024
  * Sends the client's X.224 request upstream, reads the confirm, then does TLS there. With a pre-connection blob, that
  * goes first; without an X.224 request (a Hyper-V VM's console), TLS follows the blob at once and X.224 is the
  * client's to do later. `track` hears of each stream as soon as it exists, so the caller can end them if the client
- * goes away meanwhile; `gone` says it has.
+ * goes away meanwhile; `gone` says it has, and `signal` aborts then, for the factory that opens the first stream (which
+ * `track` only hears of once it is open).
  */
 async function handshake (
     openUpstream: UpstreamFactory, destination: string, pcb: string | undefined, x224Request: Buffer | undefined, legacyTls: boolean,
-    track: (stream: Duplex) => void, gone: () => boolean, withoutNla?: () => void | Promise<void>,
+    track: (stream: Duplex) => void, gone: () => boolean, withoutNla: () => void | Promise<void>, options: Pick<RDCleanPathOptions, 'serverName' | 'tls'>,
+    signal?: AbortSignal,
 ): Promise<{ raw: Duplex, upstream: tls.TLSSocket, x224: Buffer | null }> {
-    const raw = await openUpstream(destination)
+    // Without the user name IronRDP puts in it. A request that still names one after that (its form not the one
+    // withoutUserCookie knows) goes nowhere: the name isn't to reach the server before it is checked.
+    const request = x224Request && withoutUserCookie(x224Request)
+    if (request?.includes(COOKIE)) {
+        throw new Error('the connection request carries the user name in a form the proxy can\'t take it out of')
+    }
+    const raw = await openUpstream(destination, signal)
     track(raw)
     try {
         if (gone()) {
@@ -454,8 +658,8 @@ async function handshake (
             raw.write(preconnectionPdu(pcb))
         }
         let x224: Buffer | null = null
-        if (x224Request) {
-            raw.write(x224Request)
+        if (request) {
+            raw.write(request)
             x224 = await readTpkt(raw)
             const refused = noTls(x224)
             if (refused) {
@@ -463,14 +667,27 @@ async function handshake (
             }
             // Before TLS: a server that isn't to get the password gets nothing more at all.
             if (!offersNla(x224)) {
-                await withoutNla?.()
+                await withoutNla()
             }
         }
-        const upstream = tls.connect({ socket: raw as any, rejectUnauthorized: false, ...legacyTls ? KEY_ENCIPHERMENT_ONLY_TLS : {} })
+        // With a name, the certificate is checked against it (an address against the certificate's addresses; it goes
+        // without SNI, which only takes names), the authorities and its dates. Whatever the outcome, the handshake
+        // completes: the certificate check decides.
+        const name = options.serverName
+        const upstream = tls.connect({
+            socket: raw as any, rejectUnauthorized: false,
+            ...name ? { host: name, ca: certificateAuthorities(), ...isIP(name) ? {} : { servername: name } } : {},
+            ...legacyTls ? KEY_ENCIPHERMENT_ONLY_TLS : {}, ...options.tls,
+        })
         track(upstream)
+        // An error after the one the handshake below waits for (the stream under it failing as the socket is destroyed,
+        // which a TLS socket over a stream passes on as its own) would have no listener until the relay is up, and an
+        // 'error' without one is an uncaught exception in Tabby's window. The relay listens for its own.
+        upstream.on('error', () => { })
         await new Promise<void>((resolve, reject) => {
             upstream.once('secureConnect', resolve)
-            upstream.once('error', reject)
+            // TLS's own refusal only: not an error of the stream under it (raw.errored), whatever its code.
+            upstream.once('error', e => reject(isKeyUsageRefusal(e) && !raw.errored ? new KeyUsageRefused(e.message) : e))
             upstream.once('close', () => reject(new Error('upstream closed during TLS')))
             upstream.once('end', () => reject(new Error('upstream closed during TLS')))
         })
@@ -481,13 +698,67 @@ async function handshake (
     }
 }
 
-export async function startRDCleanPathProxy (openUpstream: UpstreamFactory, checkCertificate: CertificateCheck, log: (msg: string) => void = () => {}, options: RDCleanPathOptions = {}): Promise<RDCleanPathProxy> {
+/** Whether `given` is the secret, compared in a time that doesn't tell how much of it was right. */
+function sameSecret (given: string, secret: Buffer): boolean {
+    const bytes = Buffer.from(given)
+    return bytes.length === secret.length && timingSafeEqual(bytes, secret)
+}
+
+/**
+ * The Origin a client may say it comes from: none (not a browser's page), or a file's page, as Tabby's window is (its
+ * WebSockets carry `Origin: file://`). Not a web page (`http:`, `https:`), a sandboxed or otherwise opaque one (`null`),
+ * or a browser extension's.
+ */
+const ALLOWED_ORIGINS = [undefined, 'file://']
+
+/**
+ * `text` without the proxy's token. IronRDP's error for an address it couldn't connect to names the address, whose path
+ * is the token, and such an error goes to the desktop's status line and its log, which "Copy log" hands out.
+ */
+export function withoutToken (text: string, proxy: { token: string } | null | undefined): string {
+    return proxy?.token ? text.split(proxy.token).join('…') : text
+}
+
+export async function startRDCleanPathProxy (openUpstream: UpstreamFactory, checkCertificate: CertificateCheck, log: (msg: string) => void = () => {}, options: RDCleanPathOptions = { withoutNla: refuseWithoutNla }): Promise<RDCleanPathProxy> {
+    // Called from JavaScript without the decision, the proxy still refuses such servers rather than let them through.
+    if (typeof options.withoutNla !== 'function') {
+        options = { ...options, withoutNla: refuseWithoutNla }
+    }
     const token = randomBytes(24).toString('hex')
+    // The client shows it twice: as its address's path, before it is let in at all, and in its request.
+    const path = Buffer.from(`/${token}`)
+    const secret = Buffer.from(token)
     let failure: string | null = null
-    // Set once the server turned out to need KEY_ENCIPHERMENT_ONLY_TLS; later connections start with it.
+    // Set once a connection showed that the server needs KEY_ENCIPHERMENT_ONLY_TLS (its handshake fell back, and the
+    // certificate leaves signatures out and was accepted). The next connection starts with it and clears it, to set it
+    // again once it has shown the same: one that doesn't get that far, whatever stops it (a failure, the server not
+    // answering in time, the client leaving), or that finds a certificate that doesn't need it, leaves it cleared.
     let legacyTls = false
     const stats = { bytesIn: 0, bytesOut: 0 }
-    const wss = new WebSocketServer({ host: '127.0.0.1', port: 0, maxPayload: MAX_MESSAGE })
+    // The room (see ServerFlow): what was taken for answers and not read from the connection since, the client whose
+    // connection that is (the latest to reach the relay: a reconnect can overlap the connection it replaces), and what
+    // waits for room. Once the proxy is closed there is room for good: nothing more goes anywhere.
+    let owed = 0
+    let flowClient: unknown = null
+    let roomWaiters: (() => void)[] = []
+    let shut = false
+    const hasRoom = () => shut || owed < FLOW_WINDOW
+    const roomMade = () => {
+        if (roomWaiters.length && hasRoom()) {
+            const go = roomWaiters
+            roomWaiters = []
+            go.forEach(f => f())
+        }
+    }
+    const wss = new WebSocketServer({
+        host: '127.0.0.1',
+        port: 0,
+        maxPayload: MAX_MESSAGE,
+        // Anything on this computer can reach the port, and so can a web page in a browser. A connection without the
+        // token is turned away before it takes one of the few places, which the desktop's own client would then find
+        // taken; and one from a page other than a file's, as Tabby's window is, is turned away whatever it has.
+        verifyClient: ({ req }: { req: IncomingMessage }) => ALLOWED_ORIGINS.includes(req.headers.origin) && sameSecret(req.url ?? '', path),
+    })
     await new Promise<void>((resolve, reject) => {
         wss.once('listening', resolve)
         wss.once('error', reject)
@@ -495,8 +766,8 @@ export async function startRDCleanPathProxy (openUpstream: UpstreamFactory, chec
     wss.on('error', (e: Error) => log(`proxy: ${e.message}`))
 
     wss.on('connection', (ws: any) => {
-        // Anything on this computer can connect to the port; only the client that knows the token gets further than
-        // its first message, which has to be small and arrive soon.
+        // Only a client that knows the token gets here (see verifyClient), and then only as far as its first message
+        // (which has to be small and arrive soon) until that shows the token too.
         if (wss.clients.size > MAX_CLIENTS) {
             ws.terminate()
             return
@@ -507,6 +778,8 @@ export async function startRDCleanPathProxy (openUpstream: UpstreamFactory, chec
         let earlySize = 0
         let upstream: tls.TLSSocket | null = null
         let closed = false
+        // Aborts when the client has gone, for an upstream still being opened, which isn't among the streams yet.
+        const leaving = new AbortController()
         // Every stream opened for this client, from the moment it exists: ended with the client.
         const streams = new Set<Duplex>()
         const track = (stream: Duplex) => {
@@ -518,16 +791,24 @@ export async function startRDCleanPathProxy (openUpstream: UpstreamFactory, chec
         }
         const end = () => {
             closed = true
+            leaving.abort()
             clearTimeout(deadline)
             for (const stream of streams) {
                 stream.destroy()
+            }
+            // What was handed to this connection went with it: the next starts with all the room.
+            if (flowClient === ws) {
+                flowClient = null
+                owed = 0
+                roomMade()
             }
         }
         let deadline = setTimeout(() => stage === 'hello' && ws.terminate(), HELLO_TIMEOUT_MS)
         const toServer = options.autologon ? autologon() : (data: Buffer) => data
         const send = (data: Buffer) => {
             const out = toServer(data)
-            // The server (or the SSH channel to it) not keeping up: stop reading from the client until it has.
+            // The server (or the SSH channel to it) not keeping up: stop reading from the client until it has (see
+            // ServerFlow).
             if (out.length && !upstream!.write(out) && upstream!.writableLength > HIGH_WATER) {
                 ws.pause()
                 upstream!.once('drain', () => ws.resume())
@@ -551,6 +832,11 @@ export async function startRDCleanPathProxy (openUpstream: UpstreamFactory, chec
         ws.on('message', async (data: Buffer) => {
             if (stage === 'relay') {
                 stats.bytesOut += data.length
+                // Read from the connection: as much room again (see ServerFlow).
+                if (flowClient === ws) {
+                    owed = Math.max(0, owed - data.length)
+                    roomMade()
+                }
                 send(data)
                 return
             }
@@ -580,21 +866,28 @@ export async function startRDCleanPathProxy (openUpstream: UpstreamFactory, chec
                 if (req.version !== VERSION_1 || !req.destination || !req.x224 && !req.pcb?.trim()) {
                     return fail('malformed request')
                 }
-                if (req.proxyAuth !== token) {
+                if (!sameSecret(req.proxyAuth ?? '', secret)) {
                     return fail('bad token')
                 }
-                deadline = setTimeout(() => stage === 'handshake' && fail('the server didn\'t answer in time'), HANDSHAKE_TIMEOUT_MS)
+                deadline = setTimeout(() => stage === 'handshake' && fail('the server didn\'t answer in time'), options.handshakeTimeoutMs ?? HANDSHAKE_TIMEOUT_MS)
+                // Whether this connection uses KEY_ENCIPHERMENT_ONLY_TLS, and whether it came to it by falling back
+                // (rather than starting with it, as remembered): kept here until the connection shows it was needed.
+                // Taken from legacyTls, which stays cleared until then: a server that hangs, or a client that leaves
+                // meanwhile, has the next connection try modern TLS first, as one whose handshake fails does.
+                let legacy = legacyTls
+                legacyTls = false
+                let fellBack = false
                 let up: Awaited<ReturnType<typeof handshake>>
                 try {
-                    up = await handshake(openUpstream, req.destination, req.pcb, req.x224, legacyTls, track, () => closed, options.withoutNla)
+                    up = await handshake(openUpstream, req.destination, req.pcb, req.x224, legacy, track, () => closed, options.withoutNla, options, leaving.signal)
                 } catch (e: any) {
-                    if (closed || legacyTls || !/KEY_USAGE_BIT_INCORRECT/.test(e?.message ?? '')) {
+                    if (closed || legacy || !(e instanceof KeyUsageRefused)) {
                         throw e
                     }
                     // The X.224 exchange is spent on that connection: start over on a fresh one.
                     log('TLS: the server certificate only allows key encipherment; using TLS 1.2 with RSA key exchange')
-                    legacyTls = true
-                    up = await handshake(openUpstream, req.destination, req.pcb, req.x224, legacyTls, track, () => closed, options.withoutNla)
+                    legacy = fellBack = true
+                    up = await handshake(openUpstream, req.destination, req.pcb, req.x224, legacy, track, () => closed, options.withoutNla, options, leaving.signal)
                 }
                 // Reached: from here on the time is the user's (a certificate to look at) and the session's.
                 clearTimeout(deadline)
@@ -610,15 +903,45 @@ export async function startRDCleanPathProxy (openUpstream: UpstreamFactory, chec
                 if (!chain.length) {
                     return fail('the server sent no certificate')
                 }
-                await checkCertificate(fingerprintOf(chain[0]))
+                // RSA key exchange, without forward secrecy, only for a certificate shown to leave no better choice. One
+                // that doesn't show it, after a handshake that failed as if it did, means something on the way made
+                // that failure up; after one that started with it as remembered, that the certificate changed. Either
+                // way the next connection starts without the fallback.
+                if (legacy && !signsNothing(chain[0])) {
+                    legacyTls = false
+                    return fail(fellBack
+                        ? 'the server\'s certificate doesn\'t show a need for the fallback to TLS 1.2 with RSA key exchange (no forward secrecy) that this connection made: something on the way may be interfering with TLS'
+                        : 'the server\'s certificate changed, and no longer needs TLS 1.2 with RSA key exchange: the next connection uses modern TLS')
+                }
+                // Valid only as checked against a name: without one, Node checks against "localhost".
+                const valid = !!options.serverName && upstream.authorized
+                const reason = valid ? '' : options.serverName ? String(upstream.authorizationError ?? '') : ''
+                // Where the chain stands and whether it is for the name, which Node's code for why it isn't valid can
+                // hide (see certificateDetails), by the authorities the handshake was checked against.
+                const peer = upstream.getPeerCertificate(true)
+                const checked = options.serverName && !valid ? { name: options.serverName, authorities: options.tls?.ca ?? certificateAuthorities(), reason } : undefined
+                await checkCertificate(fingerprintOf(chain[0]), valid, reason, certificateDetails(peer, checked))
                 if (closed) {
                     return
                 }
+                // Remembered only now: the handshake worked, with a certificate that needs it and that was accepted.
+                legacyTls = legacy
+                // A server without NLA, let through before TLS: what let it through is held to its certificate.
+                if (x224 && !offersNla(x224) && options.withoutNlaCertificate) {
+                    await options.withoutNlaCertificate(fingerprintOf(chain[0]))
+                    if (closed) {
+                        return
+                    }
+                }
                 ws.send(encodeResponse(x224, chain, req.destination))
                 stage = 'relay'
+                // The room is this connection's from now on, all of it (see ServerFlow).
+                flowClient = ws
+                owed = 0
+                roomMade()
                 // PROTOCOL_HYBRID_EX in the server's negotiation response: an Early User Authorization Result follows CredSSP.
                 // (A Hyper-V VM's console: CredSSP first, then the X.224 exchange, which never asks for HYBRID_EX.)
-                const frames = serverFraming(!!x224 && x224.length >= 19 && x224[11] === 0x02 && x224.readUInt32LE(15) === 8)
+                const frames = serverFraming(!!x224 && earlyUserAuthorization(x224))
                 upstream.on('data', (d: Buffer) => {
                     stats.bytesIn += d.length
                     let pdus: Buffer[]
@@ -669,7 +992,7 @@ export async function startRDCleanPathProxy (openUpstream: UpstreamFactory, chec
 
     const { port } = wss.address() as AddressInfo
     return {
-        url: `ws://127.0.0.1:${port}`,
+        url: `ws://127.0.0.1:${port}/${token}`,
         token,
         stats,
         get failure () { return failure },
@@ -679,6 +1002,24 @@ export async function startRDCleanPathProxy (openUpstream: UpstreamFactory, chec
             for (const client of wss.clients) {
                 client.terminate()
             }
+            // Nothing more goes to the server: what waited for room goes on, and finds the end.
+            shut = true
+            owed = 0
+            roomMade()
         },
+        room: hasRoom,
+        // Counted only as a number of bytes: anything else would leave the room unknown, and every answer waiting.
+        spend: (bytes: number) => {
+            if (bytes > 0) {
+                owed += bytes
+            }
+        },
+        refund: (bytes: number) => {
+            if (bytes > 0) {
+                owed = Math.max(0, owed - bytes)
+                roomMade()
+            }
+        },
+        whenRoom: () => hasRoom() ? Promise.resolve() : new Promise<void>(resolve => roomWaiters.push(resolve)),
     }
 }
