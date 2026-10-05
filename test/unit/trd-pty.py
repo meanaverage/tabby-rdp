@@ -7,6 +7,7 @@ Every "terminal" here is a real trd-pty client on its own PTY, so this exercises
 as Tabby's console and the desktop terminal. Uses its own XDG_RUNTIME_DIR, so real sessions are untouched.
 """
 import fcntl
+import importlib.util
 import os
 import pty
 import re
@@ -37,12 +38,15 @@ def check(name, ok, detail=None):
 
 
 class Term:
-    """A terminal running `trd-pty <args>`, with its own size."""
+    """A terminal running `trd-pty <args>`, with its own size (`before`: Python run first, in the same process)."""
 
-    def __init__(self, args, rows=30, cols=100, env=None):
+    def __init__(self, args, rows=30, cols=100, env=None, before=None):
         self.rows, self.cols = rows, cols
         self.pid, self.fd = pty.fork()
         if self.pid == 0:
+            if before:
+                run = f'import runpy, sys; {before}; sys.argv = sys.argv[1:]; runpy.run_path(sys.argv[0], run_name="__main__")'
+                os.execve(sys.executable, [sys.executable, '-c', run, TRD] + args, env or ENV)
             os.execve(sys.executable, [sys.executable, TRD] + args, env or ENV)
         self.resize(rows, cols)
         self.buf = b''
@@ -249,9 +253,10 @@ try:
         s.close()
     time.sleep(0.3)
     check('malformed clients cannot kill the session', sessions() and wait_prompt(a, 'survived'), sessions())
-    listening = subprocess.run(['ss', '-ltnupH'], capture_output=True, text=True).stdout
-    owner_pid = int(subprocess.run(['ps', '-o', 'ppid=', '-p', str(shell_pid)], capture_output=True, text=True).stdout)
-    check('no TCP/UDP listener from the session owner', f'pid={owner_pid},' not in listening)
+    if shutil.which('ss'):  # Linux
+        listening = subprocess.run(['ss', '-ltnupH'], capture_output=True, text=True).stdout
+        owner_pid = int(subprocess.run(['ps', '-o', 'ppid=', '-p', str(shell_pid)], capture_output=True, text=True).stdout)
+        check('no TCP/UDP listener from the session owner', f'pid={owner_pid},' not in listening)
     other = subprocess.run(['sudo', '-n', '-u', 'nobody', sys.executable, '-c',
                             f'import socket; s=socket.socket(socket.AF_UNIX); s.connect({sock_path!r})'],
                            capture_output=True, text=True)
@@ -288,7 +293,8 @@ try:
     time.sleep(0.4)  # past the post-replay quiet period
     check('TRD_PTY_LINGER: session survives with no terminals and reattaches', replayed and wait_prompt(e2, 'e2'))
     e2.run('pwd')
-    check('reattached shell kept its cwd', e2.wait_for(r'\r/usr\r\n'))
+    # Bash 5.1 and later write a CR after the line typed, as they turn bracketed paste off; macOS's bash 3.2 doesn't.
+    check('reattached shell kept its cwd', e2.wait_for(r'[\r\n]/usr\r\n'))
     e2.run('exit')
     e2.exit_status()
     e2.close()
@@ -310,6 +316,143 @@ try:
         pass
     check('attach to a missing session fails cleanly', 'no session' in subprocess.run(
         [sys.executable, TRD, 'attach', 'deadbeef'], capture_output=True, text=True, env=ENV).stderr)
+
+    # ---- whose session: both ends check, and the session folder's place ---------------------------
+    sys.dont_write_bytecode = True  # no __pycache__ in remote/, which the package ships
+    spec = importlib.util.spec_from_file_location('trd_pty', TRD)
+    trd_pty = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(trd_pty)
+    probe_path = os.path.join(RUNTIME, 'peer.sock')
+    listener = socket.socket(socket.AF_UNIX)
+    listener.bind(probe_path)
+    listener.listen(1)
+    client = socket.socket(socket.AF_UNIX)
+    client.connect(probe_path)
+    peer = trd_pty.peer_uid(client)
+    check('a client can tell which user serves a session', peer == os.getuid(), (peer, os.getuid()))
+    real_getuid = os.getuid
+    os.getuid = lambda: real_getuid() + 1  # as if the session served another user
+    try:
+        foreign = trd_pty.serves_me(client)
+    finally:
+        os.getuid = real_getuid
+    check('... and refuses one served by another user', foreign is False)
+    client.close()
+    listener.close()
+    os.unlink(probe_path)
+    # Linux's answer for a user whose uid is 2^31 or more (uid_t is unsigned): read as the system has it, not negative.
+    class Credentials:
+        def getsockopt(self, level, option, size):
+            return struct.pack('iII', 4242, 2**31 + 5, 2**31 + 6)
+    had = hasattr(socket, 'SO_PEERCRED')
+    if not had:
+        socket.SO_PEERCRED = 17
+    try:
+        large = trd_pty.peer_uid(Credentials())
+    finally:
+        if not had:
+            del socket.SO_PEERCRED
+    check('... a uid of 2^31 or more included', large == 2**31 + 5, large)
+    # Where the system can't say who is at the other end (no peer credentials, or asking fails), neither end takes the
+    # other's word for it: the client sends nothing, the session lets nobody in.
+    real_peer_uid = trd_pty.peer_uid
+    listener = socket.socket(socket.AF_UNIX)
+    listener.bind(probe_path)
+    listener.listen(4)
+    owner = type('Owner', (), {})()  # a session, as far as accept() looks at it
+    owner.listener, owner.clients, owner.sel = listener, {}, trd_pty.selectors.DefaultSelector()
+    verdicts = []
+    try:
+        def failing(sock):
+            raise OSError('no answer')
+        for unknown in (lambda sock: None, failing):
+            trd_pty.peer_uid = unknown
+            other = socket.socket(socket.AF_UNIX)
+            other.connect(probe_path)
+            trd_pty.Session.accept(owner)
+            verdicts.append((trd_pty.serves_me(other), len(owner.clients)))
+            other.close()
+    finally:
+        trd_pty.peer_uid = real_peer_uid
+    check('... and, without the system\'s word on who is there, neither end goes on', verdicts == [(False, 0), (False, 0)], verdicts)
+    listener.close()
+    os.unlink(probe_path)
+    no_peer = Term(['new'], before='import socket; [delattr(socket, n) for n in ("SO_PEERCRED", "LOCAL_PEERCRED") if hasattr(socket, n)]')
+    status = no_peer.exit_status()
+    check('a system without peer credentials: new exits 3, so the login falls back to tmux', status == 3, (status, no_peer.buf[-200:]))
+    no_peer.close()
+
+    base = tempfile.mkdtemp(prefix='trd-pty-base-')
+    verdicts = []
+    for mode in (0o777, 0o1777, 0o700):
+        os.chmod(base, mode)
+        verdicts.append(trd_pty.safe_base(base, (os.getuid(),)))
+    check('a base folder anyone can rename things in is refused; sticky (like /tmp) or private is not', verdicts == [False, True, True], verdicts)
+    os.makedirs(os.path.join(base, 'trd-pty'))
+    os.chmod(os.path.join(base, 'trd-pty'), 0o755)
+    bad = Term(['new'], env=dict(ENV, XDG_RUNTIME_DIR=base))
+    status = bad.exit_status()
+    check('an unsafe session folder: new exits 3, so the login falls back to tmux', status == 3, (status, bad.buf[-200:]))
+    bad.close()
+    shutil.rmtree(base, ignore_errors=True)
+    # A runtime folder of the user's that can't be written to: no session folder can be made there, exit 3 as well
+    # (not a Python error, which the login wouldn't fall back on).
+    locked = tempfile.mkdtemp(prefix='trd-pty-locked-')
+    os.chmod(locked, 0o500)
+    stuck = Term(['new'], env=dict(ENV, XDG_RUNTIME_DIR=locked))
+    status = stuck.exit_status()
+    check('a session folder that can\'t be made: new exits 3 too', status == 3 or os.geteuid() == 0, (status, stuck.buf[-200:]))
+    stuck.close()
+    os.chmod(locked, 0o700)
+    shutil.rmtree(locked, ignore_errors=True)
+
+    # Another user's session socket, linked into this user's folder (as if swapped in): the client neither asks it
+    # anything nor sends it keystrokes. Needs sudo to `nobody` (CI has it).
+    if subprocess.run(['sudo', '-n', '-u', 'nobody', 'true'], capture_output=True).returncode == 0:
+        theirs = tempfile.mkdtemp(prefix='trd-pty-theirs-')
+        os.chmod(theirs, 0o777)
+        their_sock, got = os.path.join(theirs, 's.sock'), os.path.join(theirs, 'got')
+        server = subprocess.Popen(['sudo', '-n', '-u', 'nobody', sys.executable, '-c', r'''
+import json, os, socket, struct, sys, time
+s = socket.socket(socket.AF_UNIX)
+s.bind(sys.argv[1])
+os.chmod(sys.argv[1], 0o777)
+s.listen(4)
+s.settimeout(1)
+got, end = b'', time.monotonic() + 6
+while time.monotonic() < end:
+    try:
+        c, _ = s.accept()
+    except OSError:
+        continue
+    c.settimeout(1)
+    try:
+        data = c.recv(65536)
+        got += data
+        if data[:1] == b'q':  # answers like a session with 99 terminals
+            body = json.dumps({'id': 'x', 'clients': 99, 'pid': 1}).encode()
+            c.sendall(struct.pack('!cI', b'q', len(body)) + body)
+    except OSError:
+        pass
+    c.close()
+open(sys.argv[2], 'wb').write(got)
+''', their_sock, got])
+        for _ in range(50):
+            if os.path.exists(their_sock):
+                break
+            time.sleep(0.1)
+        os.makedirs(os.path.join(RUNTIME, 'trd-pty'), mode=0o700, exist_ok=True)
+        os.symlink(their_sock, os.path.join(RUNTIME, 'trd-pty', 'feedface.sock'))
+        counted = trd('clients', 'feedface').strip()
+        attached = subprocess.run([sys.executable, TRD, 'attach', 'feedface'], capture_output=True, text=True, env=ENV, stdin=subprocess.DEVNULL)
+        server.wait(timeout=15)
+        sent = open(got, 'rb').read() if os.path.exists(got) else None
+        check("another user's session: not counted, not attached, sent nothing",
+              counted == '0' and 'not yours' in attached.stderr and sent == b'', (counted, attached.stderr[-120:], sent))
+        os.unlink(os.path.join(RUNTIME, 'trd-pty', 'feedface.sock'))
+        shutil.rmtree(theirs, ignore_errors=True)
+    else:
+        print('SKIP  another user\'s session (needs sudo -n -u nobody)', flush=True)
 finally:
     shutil.rmtree(RUNTIME, ignore_errors=True)
 

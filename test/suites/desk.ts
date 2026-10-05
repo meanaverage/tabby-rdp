@@ -63,13 +63,30 @@ await suite('desk', async t => {
     check('desk leaves no escape sequence on screen', !(await ev<string>('return H.screen(H.b)')).includes('7777'))
     check('desk logged', await ev('return RD.desktop.logOf(H.b).some(l => /desk: opened/.test(l))'), await ev('return RD.desktop.logOf(H.b)'))
 
-    // 3b. `desk` from another machine (ssh typed in this console, and the script there through a shared home folder):
-    //     refused with a message, instead of opening a terminal on this machine's desktop.
+    // 3b. A request without desk's key, or with another one, is ignored: anything shown in the console could print it.
+    //     Sent once the desk above is past its cooldown, so that the cooldown isn't what keeps them out; and nothing
+    //     may start for them (the step that asks the host which machine it is), not just no note.
     const note = (pane: string) => `return H.topOf(${pane}) && ${pane}.element.nativeElement.querySelector('.trd-note')?.innerText || null`
     const logBefore = await ev('return RD.desktop.logOf(H.b).filter(l => /^desk: /.test(l)).length')
-    const foreign = `printf '\\033]7777;desk;;;%s;;%s;%s\\007' "$(printf /tmp | base64)" "$(printf 0000beef | base64)" "$(printf other-host | base64)"\r`
-    await ev(`H.b.sendInput(${JSON.stringify(foreign)})`)
+    const KEY = `"$(base64 < ${HOME}/desk-key | tr -d '\\n')"`
+    const request = (key: string) => `printf '\\033]7777;desk;;;%s;;%s;%s;%s\\007' "$(printf /tmp | base64)" "$(printf 0000beef | base64)" "$(printf other-host | base64)" ${key}\r`
+    await sleep(2500)
+    await ev('H.deskRuns = 0; RD.desktop.openConsoleFor = function (...a) { H.deskRuns++; return Object.getPrototypeOf(this).openConsoleFor.apply(this, a) }')
+    t.onCleanup(() => ev('delete RD.desktop.openConsoleFor'))
+    for (const key of ['""', `"$(printf 0123456789abcdef0123456789abcdef | base64)"`]) {
+        await ev(`H.b.sendInput(${JSON.stringify(request(key))})`)
+    }
+    await sleep(2500)
+    const runs = await ev<number>('return H.deskRuns')
+    check('desk without its key, or with another: ignored, no note, nothing started', !(await ev(note('H.b'))) && runs === 0, runs)
+
+    // 3c. `desk` from another machine (ssh typed in this console, and the script there through a shared home folder):
+    //     refused with a message, instead of opening a terminal on this machine's desktop. Its request carries the
+    //     real key, so it does get as far as the step 3b counts: the count there can see a request start.
+    await ev(`H.b.sendInput(${JSON.stringify(request(KEY))})`)
     const refused = await t.waitFor<string>(note('H.b'), 5)
+    const started = await ev<number>('const n = H.deskRuns; delete RD.desktop.openConsoleFor; return n')
+    check('desk with its key: started, once (the count above sees a request start)', started === 1, started)
     check('desk from another machine: refused in a note over the terminal, naming both machines', /desk ran on other-host, but this tab is connected to /.test(refused ?? ''), refused)
     await sleep(8000)
     check('the note stays until closed', !!(await ev(note('H.b'))))

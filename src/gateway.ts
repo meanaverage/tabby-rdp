@@ -1,6 +1,10 @@
 import { createHash, randomBytes, randomUUID } from 'crypto'
+import { isIP } from 'net'
 import { Duplex } from 'stream'
 import * as tls from 'tls'
+import { domainToASCII } from 'url'
+import { CertificateDetails, certificateAuthorities, certificateDetails } from './authorities'
+import { ByteQueue } from './byteQueue'
 import { authenticateMessage, negotiateMessage } from './ntlm'
 
 /**
@@ -25,11 +29,44 @@ export interface GatewayAccount {
     password: string
 }
 
-/** A `host` or `host:port` setting as a gateway (443 by default), or null if it isn't one. */
+/**
+ * A gateway's host in one canonical form, so its trust key, its credential scope, its SNI and the way it is shown all
+ * agree on it and an alternate spelling of the same gateway isn't taken for another one: an IPv6 literal compressed
+ * (so `[0:0::1]` and `[::1]` are one), any other host as the name it resolves to (lower case, international letters as
+ * punycode, one trailing dot dropped). Null for what names no host: an IPv6 literal that isn't one, an empty label
+ * (`gw..example`, or a second trailing dot), a label over 63 characters or a name over 253, and a name with a
+ * character no host name has (`#`, `?`, `@`, `%`, quotes, …), which the URL parser behind domainToASCII would otherwise
+ * read as the end of the name or decode (`gw.example#x` as `gw.example`, `a%41` as `aa`) rather than refuse.
+ */
+function canonicalGatewayHost (bracketed: string | undefined, bare: string | undefined): string | null {
+    if (bracketed !== undefined) {
+        try {
+            return new URL(`http://[${bracketed}]`).hostname.replace(/^\[|\]$/g, '')
+        } catch {
+            return null
+        }
+    }
+    // Letters of any script go to IDNA, which refuses what isn't a name; of ASCII, only what a host name is made of.
+    if (/[^A-Za-z0-9._-]/.test((bare ?? '').replace(/[^\x00-\x7f]/g, ''))) {
+        return null
+    }
+    const host = domainToASCII((bare ?? '').replace(/\.$/, ''))
+    return host && host.length <= 253 && host.split('.').every(label => label.length > 0 && label.length <= 63) ? host : null
+}
+
+/** A `host` or `host:port` setting as a gateway (443 by default), or null if it isn't one. The host is canonical. */
 export function parseGateway (value: unknown): Gateway | null {
-    const m = /^\s*(?:\[([0-9a-f:.]+)\]|([^\s:/]+))(?::(\d{1,5}))?\s*$/i.exec(String(value ?? ''))
+    // Text only, as specOf reads a gateway: String() of an object from the config runs its own conversions, which can throw.
+    const m = /^\s*(?:\[([0-9a-f:.]+)\]|([^\s:/]+))(?::(\d{1,5}))?\s*$/i.exec(typeof value === 'string' ? value : '')
     const port = Number(m?.[3] ?? 443)
-    return m && port > 0 && port < 65536 ? { host: m[1] ?? m[2], port } : null
+    const host = m && canonicalGatewayHost(m[1], m[2])
+    return host && port > 0 && port < 65536 ? { host, port } : null
+}
+
+/** A gateway as a setting writes it: `host`, or `host:port` when that isn't 443 (an IPv6 address in brackets). */
+export function formatGateway (gateway: Gateway): string {
+    const host = gateway.host.includes(':') ? `[${gateway.host}]` : gateway.host
+    return gateway.port === 443 ? host : `${host}:${gateway.port}`
 }
 
 /** The gateway refused the account (its HTTP sign-in, or its connection authorization policy). */
@@ -57,6 +94,11 @@ const CAPABILITY_MESSAGING_CONSENT_SIGN = 0x4
 const MAX_DATA = 32 * 1024
 /** What an incoming packet may be at most (a data packet's 64 KiB, and room for a certificate in the tunnel response). */
 const MAX_PACKET = 256 * 1024
+/**
+ * How many of the gateway's administrator's messages are logged: it decides how many it sends, and when, for as long
+ * as the connection lasts. An administrator has one to show, as the connection starts.
+ */
+const MAX_SERVICE_MESSAGES = 10
 
 function packet (type: number, body: Buffer): Buffer {
     const header = Buffer.alloc(8)
@@ -116,23 +158,33 @@ export function gatewayError (code: number, target: string): string {
     }
 }
 
+/**
+ * The start of a gateway's service message (a length, then UTF-16 text), for the log: up to its terminator, 300
+ * characters at most. Only that much is read: the gateway decides how long it is, up to a packet's size, and looking
+ * through all of it for where it ends could take the square of that.
+ */
+function serviceMessage (body: Buffer): string {
+    const text = body.subarray(body.length >= 2 ? 2 : 0).subarray(0, 600).toString('utf16le')
+    const nul = text.indexOf('\0')
+    return nul < 0 ? text : text.slice(0, nul)
+}
+
 /** Splits a byte stream into the gateway's packets (8 bytes of header: type, reserved, total length). */
 export function packetReader (onPacket: (type: number, body: Buffer) => void): (chunk: Buffer) => void {
-    let pending: Buffer = Buffer.alloc(0)
+    const pending = new ByteQueue()
     return chunk => {
-        pending = pending.length ? Buffer.concat([pending, chunk]) : chunk
+        pending.push(chunk)
         while (pending.length >= 8) {
-            const length = pending.readUInt32LE(4)
+            const length = pending.peek(8).readUInt32LE(4)
             if (length < 8 || length > MAX_PACKET) {
                 throw new Error(`a gateway packet of ${length} bytes`)
             }
             if (pending.length < length) {
                 break
             }
-            onPacket(pending.readUInt16LE(0), pending.subarray(8, length))
-            pending = pending.subarray(length)
+            const packet = pending.take(length)
+            onPacket(packet.readUInt16LE(0), packet.subarray(8))
         }
-        pending = Buffer.from(pending)
     }
 }
 
@@ -160,35 +212,66 @@ export function wsFrame (payload: Buffer, opcode = 0x2): Buffer {
     return Buffer.concat([header, mask, masked])
 }
 
+/**
+ * Answers pings with pongs: one waiting to go out at a time, for the latest ping, as RFC 6455 allows (5.5.3). A gateway
+ * that sends pings and doesn't read what comes back would otherwise have the pongs pile up here as fast as it sends.
+ */
+export function pongs (socket: { write (data: Buffer, done: () => void): unknown }, ended: () => boolean): (payload: Buffer) => void {
+    let waiting = false
+    let latest: Buffer | null = null
+    const pong = (payload: Buffer): void => {
+        if (waiting) {
+            latest = Buffer.from(payload)
+            return
+        }
+        waiting = true
+        socket.write(wsFrame(payload, 0xa), () => {
+            waiting = false
+            const next = latest
+            latest = null
+            if (next && !ended()) {
+                pong(next)
+            }
+        })
+    }
+    return pong
+}
+
 /** Splits the server's bytes into frames: data frames' payloads (fragments as they come), pings, and a close. */
 export function wsReader (on: { data: (payload: Buffer) => void, ping: (payload: Buffer) => void, close: () => void }): (chunk: Buffer) => void {
-    let pending: Buffer = Buffer.alloc(0)
+    const pending = new ByteQueue()
     return chunk => {
-        pending = pending.length ? Buffer.concat([pending, chunk]) : chunk
+        pending.push(chunk)
         for (;;) {
-            if (pending.length < 2) {
+            // The header: 2 bytes, then up to 8 of length (and 4 of mask, read with the frame).
+            const head = pending.peek(10)
+            if (head.length < 2) {
                 break
             }
-            const opcode = pending[0] & 0x0f
-            const masked = (pending[1] & 0x80) !== 0
-            let length = pending[1] & 0x7f
+            const opcode = head[0] & 0x0f
+            const masked = (head[1] & 0x80) !== 0
+            let length = head[1] & 0x7f
             let at = 2
             if (length === 126) {
-                if (pending.length < 4) {
+                if (head.length < 4) {
                     break
                 }
-                length = pending.readUInt16BE(2)
+                length = head.readUInt16BE(2)
                 at = 4
             } else if (length === 127) {
-                if (pending.length < 10) {
+                if (head.length < 10) {
                     break
                 }
-                const long = pending.readBigUInt64BE(2)
+                const long = head.readBigUInt64BE(2)
                 if (long > BigInt(MAX_PACKET * 4)) {
                     throw new Error('a WebSocket frame too large to be the gateway\'s')
                 }
                 length = Number(long)
                 at = 10
+            }
+            // Close, ping and pong carry 125 bytes at most (RFC 6455, 5.5): each ping is answered with as much.
+            if (opcode >= 0x8 && length > 125) {
+                throw new Error('a WebSocket control frame too large to be the gateway\'s')
             }
             const maskAt = at
             if (masked) {
@@ -197,14 +280,14 @@ export function wsReader (on: { data: (payload: Buffer) => void, ping: (payload:
             if (pending.length < at + length) {
                 break
             }
-            let payload = pending.subarray(at, at + length)
+            const frame = pending.take(at + length)
+            let payload = frame.subarray(at)
             if (masked) {
                 payload = Buffer.from(payload)
                 for (let i = 0; i < length; i++) {
-                    payload[i] ^= pending[maskAt + (i & 3)]
+                    payload[i] ^= frame[maskAt + (i & 3)]
                 }
             }
-            pending = pending.subarray(at + length)
             if (opcode === 0x8) {
                 on.close()
             } else if (opcode === 0x9) {
@@ -214,62 +297,95 @@ export function wsReader (on: { data: (payload: Buffer) => void, ping: (payload:
                 on.data(payload)
             }
         }
-        pending = Buffer.from(pending)
     }
 }
 
 // ---- the HTTP upgrade, with NTLM --------------------------------------------------------------------
 
-/** One HTTP response's status and headers, read from the stream; its body (a 401's page) is read and dropped. */
+/** What a response's status line and headers may be at most. */
+const MAX_HEAD = 64 * 1024
+/** What its body may be at most: a 401's page, a kilobyte or so, which isn't kept anyway. */
+const MAX_BODY = 256 * 1024
+/** A header's name: an HTTP token (RFC 9110, 5.6.2). */
+const HEADER_NAME = /^[!#$%&'*+.^_`|~0-9a-z-]+$/
+
+/**
+ * One HTTP response's status and headers, read from the stream. A 401's body (its page) is counted off as it comes, not
+ * kept; a length (Content-Length) that isn't a number, or is over MAX_BODY, is refused. What follows is left for the
+ * next reader.
+ */
 function readResponse (stream: Duplex, timeoutMs: number): Promise<{ status: number, headers: Map<string, string[]> }> {
     return new Promise((resolve, reject) => {
-        let pending = Buffer.alloc(0)
-        let head: { status: number, headers: Map<string, string[]>, body: number } | null = null
-        const done = (error: Error | null, value?: { status: number, headers: Map<string, string[]> }) => {
+        // The status line and headers, copied in as they come.
+        const head = Buffer.alloc(MAX_HEAD)
+        let filled = 0
+        let response: { status: number, headers: Map<string, string[]> } | null = null
+        // How much of the body is still to come, and what came after it.
+        let body = 0
+        let rest: Buffer | null = null
+        const done = (error: Error | null) => {
             clearTimeout(timer)
             stream.off('data', onData)
             stream.off('error', onError)
             stream.off('close', onClose)
             // Paused before anything left over goes back, so that it waits for whoever reads next.
             stream.pause()
-            if (pending.length) {
-                stream.unshift(pending)
+            if (rest?.length) {
+                stream.unshift(rest)
             }
-            error ? reject(error) : resolve(value!)
+            error ? reject(error) : resolve(response!)
         }
         const onError = (e: Error) => done(e)
         const onClose = () => done(new Error('the gateway closed the connection'))
         const timer = setTimeout(() => done(new Error('the gateway didn\'t answer in time')), timeoutMs)
         const onData = (chunk: Buffer) => {
-            pending = Buffer.concat([pending, chunk])
-            if (!head) {
-                const end = pending.indexOf('\r\n\r\n')
+            if (!response) {
+                // Only what is new is searched, from three bytes back: the blank line can straddle two pieces.
+                const from = Math.max(0, filled - 3)
+                const start = filled
+                filled += chunk.copy(head, filled)
+                const end = head.subarray(0, filled).indexOf('\r\n\r\n', from)
                 if (end < 0) {
-                    if (pending.length > 64 * 1024) {
+                    if (filled === MAX_HEAD) {
                         done(new Error('the gateway\'s answer isn\'t HTTP'))
                     }
                     return
                 }
-                const lines = pending.subarray(0, end).toString('latin1').split('\r\n')
+                const lines = head.subarray(0, end).toString('latin1').split('\r\n')
                 const status = Number(/^HTTP\/1\.[01] (\d{3})/.exec(lines[0])?.[1])
-                if (!status) {
+                // A CR or LF that doesn't end a line is no HTTP a gateway sends.
+                if (!status || lines.some(line => line.includes('\r') || line.includes('\n'))) {
                     return done(new Error('the gateway\'s answer isn\'t HTTP'))
                 }
                 const headers = new Map<string, string[]>()
                 for (const line of lines.slice(1)) {
-                    const m = /^([^:]+):\s*(.*)$/.exec(line)
-                    if (m) {
-                        headers.set(m[1].toLowerCase(), [...headers.get(m[1].toLowerCase()) ?? [], m[2]])
+                    // Split at the first colon, the value trimmed: no pattern whose parts can take the same characters,
+                    // which a long line can make cost the square of its length.
+                    const colon = line.indexOf(':')
+                    const name = colon > 0 ? line.slice(0, colon).toLowerCase() : ''
+                    if (HEADER_NAME.test(name)) {
+                        const values = headers.get(name) ?? []
+                        values.push(line.slice(colon + 1).trim())
+                        headers.set(name, values)
                     }
                 }
-                pending = pending.subarray(end + 4)
-                // A switch of protocols has no body; other answers say how long theirs is.
-                head = { status, headers, body: status === 101 ? 0 : Number(headers.get('content-length')?.[0] ?? 0) }
+                // Only a 401's page has to be got past: a sign-in round follows it on the same connection. Any other
+                // answer ends the sign-in, connection and all (and a switch of protocols has no body).
+                const length = status === 401 ? (headers.get('content-length')?.[0] ?? '0').trim() : '0'
+                if (!/^\d{1,9}$/.test(length) || Number(length) > MAX_BODY) {
+                    return done(new Error('the gateway\'s answer is malformed or too large'))
+                }
+                response = { status, headers }
+                body = Number(length)
+                // What this piece has after the blank line.
+                chunk = chunk.subarray(end + 4 - start)
             }
-            if (pending.length >= head.body) {
-                pending = pending.subarray(head.body)
-                done(null, { status: head.status, headers: head.headers })
+            if (chunk.length < body) {
+                body -= chunk.length
+                return
             }
+            rest = chunk.subarray(body)
+            done(null)
         }
         stream.on('data', onData)
         stream.on('error', onError)
@@ -312,7 +428,7 @@ export function endPointBinding (certificate: Buffer): Buffer {
 }
 
 /** Upgrades the connection to the gateway's WebSocket, signing in with NTLM on the way. */
-async function upgrade (stream: Duplex, gateway: Gateway, account: GatewayAccount, certificate: Buffer, timeoutMs: number): Promise<void> {
+async function upgrade (stream: Duplex, gateway: Gateway, account: GatewayAccount, certificate: Buffer, timeoutMs: number, proceed: () => void = () => { }): Promise<void> {
     const key = randomBytes(16).toString('base64')
     const connection = `{${randomUUID().toUpperCase()}}`
     const request = (authorization: Buffer) => [
@@ -327,6 +443,7 @@ async function upgrade (stream: Duplex, gateway: Gateway, account: GatewayAccoun
         '', '',
     ].join('\r\n')
     const negotiate = negotiateMessage()
+    proceed()
     stream.write(request(negotiate))
     const first = await readResponse(stream, timeoutMs)
     if (first.status !== 401) {
@@ -340,6 +457,7 @@ async function upgrade (stream: Duplex, gateway: Gateway, account: GatewayAccoun
             : `the gateway doesn't offer an NTLM sign-in (it offers: ${offered.map(v => v.split(' ')[0]).join(', ') || 'nothing'})`)
     }
     const challengeMessage = Buffer.from(challenge, 'base64')
+    proceed()
     stream.write(request(authenticateMessage(negotiate, challengeMessage, {
         ...account, channelBinding: endPointBinding(certificate), targetName: `HTTP/${gateway.host}`,
     })))
@@ -369,45 +487,77 @@ export interface GatewayOptions {
     log?: (message: string) => void
     /** TLS options for the connection to the gateway (tests: a test certificate's). */
     tls?: tls.ConnectionOptions
+    /**
+     * Aborts when what the tunnel is for has gone (the desktop was closed): nothing more is sent to the gateway then,
+     * the sign-in's messages included, and the connection to it is ended, rather than left to the gateway's timeouts.
+     */
+    signal?: AbortSignal
 }
 
 /**
  * Opens a stream to target.host:target.port through the gateway. `open` gives a TCP stream to the gateway (directly, or
  * through an SSH host). `checkCertificate` decides on the gateway's certificate before the account is used: it gets
- * the SHA-256 fingerprint (`AB:CD:…`) and whether the certificate is valid for the gateway's name by this computer's
- * certificate authorities, and throws to refuse.
+ * the SHA-256 fingerprint (`AB:CD:…`), whether the certificate is valid for the gateway's name by this computer's
+ * certificate authorities (see certificateAuthorities), why not (Node's code for it, '' when it is), and what the
+ * certificate says of itself (see CertificateDetails), and throws to refuse.
  */
 export async function openThroughGateway (
     open: () => Promise<Duplex>, gateway: Gateway, account: GatewayAccount, target: { host: string, port: number },
-    checkCertificate: (fingerprint: string, valid: boolean) => void | Promise<void>, options: GatewayOptions = {},
+    checkCertificate: (fingerprint: string, valid: boolean, reason: string, details?: CertificateDetails) => void | Promise<void>, options: GatewayOptions = {},
 ): Promise<Duplex> {
     const log = options.log ?? (() => null)
     const timeoutMs = options.timeoutMs ?? 20000
     const targetName = `${target.host}:${target.port}`
+    const signal = options.signal
+    // Nothing more goes to the gateway once what it is for has gone: checked before each step and message of the
+    // sign-in, and the connection ends then, which also ends what waits on it (the TLS handshake, an answer).
+    const proceed = () => {
+        if (signal?.aborted) {
+            throw new Error('the desktop was closed meanwhile')
+        }
+    }
+    proceed()
     const raw = await open()
     let secure: tls.TLSSocket | null = null
+    const abort = () => {
+        secure?.destroy()
+        raw.destroy()
+    }
+    signal?.addEventListener('abort', abort, { once: true })
     try {
+        proceed()
         // A name is sent (SNI), an address isn't; either is what the certificate is checked for.
-        const named = !/^[\d.]+$|:/.test(gateway.host)
-        const socket = tls.connect({ socket: raw as any, host: gateway.host, rejectUnauthorized: false, ...named ? { servername: gateway.host } : {}, ...options.tls })
+        const named = !isIP(gateway.host)
+        const socket = tls.connect({
+            socket: raw as any, host: gateway.host, rejectUnauthorized: false, ca: certificateAuthorities(),
+            ...named ? { servername: gateway.host } : {}, ...options.tls,
+        })
         secure = socket
+        // A step like the others: a gateway that takes the connection and never answers TLS would keep it for good.
+        let timer: NodeJS.Timeout | undefined
         await new Promise<void>((resolve, reject) => {
+            timer = setTimeout(() => reject(new Error('the gateway didn\'t answer in time (TLS)')), timeoutMs)
             socket.once('secureConnect', resolve)
             socket.once('error', reject)
             socket.once('close', () => reject(new Error('the gateway closed the connection during TLS')))
-        })
-        const certificate = socket.getPeerCertificate()
+        }).finally(() => clearTimeout(timer))
+        const certificate = socket.getPeerCertificate(true)
         if (!certificate?.fingerprint256) {
             throw new Error('the gateway sent no certificate')
         }
-        await checkCertificate(certificate.fingerprint256, socket.authorized)
-        await upgrade(socket, gateway, account, certificate.raw, timeoutMs)
+        // Where its chain stands and whether it is for the gateway's name, which Node's code for why it isn't valid can
+        // hide (see certificateDetails).
+        const reason = socket.authorized ? '' : String(socket.authorizationError ?? '')
+        const checked = socket.authorized ? undefined : { name: gateway.host, authorities: options.tls?.ca ?? certificateAuthorities(), reason }
+        await checkCertificate(certificate.fingerprint256, socket.authorized, reason, certificateDetails(certificate, checked))
+        await upgrade(socket, gateway, account, certificate.raw, timeoutMs, proceed)
         log(`gateway: signed in to ${gateway.host}`)
 
         // From here on: WebSocket frames, the gateway's packets inside.
         let expecting: { type: number, resolve: (body: Buffer) => void, reject: (e: Error) => void } | null = null
         let stream: Duplex | null = null
         let ended = false
+        let messages = 0
         const end = (error?: Error) => {
             if (ended) {
                 return
@@ -427,7 +577,11 @@ export async function openThroughGateway (
             } else if (type === PKT_KEEPALIVE) {
                 // nothing to answer: the gateway only checks the line
             } else if (type === PKT_SERVICE_MESSAGE) {
-                log(`gateway: its administrator's message: ${body.subarray(body.length >= 2 ? 2 : 0).toString('utf16le').replace(/\0+$/, '').slice(0, 300)}`)
+                if (++messages <= MAX_SERVICE_MESSAGES) {
+                    log(`gateway: its administrator's message: ${serviceMessage(body)}`)
+                } else if (messages === MAX_SERVICE_MESSAGES + 1) {
+                    log(`gateway: more messages from its administrator; past ${MAX_SERVICE_MESSAGES}, they aren't logged`)
+                }
             } else if (type === PKT_CLOSE_CHANNEL) {
                 socket.write(wsFrame(packet(PKT_CLOSE_CHANNEL_RESPONSE, Buffer.alloc(8))))
                 end()
@@ -439,7 +593,7 @@ export async function openThroughGateway (
         })
         const frames = wsReader({
             data: payload => packets(payload),
-            ping: payload => socket.write(wsFrame(payload, 0xa)),
+            ping: pongs(socket, () => ended),
             close: () => end(),
         })
         socket.on('data', (chunk: Buffer) => {
@@ -463,6 +617,13 @@ export async function openThroughGateway (
                 type,
                 resolve: body => { clearTimeout(timer); resolve(body) },
                 reject: e => { clearTimeout(timer); reject(e) },
+            }
+            try {
+                proceed()
+            } catch (e: any) {
+                expecting = null
+                clearTimeout(timer)
+                return reject(e)
             }
             socket.write(wsFrame(send))
         })
@@ -518,5 +679,8 @@ export async function openThroughGateway (
         secure?.destroy()
         raw.destroy()
         throw e
+    } finally {
+        // Only for the sign-in and the tunnel's setup: the tunnel itself ends with the client's connection (see track).
+        signal?.removeEventListener('abort', abort)
     }
 }

@@ -94,48 +94,130 @@ export async function pingRemote (tab: SSHTab): Promise<number> {
 const END = '__trd_exec_end__'
 
 /**
+ * What a command's output may be at most. The plugin's commands print a few lines (a host's VMs: a line each); a host
+ * that sends more is sending what it likes, which would otherwise all be kept, and parsed, on the thread that runs
+ * Tabby's window.
+ */
+export const MAX_OUTPUT = 4 * 1024 * 1024
+
+/** What a command that printed more than MAX_OUTPUT fails with. */
+export function tooMuchOutput (): Error {
+    return new Error(`Remote command printed more than ${MAX_OUTPUT / 1024 / 1024} MB where a few lines were expected: stopped reading it`)
+}
+
+/**
+ * A command's output as it arrives, up to MAX_OUTPUT: copied into one buffer of its own, grown by doubling, rather than
+ * kept as the pieces it came in. A host can send its output a byte at a time, and millions of one-byte pieces take far
+ * more memory as pieces than as bytes.
+ */
+export class Output {
+    private buffer = Buffer.alloc(0)
+    /** How much has come; past MAX_OUTPUT, more than it (the rest isn't kept). */
+    size = 0
+
+    get overflowed (): boolean {
+        return this.size > MAX_OUTPUT
+    }
+
+    /** Adds what came; false once there is more than MAX_OUTPUT. */
+    add (piece: Uint8Array): boolean {
+        if (this.size + piece.byteLength > MAX_OUTPUT) {
+            this.size = MAX_OUTPUT + 1
+            return false
+        }
+        if (this.size + piece.byteLength > this.buffer.length) {
+            const grown = Buffer.allocUnsafe(Math.min(MAX_OUTPUT, Math.max(this.buffer.length * 2, this.size + piece.byteLength, 64 * 1024)))
+            this.buffer.copy(grown, 0, 0, this.size)
+            this.buffer = grown
+        }
+        this.buffer.set(piece, this.size)
+        this.size += piece.byteLength
+        return true
+    }
+
+    /** What has come so far (not past MAX_OUTPUT). */
+    bytes (): Buffer {
+        return this.buffer.subarray(0, Math.min(this.size, MAX_OUTPUT))
+    }
+}
+
+/**
  * Picks up data for a closed channel that Tabby's russh binding received after the close. Its data, EOF and close
  * events come through separate callbacks, in no fixed order, and the close drops the channel's data subscription:
  * later data waits in a new buffer that nothing reads (seen with Tabby 1.0.237 on Windows).
  * Reported upstream: https://github.com/Eugeny/russh-napi/issues/3
  */
-function drainLateData (ssh: any, id: unknown, out: Buffer[]) {
+function drainLateData (ssh: any, id: unknown, take: (d: Uint8Array) => void) {
     const data = ssh.events?.data$
     if (typeof data?.subscribe !== 'function') {
         return
     }
-    data.subscribe(id).subscribe((d: Uint8Array) => out.push(Buffer.from(d))).unsubscribe()
+    data.subscribe(id).subscribe(take).unsubscribe()
     data.closeChannel?.(id)
 }
 
 /** Runs `command` on the remote with `stdin`, returns stdout. No PTY, no exit status (russh doesn't expose it). */
 export async function execRemote (tab: SSHTab, command: string, stdin = '', timeoutMs = 60000): Promise<string> {
     const ssh = client(tab)
-    const channel = await ssh.activateChannel(await ssh.openSessionChannel())
-    const out: Buffer[] = []
-    const text = () => Buffer.concat(out).toString('utf8')
-    const closed = new Promise<void>(resolve => channel.closed$.subscribe(() => resolve()))
-    channel.data$.subscribe((d: Uint8Array) => out.push(Buffer.from(d)))
-    await channel.requestExec(`${command}\necho ${END}`)
-    if (stdin) {
-        await channel.write(new Uint8Array(Buffer.from(stdin)))
-    }
-    await channel.eof()
+    // One limit on time for all of it, from opening the channel on: a server that never confirms the channel, or the
+    // command, would otherwise keep whatever waits for the answer (a VM scan, a desktop's setup) waiting for good.
     let timer: NodeJS.Timeout | undefined
     const timeout = new Promise<never>((_, reject) => {
         timer = setTimeout(() => reject(new Error(`Remote command timed out after ${timeoutMs / 1000}s`)), timeoutMs)
     })
+    timeout.catch(() => null)
+    const opening: Promise<any> = Promise.resolve().then(() => ssh.openSessionChannel()).then((c: any) => ssh.activateChannel(c))
+    const output = new Output()
+    // Whether END has come: looked for in what is new and the end of what came before, since it can straddle the two.
+    let ended = false
+    let overflow: (e: Error) => void = () => null
+    const overflowed = new Promise<never>((_, reject) => { overflow = reject })
+    overflowed.catch(() => null)
+    let channel: any = null
+    const take = (d: Uint8Array) => {
+        if (output.overflowed) {
+            return
+        }
+        const from = Math.max(0, output.size - (END.length - 1))
+        if (!output.add(d)) {
+            channel?.close().catch(() => null)
+            return overflow(tooMuchOutput())
+        }
+        ended ||= output.bytes().includes(END, from)
+    }
     try {
-        await Promise.race([closed, timeout])
+        channel = await Promise.race([opening, timeout])
+        const closed = new Promise<void>(resolve => channel.closed$.subscribe(() => resolve()))
+        channel.data$.subscribe(take)
+        // What the host sends meanwhile counts too: past MAX_OUTPUT it ends this, whatever step it is at.
+        const started = (async () => {
+            await channel.requestExec(`${command}\necho ${END}`)
+            if (stdin) {
+                await channel.write(new Uint8Array(Buffer.from(stdin)))
+            }
+            await channel.eof()
+        })()
+        started.catch(() => null)
+        await Promise.race([started, timeout, overflowed])
+        await Promise.race([closed, timeout, overflowed])
     } finally {
         clearTimeout(timer)
-        channel.close().catch(() => null)
+        if (channel) {
+            channel.close().catch(() => null)
+        } else {
+            // A channel that opens after the time is up is closed then.
+            opening.then((c: any) => c?.close(), () => null).catch(() => null)
+        }
     }
-    for (let i = 0; i < 40 && !text().includes(END); i++) {
+    for (let i = 0; i < 40 && !ended && !output.overflowed; i++) {
         await new Promise(resolve => setTimeout(resolve, 50))
-        drainLateData(ssh, channel.id, out)
+        drainLateData(ssh, channel.id, take)
     }
-    const result = text()
+    if (output.overflowed) {
+        throw tooMuchOutput()
+    }
+    // Decoded once, all of it: a character's bytes can straddle two pieces.
+    const result = output.bytes().toString('utf8')
     const end = result.lastIndexOf(END)
     return end < 0 ? result : result.slice(0, end)
 }

@@ -13,16 +13,39 @@ const ICON_DESKTOP = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 5
 const ICON_TERMINAL = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><path fill="currentColor" d="M9.4 86.6C-3.1 74.1-3.1 53.9 9.4 41.4s32.8-12.5 45.3 0l192 192c12.5 12.5 12.5 32.8 0 45.3l-192 192c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L178.7 256 9.4 86.6zM256 416l288 0c17.7 0 32 14.3 32 32s-14.3 32-32 32l-288 0c-17.7 0-32-14.3-32-32s14.3-32 32-32z"/></svg>'
 const ICON_DISCONNECT = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><path fill="currentColor" d="M64 80c-8.8 0-16 7.2-16 16l0 320c0 8.8 7.2 16 16 16l384 0c8.8 0 16-7.2 16-16l0-320c0-8.8-7.2-16-16-16L64 80zM0 96C0 60.7 28.7 32 64 32l384 0c35.3 0 64 28.7 64 64l0 320c0 35.3-28.7 64-64 64L64 480c-35.3 0-64-28.7-64-64L0 96zm175 79c9.4-9.4 24.6-9.4 33.9 0l47 47 47-47c9.4-9.4 24.6-9.4 33.9 0s9.4 24.6 0 33.9l-47 47 47 47c9.4 9.4 9.4 24.6 0 33.9s-24.6 9.4-33.9 0l-47-47-47 47c-9.4 9.4-24.6 9.4-33.9 0s-9.4-24.6 0-33.9l47-47-47-47c-9.4-9.4-9.4-24.6 0-33.9z"/></svg>'
 
+/** What the microphone indicator says about the desktops sent the microphone. */
+function microphoneTitle (users: { name: string }[]): string {
+    const names = users.map(u => u.name)
+    const which = names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]} are` : `${names[0]} is`
+    return `Microphone in use: ${which} receiving it. Click to show the desktop, or to stop sending the microphone there.`
+}
+
+/**
+ * The microphone over the window (see HeaderControls.float): like the dot on a desktop, but one that can be clicked, so
+ * it takes the clicks on what it covers of the desktop in view. At the top in the middle, where a maximized window's
+ * title bar has its title (GNOME) or only room to drag it by (Windows), and GNOME's top bar its clock, all wider than
+ * it, rather than in the corner, where they have their close button and system menu. Windows' own Remote Desktop
+ * client puts its bar there in full screen too.
+ */
+const FLOATING_MICROPHONE_STYLE = 'position: fixed; top: 8px; left: 50%; transform: translateX(-50%); z-index: 1040; width: 26px; height: 26px; padding: 0; ' +
+    'border: none; border-radius: 50%; display: flex; align-items: center; justify-content: center; ' +
+    'background: rgba(220, 38, 38, 0.9); color: #fff; font-size: 12px; cursor: pointer; box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);'
+
 /**
  * Desktop/console switch and Disconnect in Tabby's header, left of the settings gear, for the active
  * tab's SSH pane. Tabby builds its own header buttons once at startup, so these are plain DOM kept in
- * sync with the active tab and the desktop state.
+ * sync with the active tab and the desktop state. Also a red microphone while any desktop is sent the
+ * microphone, whatever tab is in front: the dot on a desktop is out of sight while it is hidden. Without
+ * a header (full screen hides Tabby's tab bar), that one shows over the window instead, at its top in the middle.
  */
 @Injectable({ providedIn: 'root' })
 export class HeaderControls {
     private group: HTMLElement | null = null
+    private microphoneButton!: HTMLButtonElement
     private toggleButton!: HTMLButtonElement
     private disconnectButton!: HTMLButtonElement
+    /** The microphone over the window, while it shows (see float). */
+    private floatingMicrophone: HTMLButtonElement | null = null
     private scheduled = false
 
     constructor (
@@ -135,22 +158,34 @@ export class HeaderControls {
         })
         this.disconnectButton.title = 'Disconnect remote desktop'
         this.disconnectButton.innerHTML = ICON_DISCONNECT
-        this.group.append(this.toggleButton, this.disconnectButton)
+        this.microphoneButton = button('trd-header-mic', () => this.microphoneMenu())
+        this.microphoneButton.innerHTML = '<i class="fas fa-microphone"></i>'
+        // Inline: Tabby's header button color is scoped to its component and would win over a plugin style.
+        this.microphoneButton.style.color = 'rgb(220, 38, 38)'
+        this.group.append(this.microphoneButton, this.toggleButton, this.disconnectButton)
         right.insertBefore(this.group, right.firstChild)
         return true
     }
 
     private refresh (): void {
-        if (!this.ensureGroup()) {
+        const users = this.desktop.microphoneUsers()
+        const inHeader = this.ensureGroup()
+        this.float(inHeader ? [] : users.filter(u => !u.inView))
+        if (!inHeader) {
             return
         }
+        this.microphoneButton.style.display = users.length ? '' : 'none'
+        this.microphoneButton.title = users.length ? microphoneTitle(users) : ''
         let pane = desktopPaneOf(this.app.activeTab)
         // SSH tabs always qualify; local terminals only while they run ssh (see detect()).
         if (pane && !isSSHTab(pane) && !this.desktop.has(pane) && !this.targets.cached(pane)) {
             pane = null
         }
-        this.group!.style.display = pane ? 'flex' : 'none'
+        // The microphone shows from any tab, also one with nothing to switch.
+        this.group!.style.display = pane || users.length ? 'flex' : 'none'
         if (!pane) {
+            this.toggleButton.style.display = 'none'
+            this.disconnectButton.style.display = 'none'
             return
         }
         const visible = this.desktop.isVisible(pane)
@@ -162,5 +197,51 @@ export class HeaderControls {
             this.toggleButton.innerHTML = visible ? ICON_TERMINAL : ICON_DESKTOP
         }
         this.disconnectButton.style.display = this.desktop.has(pane) ? '' : 'none'
+    }
+
+    /**
+     * The microphone over the window, for desktops sent it that aren't in view (`users`), while there is no header to
+     * show it in: Tabby leaves its tab bar out in full screen unless Appearance › Show tabs in fullscreen mode is on. A
+     * desktop in view has its dot. Gone again once the header is back or nothing out of view gets the microphone.
+     */
+    private float (users: { name: string }[]): void {
+        // The note on desktops that typing goes into all of them, at their top in the middle, moves clear of it meanwhile
+        // (see the service's STYLE).
+        document.body.classList.toggle('trd-floating-mic-on', users.length > 0)
+        if (!users.length) {
+            this.floatingMicrophone?.remove()
+            this.floatingMicrophone = null
+            return
+        }
+        if (!this.floatingMicrophone?.isConnected) {
+            const button = document.createElement('button')
+            button.className = 'trd-floating-mic'
+            button.style.cssText = FLOATING_MICROPHONE_STYLE
+            button.innerHTML = '<i class="fas fa-microphone"></i>'
+            button.addEventListener('click', () => this.zone.run(() => this.microphoneMenu()))
+            document.body.appendChild(button)
+            this.floatingMicrophone = button
+        }
+        const title = microphoneTitle(users)
+        if (this.floatingMicrophone.title !== title) {
+            this.floatingMicrophone.title = title
+        }
+    }
+
+    /** The microphone's menu: for each desktop sent it, show that desktop, or stop sending the microphone there. */
+    private microphoneMenu (): void {
+        const users = this.desktop.microphoneUsers()
+        if (!users.length) {
+            return  // stopped meanwhile
+        }
+        const items: MenuItemOptions[] = [{ label: 'Microphone in use', enabled: false }]
+        for (const { pane, name } of users) {
+            items.push(
+                { type: 'separator' },
+                { label: `Show ${name}`, click: () => this.desktop.bringForward(pane) },
+                { label: `Stop sending the microphone to ${name}`, click: () => this.desktop.stopMicrophone(pane) },
+            )
+        }
+        this.platform.popupContextMenu(items)
     }
 }

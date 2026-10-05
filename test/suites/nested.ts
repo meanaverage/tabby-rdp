@@ -1,7 +1,9 @@
 // `ssh` typed in an SSH tab, on a Linux desktop host (TRD_TEST_HOST) that can itself ssh non-interactively to another
 // desktop account (TRD_TEST_NESTED: an ssh destination as the test host sees it, e.g. an alias for another user; see
-// test/README.md). SSH tab to the host, its desktop, a split pane, `ssh` there, Desktop: that pane gets the other
-// account's desktop, through the host; the first pane keeps its own. Reconnect stays with it after the ssh ends.
+// test/README.md). SSH tab to the host, its desktop, a split pane, `ssh` there, Desktop: the first time, it asks which
+// desktop (the host only says which ssh runs there), then that pane gets the other account's desktop, through the host,
+// under a key of the host's; the first pane keeps its own. Chosen once, it doesn't ask again. Reconnect stays with it
+// after the ssh ends.
 import { suite } from '../lib/harness.js'
 
 const NESTED = process.env.TRD_TEST_NESTED
@@ -38,6 +40,17 @@ await suite('nested', async t => {
     // Its GNOME session would be in the way of the xrdp suite, which signs in to the same account.
     t.onCleanup(() => t.remote('H.a', `ssh -o BatchMode=yes ${NESTED} 'systemctl --user stop tabby-headless-shell.service gnome-remote-desktop-headless.service' 2>/dev/null; true`))
 
+    // Which desktop Desktop opens is asked while ssh leads somewhere from the host that wasn't chosen "from now on":
+    // nothing remembered yet, and the question answered with the machine ssh went to, from now on.
+    const remembered = await ev('return JSON.stringify(H.config.store.remoteDesktop.nestedSSH ?? [])')
+    t.onCleanup(() => ev(`H.inZone(() => { H.config.store.remoteDesktop.nestedSSH = ${remembered}; H.config.save() })`))
+    await ev('H.inZone(() => { H.config.store.remoteDesktop.nestedSSH = []; H.config.save() })')
+    await ev(`H.asked = []; H.selector = RD.desktop.selector; RD.desktop.selector = { show: async (title, options) => {
+        H.asked.push(options.map(o => o.name))
+        return options.find(o => o.name === ${JSON.stringify(`${NESTED}, from now on`)})?.result
+    } }`)
+    t.onCleanup(() => ev('if (H.selector) RD.desktop.selector = H.selector'))
+
     // Desktop there: the other account's, through the host.
     const t0 = Date.now()
     await ev('await H.inZone(() => RD.desktop.toggle(H.c))')
@@ -45,7 +58,13 @@ await suite('nested', async t => {
     t.time('Desktop → connected (through the host)', Date.now() - t0)
     const remote = await ev<{ key: string, label: string }>('const r = H.session(H.c).remote; return { key: r.key, label: r.label }')
     check(`its remote is the one ssh went to (${NESTED})`, remote.label === NESTED && remote.key !== own, { remote, own })
+    check('... keyed under the host it goes through', remote.key.startsWith(`${own}>`), { remote, own })
     check('the first pane keeps its own desktop', await ev('return RD.desktop.isConnected(H.a) && H.session(H.a).remote.key') === own)
+    const ownLabel = await ev<string>('return H.session(H.a).remote.label')
+    check('the first time, Desktop asked which desktop: the host\'s own first, then the one ssh went to, this time or from now on',
+        JSON.stringify(await ev('return H.asked')) === JSON.stringify([[ownLabel, NESTED, `${NESTED}, from now on`]]), await ev('return H.asked'))
+    check('... and remembers the choice for that host, as asked', await ev(`return (H.config.store.remoteDesktop.nestedSSH ?? []).some(e => e.via === ${JSON.stringify(own)} && e.destination === ${JSON.stringify(NESTED)})`))
+    check('chosen from now on, it doesn\'t ask again', await ev('return (await RD.desktop.remoteFor(H.c))?.label') === NESTED && await ev('return H.asked.length') === 1, await ev('return H.asked'))
     const picture = await t.waitFor('const c = H.canvas(H.c); return c && c.colors > 3 ? c : null', 20)
     check('the other desktop shows a picture', !!picture, picture)
     check('no note about the pane next to it', await ev('return !H.c.element.nativeElement.querySelector(".trd-note")'))
@@ -137,4 +156,5 @@ e.connect('changed', save); w.connect('destroy', Gtk.main_quit); w.show_all(); w
     // Without the ssh, Desktop in that pane is the host's again: open next door, so a note says so.
     await ev('await H.inZone(() => RD.desktop.toggle(H.c))')
     check('without ssh: the host\'s desktop, already open next door, is explained', !!(await t.waitFor('return H.c.element.nativeElement.querySelector(".trd-note")?.innerText || null', 8)))
+    check('no other question along the way (reconnects, the pane without ssh)', await ev('return H.asked.length') === 1, await ev('return H.asked'))
 })

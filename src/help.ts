@@ -38,12 +38,26 @@ export interface HelpEntry {
 export const TROUBLESHOOTING: HelpEntry[] = [
     {
         id: 'certificate',
-        title: 'The certificate has changed',
+        title: 'A certificate this computer can\'t verify, or one that has changed',
         match: /certificate/i,
-        body: `The first connection to a Windows or xrdp desktop remembers its certificate. When a later one differs, the
-            plugin stops before signing in, so nothing (no password) has been sent. Reinstalling the machine or renewing its
-            certificate changes it: then choose <b>Trust the new certificate</b>. If neither happened, something else is
-            answering at that address. A GNOME desktop only ever accepts the certificate the plugin made for it; a
+        body: `A desktop you connect to directly (a remote desktop profile, an imported file) and an RD Gateway connect
+            without asking when their certificate is valid for their name by this computer's certificate authorities, as
+            an organisation's own desktops and gateways often are. Any other is shown the first time, with why it can't
+            be verified (most often: it is the server's own, self-signed) and its fingerprint, before anything of your
+            sign-in is sent: check the fingerprint with whoever runs it, some other way than this connection (it is in the
+            desktop's log too, which <b>Copy log</b> under Open desktops below copies), then choose <b>Trust the
+            certificate</b>. The question also says whom the certificate says it was issued to and by, and when it is
+            valid: its own word, which nothing has checked, unless its chain leads to an authority this computer trusts
+            (another machine's certificate then shows that machine's name) and the TLS library didn't refuse it for a
+            reason of its own (a limit set on the authority, say). An issuer you wouldn't expect there (one
+            that inspects your network's connections, say) is worth asking about before you trust it, but the one you
+            would expect proves nothing: anyone can make a certificate that names it. Only the fingerprint, checked some
+            other way, does. A desktop behind an SSH host remembers its certificate on first use without asking, since
+            the way there runs inside SSH. When a remembered certificate differs later, the plugin stops before signing
+            in, so nothing of your sign-in has gone to that server; only a certificate an authority vouched for is
+            replaced without a question, by another it vouches for too. Reinstalling the machine or renewing its
+            certificate changes it: then choose <b>Trust the new certificate</b>. If neither happened, something else
+            is answering at that address. A GNOME desktop only ever accepts the certificate the plugin made for it; a
             different one there means another program listens on its port. Remembered certificates are listed above.`,
     },
     {
@@ -96,15 +110,21 @@ export const TROUBLESHOOTING: HelpEntry[] = [
         body: `Sound and microphone changes apply on the next connection. xrdp needs <code>pipewire-module-xrdp</code> or
             <code>pulseaudio-module-xrdp</code>. The microphone needs the system's permission here (macOS: System Settings ›
             Privacy &amp; Security › Microphone, then restart Tabby). On GNOME, apps record from "Remoteaudio Source"; on
-            Windows, the machine must allow audio recording redirection.`,
+            Windows, the machine must allow audio recording redirection. A desktop whose microphone was stopped (<b>Stop</b>
+            in the microphone's menu in Tabby's header, or <b>Send the microphone</b> unchecked in the desktop's menu) gets
+            none, its reconnects included, until <b>Send the microphone</b> is checked again in its menu or that Tabby window is closed.`,
     },
     {
         id: 'nested-ssh',
         title: 'I typed ssh to another machine in a terminal',
         body: `In an SSH tab (or a split pane) where you typed <code>ssh</code> on to another machine, <b>Desktop</b> opens that
-            machine's desktop, going through the first one, and <code>desk</code> works there too. The first machine has to
-            log in to the other by itself for this: with a key there, or agent forwarding, as <code>ssh -o BatchMode=yes</code>
-            would. Tabby's <b>Reconnect</b> belongs to the tab: it reconnects the first machine and ends the ssh typed in it.
+            machine's desktop, going through the first one, and <code>desk</code> works there too. Desktop asks which desktop
+            you mean, since which <code>ssh</code> runs there is the first machine's to say; pick the other machine's
+            "from now on" to have it open at once the next times. Desktops you set up behind a host open in a tab connected
+            to that host, not through another one.
+            The first machine has to log in to the other by itself for this: with a key there, or agent forwarding, as
+            <code>ssh -o BatchMode=yes</code> would. Tabby's <b>Reconnect</b> belongs to the tab: it reconnects the first
+            machine and ends the ssh typed in it.
             To have both desktops side by side, open the first machine's desktop in one pane, and ssh on in the other.`,
     },
     {
@@ -131,13 +151,15 @@ export const esc = (s: unknown): string => String(s ?? '').replace(/[&<>"']/g, c
 
 export function hotkeyLabel (binding: unknown): string | null {
     const first = Array.isArray(binding) ? binding[0] : null
-    const strokes: string[] = Array.isArray(first) ? first : typeof first === 'string' ? [first] : []
+    // Text only: the config may hold anything, and this runs for the settings page and the first-connect tip.
+    const strokes = (Array.isArray(first) ? first : [first]).filter((s): s is string => typeof s === 'string')
     if (!strokes.length) {
         return null
     }
     const mac = process.platform === 'darwin'
-    const MAC: Record<string, string> = { Shift: '⇧', Alt: '⌥', Ctrl: '⌃', Meta: '⌘', Cmd: '⌘' }
-    return strokes.map(s => s.split('-').map(k => mac ? MAC[k] ?? k : k).join(mac ? '' : '+')).join(', ')
+    // A Map, not an object literal: a part named 'constructor' or 'toString' would find what objects inherit.
+    const MAC = new Map([['Shift', '⇧'], ['Alt', '⌥'], ['Ctrl', '⌃'], ['Meta', '⌘'], ['Cmd', '⌘']])
+    return strokes.map(s => s.split('-').map(k => mac ? MAC.get(k) ?? k : k).join(mac ? '' : '+')).join(', ')
 }
 
 const TIP_STYLE = `

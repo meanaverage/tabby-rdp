@@ -1,0 +1,13 @@
+# Proposes updates to the actions the workflows use, as pull requests that change each pinned commit and the version
+# in its comment together (CONTRIBUTING.md, "Actions"). They go through review and CI like any other change; a new
+# major version comes in a pull request of its own.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ['*']
+        update-types: [minor, patch]

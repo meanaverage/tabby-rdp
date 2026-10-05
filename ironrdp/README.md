@@ -6,7 +6,14 @@ Windows, but not to GNOME Remote Desktop, and its web client has no sound or mic
 fixes among them are meant for upstream, and are submitted there one by one.
 
 `vendor/` is built from IronRDP at [`BASE_COMMIT`](BASE_COMMIT) with the patches in [`patches/`](patches) applied in
-order, by `npm run build:ironrdp` ([`scripts/build-ironrdp.sh`](../scripts/build-ironrdp.sh)).
+order, by `npm run build:ironrdp` ([`scripts/build-ironrdp.sh`](../scripts/build-ironrdp.sh)). `BASE_COMMIT` has to be
+one of IronRDP's own commits, in the history of its `master`: GitHub serves a commit from any fork of IronRDP through
+IronRDP's address too, so the build checks that before it uses one. The build also writes `vendor/SHA256SUMS`: the
+hashes of the base commit, each patch and each file it built, with how and where it was built in comments. The unit
+tests check `vendor/` and the series against it on every change, hidden files included; CI rebuilds `vendor/` and
+compares every file either side has, byte for byte, when the series, the build or `vendor/` change, and before a
+release is staged ([`ironrdp.yml`](../.github/workflows/ironrdp.yml); [below](#reproducing-vendor)). The checks are in
+[`scripts/check-vendor.mjs`](../scripts/check-vendor.mjs).
 
 The WebAssembly ships as its own file, `vendor/ironrdp_web_bg.wasm`. Vite's library build inlines it into
 `iron-remote-desktop-rdp.js` as a ~7 MB base64 data URL, which supply-chain scanners flag as obfuscated code, so the
@@ -36,8 +43,13 @@ the file next to it. The plugin reads the file itself and passes the bytes to `i
 | 16 | **fix(svc): send chunked messages without CHANNEL_FLAG_SHOW_PROTOCOL** | Static-channel messages over one chunk (1600 bytes) were flagged `SHOW_PROTOCOL`, which asks the receiver to hand the channel header to the application; Windows' drive redirector doesn't expect that and dropped the channel on the first chunked read response. mstsc sets the flag only for channels opened with `CHANNEL_OPTION_SHOW_PROTOCOL`; chunks now carry only the flags the message asks for. | Not submitted yet |
 | 17 | **perf(web): read H.264 regions that are far apart one by one** | The decoder read a frame's regions back as their bounding box in one call; two small regions in opposite corners made that the whole picture (33 MB for a 4K frame, for eight bytes). When the box holds more than twice what the regions do, each is read on its own, straight into place. | Not submitted yet: builds on patches 8 and 14 |
 
-Each patch carries its own tests where IronRDP has a place for them (`ironrdp-testsuite-core`, the web component's
-vitest suite).
+Each patch carries its own tests where IronRDP has a place for them (`ironrdp-testsuite-core`, the patched crate, the
+web packages' vitest suites), and CI runs them: the web component's on every change (`ci.yml`), the Rust crates' and
+the RDP package's when the series changes and before a release (`ironrdp.yml`). Left out there, each by its exact name:
+one of IronRDP's own tests (`rdpdr::filesystem_drive_announce_encodes_unicode_data_and_valid_dos_name`), which expects
+drive names in UTF-16, which patch 15 changes to ANSI on purpose; and the 19 of IronRDP's
+`ironrdp-web` clipboard tests that call into JavaScript, which only a browser has. The module's other clipboard tests
+run, and so does any a patch adds, so a patch's test that needs a browser fails there until it is added to that list.
 
 ## Working on them
 
@@ -52,7 +64,8 @@ and export it again:
 cd .ironrdp
 git checkout -b work "$(cat ../ironrdp/BASE_COMMIT)"
 git am ../ironrdp/patches/*.patch
-# ...edit, test (cargo test -p ironrdp-testsuite-core; npm test in web-client/iron-remote-desktop), commit...
+# ...edit, test (as CI does: cargo test --lib --tests -p ironrdp-testsuite-core -p <each crate you change>;
+#    npm test in web-client/iron-remote-desktop, and in web-client/iron-remote-desktop-rdp after a build), commit...
 rm ../ironrdp/patches/*.patch
 git format-patch --no-signature --zero-commit -o ../ironrdp/patches "$(cat ../ironrdp/BASE_COMMIT)"..work
 cd .. && npm run build:ironrdp
@@ -63,5 +76,60 @@ Moving to a newer IronRDP: rebase that branch onto the new commit, drop the patc
 
 The build pins IronRDP's Rust toolchain and remaps local paths, so no paths from the build machine end up in the
 WebAssembly.
+
+## Reproducing vendor/
+
+The same base commit and patches build to the same files, byte for byte, wherever the checkout is, given the same
+tools and **the same kind of machine**. The build fixes the tools it can:
+
+- Rust: the toolchain IronRDP's `rust-toolchain.toml` names, whatever `RUSTUP_TOOLCHAIN` says, and IronRDP's crates as
+  its `Cargo.lock` has them (`--locked`).
+- wasm-pack 0.15.0, installed with its own lock file when the one on PATH is another version.
+- wasm-bindgen at the version IronRDP's `Cargo.lock` names, built with its own lock file into the IronRDP checkout's
+  `target/tools`, where wasm-pack takes it from; a marker there (`wasm-bindgen.locked`) says it was built that way, and
+  one of the right version without it is built again. (Left to itself, wasm-pack downloads a prebuilt one, unchecked,
+  or on an Apple Silicon Mac, where it has none, builds it with cargo from whatever releases of its dependencies are
+  newest that day.)
+- binaryen's `wasm-opt`, version_117 (wasm-pack 0.15.0's): on an Apple Silicon Mac, the release's `bin/wasm-opt` and
+  `lib/libbinaryen.dylib` are downloaded into `target/tools` too, and checked against their SHA-256 before they run.
+  They are all that is kept of the release, in a folder of their own that is held to nothing else being in it (also
+  when an earlier run left it), since its `bin/` goes ahead on PATH. (wasm-pack would download them without checking.)
+- The web packages' dependencies, as their lock files have them (`npm ci`).
+
+Node.js is not among them: the bundles come out the same with Node.js 20, 22 and 26 (checked with 20.18.0, 22.22.2
+and 26.8.2), so CI builds with Node.js 22. Its version is in the comments of `vendor/SHA256SUMS`, which no check reads.
+
+Cargo mixes the build machine's platform into what it compiles, so a Linux build of these sources is not the same bytes
+as a Mac's. Rebuilt on a Mac from a fresh checkout and an empty target directory, `vendor/` came out identical; with
+nothing changed but the platform rustc reported to cargo (aarch64-apple-darwin, made to say x86_64-unknown-linux-gnu),
+`ironrdp_web_bg.wasm` and the JavaScript bundle around it came out different. So `vendor/` is built on an Apple Silicon
+Mac, and CI rebuilds it on one (`macos-latest`). The build says so when it runs anywhere else.
+
+To confirm a build:
+
+- On your Mac: `npm run build:ironrdp` from a clean checkout, then `node scripts/check-vendor.mjs rebuilt`, which
+  compares `vendor/` with the commit as CI does. (`git status vendor/` can show `vendor/SHA256SUMS` changed for its
+  comments alone: they name the Node.js and Rust that built it.)
+- On a clean machine: **Actions › IronRDP › Run workflow** on the branch. The run's summary lists each file's
+  committed and rebuilt SHA-256.
+
+When CI's rebuild differs, the run keeps what it built (`gh run download <run-id> -n vendor-rebuilt`). Compare it with
+yours (`cmp`; `git diff --no-index` for the JavaScript); the comments in each `SHA256SUMS` say what built it. Find what
+made the difference, and if it is the build rather than the sources (a tool at another version, say), pin it in the
+build. Then commit only a build that a maintainer's Mac and CI both make. Never commit CI's `vendor-rebuilt` for a
+difference nobody has explained: that is the build CI would vouch for from then on.
+
+## Known advisories
+
+- **rsa 0.10.0-rc.18**, [RUSTSEC-2023-0071](https://rustsec.org/advisories/RUSTSEC-2023-0071) (the Marvin attack):
+  its RSA private-key operations take time that depends on their input, so someone who can time many of them on
+  inputs of their choosing can recover the key. No fixed release exists. The WebAssembly links it through sspi, picky
+  and winscard, for CredSSP's smart-card and PKU2U sign-in. tabby-rdp is not exposed: it never holds an RSA private
+  key. The web client signs in with a user name and password only (`Credentials::UsernamePassword` is the only kind
+  `ironrdp-web` builds), so the code that would use one never runs. CredSSP binds the sign-in to the server's public key
+  with the NTLM or Kerberos session key, not with RSA. RDP licensing uses IronRDP's own public-key code (num-bigint),
+  not this crate. Rebuild `vendor/` once IronRDP moves to a fixed release. (`cargo audit` in `.ironrdp/` lists the
+  advisories that apply to the lock file; `cargo tree -p ironrdp-web --target wasm32-unknown-unknown -i rsa` shows where
+  the crate comes from.)
 
 [MS-RDPEA]: https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-rdpea/

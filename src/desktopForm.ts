@@ -1,12 +1,15 @@
 import { SavedAccount, signInName } from './accounts'
 import { newAccountOption, NewAccountInput } from './accountForm'
-import { ExtraDesktopConfig } from './desktops'
+import { CLIPBOARD_LABELS, ClipboardMode, ownClipboard } from './clipboard'
+import { configText, ExtraDesktopConfig, xrdpFromHost } from './desktops'
 import { parseGateway } from './gateway'
+import { configNumber } from './osd'
 import { wakeFromText } from './wake'
 
 /** host:port, [v6]:port, or a bare host (RDP's 3389); null if it doesn't look like an address. */
 export function parseAddress (text: string): { host: string, port: number } | null {
-    const m = /^\[([^\]]+)\](?::(\d+))?$|^([^:\s]+)(?::(\d+))?$/.exec(text.trim())
+    // No '#' in a host: session and trust keys are split on it (see keyParts).
+    const m = /^\[([^\]#]+)\](?::(\d+))?$|^([^:\s#]+)(?::(\d+))?$/.exec(text.trim())
     const host = m?.[1] ?? m?.[3]
     const port = Number(m?.[2] ?? m?.[4] ?? 3389)
     return host && Number.isInteger(port) && port >= 1 && port <= 65535 ? { host, port } : null
@@ -19,7 +22,7 @@ export function formatAddress (host: string, port: number): string {
 
 /** An entry's `wake` as the form's field shows it: the VM's name, or the MAC address. */
 function wakeTextOf (entry: ExtraDesktopConfig): string {
-    return entry.wake?.vm ?? entry.wake?.mac ?? ''
+    return configText(entry.wake?.vm) || configText(entry.wake?.mac)
 }
 
 export interface DesktopFormOptions {
@@ -39,6 +42,8 @@ export interface DesktopFormOptions {
     hosts?: string[]
     /** Refuses an entry with a message (e.g. the address is taken), or null to accept it. */
     check?: (entry: ExtraDesktopConfig) => string | null
+    /** The clipboard setting, which a desktop without its own follows: named in that choice. */
+    clipboard: ClipboardMode
 }
 
 /**
@@ -70,6 +75,7 @@ export function askDesktop (pane: HTMLElement, options: DesktopFormOptions): Pro
                 <input class="form-control" name="gateway" placeholder="RD Gateway (optional), as seen from the host, e.g. rdgw.example.com" title="A Remote Desktop Gateway to reach the desktop through (HTTPS, port 443 unless given); the address above is then as the gateway sees it" spellcheck="false">
                 <select class="form-control" name="gatewayAccount" title="A gateway that takes another account than the desktop: a saved account for it"></select>
                 <input class="form-control" name="wake" placeholder="Start it when off (optional): libvirt VM name, or MAC address" title="A libvirt VM on the host, started with virsh; or a MAC address to wake over the network from the host" spellcheck="false">
+                <select class="form-control" name="clipboard" title="Which ways text, pictures and files copied on either side go between this computer and the desktop. Applies on the next connection"></select>
                 <div class="trd-signin-buttons">
                     <button type="button" class="btn btn-secondary" name="cancel">Cancel</button>
                     <button type="submit" class="btn btn-primary"></button>
@@ -82,24 +88,36 @@ export function askDesktop (pane: HTMLElement, options: DesktopFormOptions): Pro
     form.querySelector<HTMLElement>('button[type=submit]')!.textContent = options.action
     const error = form.querySelector('.trd-signin-error')!
     const initial = options.entry
-    field('name').value = initial.name ?? ''
+    // Each field as text whatever the entry holds (see configText): a field makes text of what it is given, and a value
+    // that can't be made text (a hand edit's, config sync's) would keep the form from opening, and the entry from being
+    // put right here.
+    field('name').value = configText(initial.name)
     const via = field('via')
-    via.value = initial.via ?? ''
+    via.value = configText(initial.via)
     via.hidden = !options.hosts
     form.querySelector('datalist')!.append(...(options.hosts ?? []).map(h => new Option(h)))
-    field('address').value = formatAddress(initial.host ?? '127.0.0.1', Number(initial.port ?? 3389))
+    field('address').value = formatAddress(configText(initial.host ?? '127.0.0.1'), configNumber(initial.port ?? 3389))
     field<HTMLSelectElement>('kind').value = initial.kind === 'gnome' || initial.kind === 'xrdp' ? initial.kind : 'windows'
-    field('username').value = initial.username ?? ''
-    field('domain').value = initial.domain ?? ''
+    // A VM saved from the host's list is xrdp on the host's word (see xrdpFromHost), which is a choice of its own here:
+    // kept as long as it is chosen, so that the desktop still asks before signing in without NLA. Any kind picked is
+    // the user's, xrdp included.
+    if (xrdpFromHost(initial)) {
+        const kind = field<HTMLSelectElement>('kind')
+        kind.prepend(new Option(`xrdp, as ${configText(initial.via) || 'the host'} reported (asks before signing in without NLA)`, ''))
+        kind.value = ''
+    }
+    field('username').value = configText(initial.username)
+    field('domain').value = configText(initial.domain)
     field('wake').value = wakeTextOf(initial)
     // A saved account in place of a user name and domain of its own. Without any saved, the choice isn't shown.
     const account = field<HTMLSelectElement>('account')
     const accounts = options.accounts ?? []
     account.append(new Option('Ask for the account when connecting', ''), ...accounts.map(a => new Option(`Sign in with ${a.name} (${signInName(a)})`, a.id)))
-    if (initial.account && !accounts.some(a => a.id === initial.account)) {
-        account.append(new Option('(a saved account that no longer exists)', initial.account))
+    const initialAccount = configText(initial.account)
+    if (initialAccount && !accounts.some(a => a.id === initialAccount)) {
+        account.append(new Option('(a saved account that no longer exists)', initialAccount))
     }
-    account.value = initial.account ?? ''
+    account.value = initialAccount
     const ownAccount = () => {
         field('username').hidden = field('domain').hidden = !!account.value && account.value !== '__new__'
     }
@@ -113,17 +131,24 @@ export function askDesktop (pane: HTMLElement, options: DesktopFormOptions): Pro
     // The gateway's own account: offered once there is a gateway and a saved account to choose.
     const gateway = field('gateway')
     const gatewayAccount = field<HTMLSelectElement>('gatewayAccount')
-    gateway.value = initial.gateway ?? ''
+    gateway.value = configText(initial.gateway)
     gatewayAccount.append(new Option('Gateway account: the same as the desktop\'s', ''), ...accounts.map(a => new Option(`Gateway account: ${a.name} (${signInName(a)})`, a.id)))
-    if (initial.gatewayAccount && !accounts.some(a => a.id === initial.gatewayAccount)) {
-        gatewayAccount.append(new Option('(a saved account that no longer exists)', initial.gatewayAccount))
+    const initialGatewayAccount = configText(initial.gatewayAccount)
+    if (initialGatewayAccount && !accounts.some(a => a.id === initialGatewayAccount)) {
+        gatewayAccount.append(new Option('(a saved account that no longer exists)', initialGatewayAccount))
     }
-    gatewayAccount.value = initial.gatewayAccount ?? ''
+    gatewayAccount.value = initialGatewayAccount
     const gatewayChanged = () => {
         gatewayAccount.hidden = !gateway.value.trim() || gatewayAccount.options.length < 2
     }
     gateway.addEventListener('input', gatewayChanged)
     gatewayChanged()
+    // Its own clipboard sharing, or the setting's (named, as it is now).
+    const clipboard = field<HTMLSelectElement>('clipboard')
+    const lower = (mode: ClipboardMode) => CLIPBOARD_LABELS[mode].toLowerCase()
+    clipboard.append(new Option(`Clipboard: as in Settings (${lower(options.clipboard)})`, ''),
+        ...(Object.keys(CLIPBOARD_LABELS) as ClipboardMode[]).map(mode => new Option(`Clipboard: ${lower(mode)}`, mode)))
+    clipboard.value = ownClipboard(initial.clipboard) ?? ''
 
     if (getComputedStyle(pane).position === 'static') {
         pane.style.position = 'relative'
@@ -180,6 +205,8 @@ export function askDesktop (pane: HTMLElement, options: DesktopFormOptions): Pro
             const username = field('username').value.trim()
             const domain = field('domain').value.trim()
             const kind = field<HTMLSelectElement>('kind').value
+            // '': the kind the host reported, still its word (see above).
+            const picked = kind !== ''
             const wakeText = field('wake').value.trim()
             // An unchanged wake keeps what the field doesn't show (a Wake-on-LAN broadcast address and port).
             const wake = wakeText && wakeText === wakeTextOf(initial) ? initial.wake : wakeFromText(wakeText)
@@ -190,18 +217,27 @@ export function askDesktop (pane: HTMLElement, options: DesktopFormOptions): Pro
                 name,
                 host: address.host,
                 port: address.port,
-                kind: kind === 'gnome' || kind === 'xrdp' ? kind : 'windows',
+                kind: !picked ? initial.kind : kind === 'gnome' || kind === 'xrdp' ? kind : 'windows',
                 username: username || undefined,
                 domain: domain || undefined,
                 account: account.value && account.value !== '__new__' ? account.value : undefined,
                 wake,
                 gateway: gatewayText || undefined,
                 gatewayAccount: gatewayText && gatewayAccount.value || undefined,
+                clipboard: clipboard.value || undefined,
             }
-            for (const key of ['username', 'domain', 'account', 'wake', 'gateway', 'gatewayAccount'] as const) {
+            for (const key of ['username', 'domain', 'account', 'wake', 'gateway', 'gatewayAccount', 'clipboard'] as const) {
                 if (entry[key] === undefined) {
                     delete entry[key]
                 }
+            }
+            // A kind left as the host reported it stays marked so; one picked is the user's, and is marked so only where
+            // the entry would otherwise be taken for a VM saved before the mark existed (see xrdpFromHost).
+            delete entry.kindFromHost
+            if (!picked) {
+                entry.kindFromHost = true
+            } else if (xrdpFromHost(entry)) {
+                entry.kindFromHost = false
             }
             const refused = options.check?.(entry)
             if (refused) {

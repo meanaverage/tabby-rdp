@@ -315,6 +315,11 @@ export interface TestContext {
     remote: (pane: string, command: string, stdin?: string) => Promise<string>
     /** Changes plugin settings for the suite; the previous values come back at the end. */
     settings: (change: Partial<DesktopSettings>) => Promise<void>
+    /**
+     * Before typing `desk` in `pane`: the plugin answers it only with the key the host's setup gave it, so this opens
+     * the pane's desktop once (as a user would) and shows the console again. Needs `desk` on.
+     */
+    deskReady: (pane: string) => Promise<void>
     /** Clicks at page coordinates (`clicks` times). */
     mouse: (x: number, y: number, clicks?: number) => Promise<void>
     /** Clicks the remote display at (dx, dy) from its top-left corner (default: its center). */
@@ -418,6 +423,11 @@ export async function suite (name: string, body: (t: TestContext) => Promise<voi
             const before = await ev(`return JSON.stringify(RD.desktop.settings())`)
             t.onCleanup(() => ev(`H.inZone(() => RD.desktop.updateSettings(${before}))`))
             await ev(`H.inZone(() => RD.desktop.updateSettings(${JSON.stringify(change)}))`)
+        },
+        async deskReady (pane: string) {
+            await ev(`await H.inZone(() => RD.desktop.showDesktop(${pane}))`)
+            t.check('the desktop opened once, so desk is known there', !!(await t.waitFor(`return RD.desktop.isConnected(${pane}) || null`, 40, 100)))
+            await ev(`H.inZone(() => RD.desktop.showConsole(${pane}))`)
         },
         // ---- input (IronRDP sends scancodes: modifiers are real key presses) ----
         async mouse (x: number, y: number, clicks = 1) {

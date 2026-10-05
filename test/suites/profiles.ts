@@ -1,10 +1,11 @@
 // "Remote desktop (RDP)" profiles, on a Linux desktop host (TRD_TEST_HOST), using its GNOME Remote Desktop with the
 // plugin's generated account as the RDP server (no Windows needed):
 // - a direct one: its own tab, a plain TCP connection from here to TRD_TEST_HOST:3389 (skipped if that port can't be
-//   reached from here, e.g. firewalled to the loopback as docs/architecture.md suggests);
+//   reached from here, e.g. firewalled to the loopback as docs/architecture.md suggests); its certificate, GNOME's own
+//   and self-signed, asked about before anything goes to it, and remembered as trusted by you;
 // - one going through a saved SSH profile: it opens that profile's SSH tab and shows the desktop over it;
 // - .rdp files: the parser, and importing one as a profile.
-import { suite, type CanvasInfo } from '../lib/harness.js'
+import { suite, type CanvasInfo, type StatusInfo } from '../lib/harness.js'
 
 const DIRECT = 'Direct (test)'
 const VIA = 'Through SSH (test)'
@@ -84,14 +85,24 @@ await suite('profiles', async t => {
         t.skip('a direct remote desktop tab', `${host}:3389 can't be reached from this machine`)
     } else {
         const direct = { type: 'rdp', name: DIRECT, options: { host, port: 3389, kind: 'gnome', username: 'tabby', via: '' } }
+        // Its certificate never seen before (one remembered by an earlier run is put back at the end): the question below.
+        await ev(`H.inZone(() => { const r = H.config.store.remoteDesktop; r.trustedCertificates = (r.trustedCertificates ?? []).filter(e => e?.desktop !== ${JSON.stringify(directKey)}); H.config.save() })`)
         const tabs = await ev<number>('return RD.app.tabs.length')
         check('the profile opens a tab', await ev(`H.rdp = await H.openProfile(${JSON.stringify(direct)}); return !!H.rdp`))
         check('it is a remote desktop tab (no terminal)', await ev('return RD.desktopPaneOf(H.rdp) === H.rdp && !H.rdp.frontend && !H.rdp.element.nativeElement.querySelector(".xterm")'))
         const form = await t.waitFor<{ user: string, title: string }>('return H.signin(H.rdp)', 20)
         check('sign-in form: the profile\'s name, its user name filled in', form?.title === `Sign in to ${DIRECT}` && form.user === 'tabby', form)
         await ev(`H.submit(H.rdp, ${JSON.stringify(password)})`)
+        // Connected to directly, with a certificate no authority vouches for (GNOME's own, self-signed): asked about first.
+        const question = await t.waitFor<StatusInfo>(`const s = H.status(H.rdp); return s && /can't verify/.test(s.text) ? s : null`, 40)
+        check('its certificate, never seen and self-signed: asked about first, with why, its address and its fingerprint, Cancel or trust',
+            !!question && /self-signed/.test(question.text) && question.text.toLowerCase().includes(`${host}:3389`.toLowerCase()) && /([0-9A-F]{2}:){15}[0-9A-F]{2}/.test(question.text) &&
+            question.buttons.join() === 'Trust the certificate,Cancel', question ?? await ev('return RD.desktop.logOf(H.rdp).slice(-4)'))
+        check('... before anything went to it', !(await ev<boolean>('return RD.desktop.logOf(H.rdp).some(l => /RDCleanPath relay up/.test(l))')))
+        check('... Cancel is what Enter picks', await ev<boolean>(`return document.activeElement?.textContent === 'Cancel'`))
+        await ev(`H.inZone(() => H.clickStatus(H.rdp, 'Trust the certificate'))`)
         check('the direct desktop connects', !!(await t.waitFor('return H.connected(H.rdp)', 40)), await ev('return RD.desktop.logOf(H.rdp).slice(-4)'))
-        check('its certificate is remembered on first use, under rdp#<address>', !!(await ev(`return (H.config.store.remoteDesktop.trustedCertificates ?? []).find(e => e?.desktop === ${JSON.stringify(directKey)})?.sha256`)))
+        check('its certificate is remembered as trusted by you, under rdp#<address>', await ev<boolean>(`const e = (H.config.store.remoteDesktop.trustedCertificates ?? []).find(e => e?.desktop === ${JSON.stringify(directKey)}); return !!e?.sha256 && e.authority === false`))
         check('connected directly, not via a host', await ev(`return RD.desktop.logOf(H.rdp).some(l => l.includes(${JSON.stringify(`Connecting to ${DIRECT}…`)}))`))
         const frame = await t.waitFor<CanvasInfo>('const c = H.canvas(H.rdp); return c?.colors > 3 ? c : null', 10)
         check('picture drawn, sized to the tab', !!frame && Math.abs(frame.w - frame.paneW) <= 2 && Math.abs(frame.h - frame.paneH) <= 2, frame)

@@ -1,5 +1,6 @@
+import { isIPv4 } from 'net'
 import { DesktopSpec, hyperVSpec } from './desktops'
-import { scanHyperV } from './hyperv'
+import { MAX_VMS, scanHyperV } from './hyperv'
 import { RemoteTarget } from './targets'
 
 /**
@@ -79,17 +80,21 @@ done
  * The host's VMs that have (or, being off, may have) a desktop: libvirt's running ones whose RDP answers, and Windows
  * ones that are off; on a Windows host, Hyper-V's. `host.windows` says the host is known to run Windows, and is set
  * when the scan finds out: such a host isn't asked for libvirt again (its shell takes a while to say it has no sh).
+ * `host.cut` says whether the list stopped at MAX_VMS (each VM is a menu item) with more there, so that the menu can
+ * say only so many are listed.
  */
-export async function scanVMs (target: RemoteTarget, host: { windows?: boolean } = {}): Promise<FoundVM[]> {
+export async function scanVMs (target: RemoteTarget, host: { windows?: boolean, cut?: boolean } = {}): Promise<FoundVM[]> {
     const out = host.windows ? '' : await target.exec('sh -s', SCAN_SCRIPT)
     // No sh answered: a Windows host (cmd.exe or PowerShell as its SSH shell), which is where Hyper-V is. Asked only
     // then, so that a Linux host costs nothing extra.
     if (!/^TRD_SH$/m.test(out)) {
-        const vms = await scanHyperV(target)
+        const vms = await scanHyperV(target, host)
         host.windows = true
         return vms.map(vm => ({ hyperv: vm.id, name: vm.name, state: vm.state, windows: true, address: '', rdp: false }))
     }
     const found: FoundVM[] = []
+    // Names seen so far: looked up, not searched for, so that the time taken grows with the lines, not their square.
+    const names = new Set<string>()
     for (const line of out.split('\n')) {
         const m = /^TRD_VM ([^|]+)\|([^|]*)\|([^|]*)\|([^|]*)\|(\d*)\s*$/.exec(line.trim())
         if (!m) {
@@ -100,10 +105,20 @@ export async function scanVMs (target: RemoteTarget, host: { windows?: boolean }
         // Windows: RDP answering, or off (started when opened). Others: only xrdp (see XRDP_LIKE).
         const rdp = windows ? protocol !== '' : protocol === XRDP_LIKE
         const vm: FoundVM = { name, state: state === 'running' ? 'running' : 'off', windows, address, rdp }
-        if (vm.address && (vm.rdp || vm.state === 'off' && vm.windows) && !found.some(f => f.name === vm.name)) {
+        // An IPv4 address, as the scan only ever finds: the address is part of the VM's session key, which is also the
+        // key its saved password is kept under. Anything else (`10.0.0.5:3389@gateway#gw.example`) could make that the
+        // key of a desktop configured behind this host, a password saved for its gateway included (see keyParts).
+        if (isIPv4(vm.address) && (vm.rdp || vm.state === 'off' && vm.windows) && !names.has(vm.name)) {
+            // One more than are listed: the list is cut short.
+            if (found.length === MAX_VMS) {
+                host.cut = true
+                return found
+            }
+            names.add(vm.name)
             found.push(vm)
         }
     }
+    host.cut = false
     return found
 }
 

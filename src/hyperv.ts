@@ -17,11 +17,19 @@ export interface HyperVVM {
 /** VMConnect's port on a Hyper-V host. */
 export const HYPERV_PORT = 2179
 
+/**
+ * How many VMs a host's scan lists at most (see vms.ts too). Each is a menu item, and an answer of the host's making
+ * could otherwise make thousands of them. A host can have more (a Hyper-V server can run 1,024): the first ones are
+ * listed, and the menu says that only so many are (see RemoteDesktopService.vmsCut).
+ */
+export const MAX_VMS = 256
+
 const GUID = /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i
 
 /** A VM id as Hyper-V prints it, or '' if this isn't one. */
 export function vmId (value: unknown): string {
-    const id = String(value ?? '').trim().replace(/^\{|\}$/g, '')
+    // Text only: String() of an object from the config runs its own conversions, which can throw.
+    const id = (typeof value === 'string' ? value : '').trim().replace(/^\{|\}$/g, '')
     return GUID.test(id) ? id.toLowerCase() : ''
 }
 
@@ -41,18 +49,65 @@ $ErrorActionPreference = 'SilentlyContinue'
 if (Get-Command Get-VM) { Get-VM | ForEach-Object { 'TRD_HV ' + $_.Id + '|' + $_.State + '|' + $_.Name } }
 `
 
-/** The host's Hyper-V VMs, running or not (one that is off is started when opened). Read-only. */
-export async function scanHyperV (target: RemoteTarget): Promise<HyperVVM[]> {
+/**
+ * A line of the scan's answer longer than this is none of its own: its id and state take some 50 characters, and
+ * Hyper-V keeps a VM's name to 100.
+ */
+const MAX_LINE = 1024
+
+/**
+ * A line of the scan's answer, `TRD_HV <id>|<state>|<name>` (the name may hold bars), as a VM; null for any other line.
+ * Read by where its bars are, not with a pattern whose parts can take the same characters: a long line of the host's
+ * making could make that cost the square of its length.
+ */
+function scannedVM (raw: string): HyperVVM | null {
+    const line = raw.length > MAX_LINE ? '' : raw.trim()
+    const first = line.indexOf('|')
+    const second = first < 0 ? -1 : line.indexOf('|', first + 1)
+    if (!line.startsWith('TRD_HV ') || second < 0) {
+        return null
+    }
+    const id = vmId(line.slice('TRD_HV '.length, first))
+    const name = line.slice(second + 1)
+    // A name on one line, as PowerShell prints it.
+    if (!id || !name || /[\r\u2028\u2029]/.test(name)) {
+        return null
+    }
+    return { id, name, state: line.slice(first + 1, second) === 'Running' ? 'running' : 'off' }
+}
+
+/**
+ * The host's Hyper-V VMs, running or not (one that is off is started when opened), MAX_VMS at most; `listed.cut` says
+ * whether the host has more. Read-only.
+ */
+export async function scanHyperV (target: RemoteTarget, listed: { cut?: boolean } = {}): Promise<HyperVVM[]> {
     const out = await powershell(target, SCAN)
     const found: HyperVVM[] = []
+    listed.cut = false
+    // Ids seen so far: looked up, not searched for, so that the time taken grows with the lines, not their square.
+    const ids = new Set<string>()
     for (const line of out.split('\n')) {
-        const m = /^TRD_HV ([^|]+)\|([^|]*)\|(.+?)\s*$/.exec(line.trim())
-        const id = vmId(m?.[1])
-        if (m && id && !found.some(f => f.id === id)) {
-            found.push({ id, name: m[3], state: m[2] === 'Running' ? 'running' : 'off' })
+        const vm = scannedVM(line)
+        if (vm && !ids.has(vm.id)) {
+            // One more than are listed: the list is cut short.
+            if (found.length === MAX_VMS) {
+                listed.cut = true
+                break
+            }
+            ids.add(vm.id)
+            found.push(vm)
         }
     }
     return found
+}
+
+/**
+ * What follows `prefix` on each line of the host's answer that starts with it, trimmed, and MAX_LINE characters of it
+ * at most (the host's reason for an error is shown as it is). Line by line: a pattern run over the whole answer can
+ * match across its lines, which a long answer of the host's making can make cost the square of its length.
+ */
+function linesAfter (out: string, prefix: string): string[] {
+    return out.split('\n').map(line => line.trim()).filter(line => line.startsWith(prefix)).map(line => line.slice(prefix.length).trim().slice(0, MAX_LINE))
 }
 
 // TRD_HV_STATE <state>|<enhanced session mode state>, or TRD_HV_ERR <why>. The enhanced state is
@@ -69,9 +124,9 @@ try {
 /** How a VM is now: running or not, and whether it takes an enhanced session. Throws with the host's reason when it can't say. */
 export async function hyperVState (target: RemoteTarget, id: string): Promise<{ running: boolean, enhanced: boolean }> {
     const out = await powershell(target, STATE.replace('@@ID@@', vmId(id)))
-    const state = /^TRD_HV_STATE ([^|]*)\|(\d*)\s*$/m.exec(out)
+    const state = linesAfter(out, 'TRD_HV_STATE ').map(line => /^([^|]*)\|(\d*)$/.exec(line)).find(Boolean)
     if (!state) {
-        throw new Error(/^TRD_HV_ERR (.*)$/m.exec(out)?.[1].trim() || 'the host didn\'t answer about the VM (is PowerShell\'s Hyper-V module there, and may this account use it?)')
+        throw new Error(linesAfter(out, 'TRD_HV_ERR ')[0] || 'the host didn\'t answer about the VM (is PowerShell\'s Hyper-V module there, and may this account use it?)')
     }
     return { running: state[1] === 'Running', enhanced: state[2] === '2' }
 }
@@ -88,9 +143,9 @@ try {
 /** Starts (or resumes) the VM. Resolves with what was done; throws with the host's reason when it couldn't. */
 export async function startHyperV (target: RemoteTarget, id: string): Promise<string> {
     const out = await powershell(target, START.replace('@@ID@@', vmId(id)))
-    const ok = /^TRD_HV_OK (.*)$/m.exec(out)
-    if (!ok) {
-        throw new Error(/^TRD_HV_ERR (.*)$/m.exec(out)?.[1].trim() || 'the host didn\'t answer')
+    const ok = linesAfter(out, 'TRD_HV_OK ')
+    if (!ok.length) {
+        throw new Error(linesAfter(out, 'TRD_HV_ERR ')[0] || 'the host didn\'t answer')
     }
-    return ok[1].trim()
+    return ok[0]
 }

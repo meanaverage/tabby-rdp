@@ -51,6 +51,22 @@ function writtenKeys (): Map<string, Set<string>> {
     return written
 }
 
+/** The keys of DesktopSettings (src/desktop.service.ts): what the settings page and the menus change, through updateSettings. */
+function settingsKeys (): Set<string> {
+    const text = read('desktop.service.ts')
+    const start = text.indexOf('export interface DesktopSettings {')
+    assert.ok(start >= 0, 'DesktopSettings is in src/desktop.service.ts')
+    const body = text.slice(start, text.indexOf('\n}', start))
+    return new Set([...body.matchAll(/^\s*(\w+)\??:/gm)].map(m => m[1]))
+}
+
+test('every setting the settings page and the menus change is in the defaults: updateSettings writes them all', () => {
+    const keys = settingsKeys()
+    assert.ok(keys.has('clipboard') && keys.has('sound') && keys.has('osd'), 'reads the settings')
+    const defaults = defaultKeys()
+    assert.deepEqual([...keys].filter(key => !defaults.has(key)), [])
+})
+
 test('every remoteDesktop setting the plugin writes is in its defaults, so Tabby saves it', () => {
     const defaults = defaultKeys()
     const missing = [...writtenKeys()].filter(([key]) => !defaults.has(key)).map(([key, files]) => `${key} (${[...files].join(', ')})`)

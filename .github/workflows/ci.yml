@@ -7,13 +7,18 @@ on:
 permissions:
   contents: read
 
+# Actions are pinned to a commit, their tag in the comment: a tag can be moved to other code, a commit can't
+# (CONTRIBUTING.md, "Actions").
+
 jobs:
   build:
     name: Build and package
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
           cache: npm
@@ -22,6 +27,8 @@ jobs:
       - name: Type check the tests
         run: npm run typecheck:test
       - name: Unit tests
+        # Among them: vendor/ and the IronRDP patch series are what vendor/SHA256SUMS records (test/unit/vendor.ts).
+        # ironrdp.yml rebuilds vendor/ when they change.
         run: npm run test:unit
       - name: Package contents
         run: |
@@ -31,6 +38,14 @@ jobs:
           grep -q 'vendor/ironrdp_web_bg.wasm' pack.txt
           grep -q 'remote/trd-pty.py' pack.txt
           ! grep -qE ' (src|test|testbed|docs|ironrdp)/' pack.txt
+      - name: The package holds the commit's files
+        # The check publish.yml makes before it stages a release, here on every change, so that nothing trips it
+        # first at a release: vendor/ as the commit's vendor/SHA256SUMS lists it, and every file outside dist/ as
+        # committed (scripts/check-vendor.mjs).
+        run: |
+          mkdir -p "$RUNNER_TEMP/package"
+          npm pack --ignore-scripts --pack-destination "$RUNNER_TEMP/package"
+          node scripts/check-vendor.mjs package "$RUNNER_TEMP"/package/tabby-rdp-*.tgz HEAD
       - name: No inlined assets in vendor/
         # The WebAssembly ships as its own file (scripts/build-ironrdp.sh), not as a base64 data URL in the bundle.
         run: "! grep -l ';base64,' vendor/*.js"
@@ -39,14 +54,18 @@ jobs:
     name: trd-pty
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
       - run: python3 test/unit/trd-pty.py remote/trd-pty.py
 
   ironrdp-patches:
     name: IronRDP patches apply
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
       - name: Apply the series to the base commit
         run: |
           git init -q ironrdp-src
@@ -57,7 +76,7 @@ jobs:
             echo "applying $(basename "$patch")"
             git apply --whitespace=nowarn "$patch"
           done
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
       - name: The web component's tests, patches included
@@ -70,7 +89,9 @@ jobs:
     name: No internal names
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
       # The maintainers' private host and domain names, one extended regex per line, in the repository secret
       # INTERNAL_NAMES (not in the repository, where they would be what it keeps out). Skipped without it, as for
       # pull requests from forks, which don't get secrets.

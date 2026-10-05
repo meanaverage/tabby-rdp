@@ -39,7 +39,7 @@ await suite('e2e', async t => {
         header () {
             const g = document.querySelector('app-root .trd-header')
             const toggle = g?.querySelector('.trd-header-toggle'), disconnect = g?.querySelector('.trd-header-disconnect')
-            const gear = g?.parentElement.querySelector('button.btn-tab-bar:not(.trd-header-toggle):not(.trd-header-disconnect)')
+            const gear = g?.parentElement.querySelector('button.btn-tab-bar:not(.trd-header-toggle):not(.trd-header-disconnect):not(.trd-header-mic)')
             const shown = el => !!el && getComputedStyle(el).display !== 'none' && el.getBoundingClientRect().width > 0
             return {
                 shown: shown(g), toggleTitle: toggle?.title, disconnectShown: shown(disconnect),

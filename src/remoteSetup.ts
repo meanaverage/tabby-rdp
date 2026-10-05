@@ -1,5 +1,6 @@
 import * as fs from 'fs'
 import * as path from 'path'
+import { keyUser } from './desktops'
 import { RemoteTarget } from './targets'
 import { normalizeFingerprint } from './rdcleanpath'
 
@@ -26,16 +27,22 @@ export interface RemoteDesktopEndpoint {
      * may still be on the way).
      */
     takenOver?: number
+    /** GNOME, with `desk` set up there: the key its requests carry (see openConsole). */
+    deskKey?: string
+    /** GNOME: what the setup couldn't do and the user may want to know (an rc file it couldn't change), for the log. */
+    notes?: string[]
 }
 
 
 // Runs as the SSH user; needs no root. Prints exactly one `RD_OK port=N user=U pass=P cert=SHA256`,
 // `RD_XRDP port=N user=U` (no GNOME, but xrdp), `RD_WINDOWS` (a Windows host's POSIX sh) or `RD_ERR <reason>` line;
-// with RD_OK, also an RD_XRDP line when xrdp runs besides GNOME, `RD_CLIENTS N`, the clients connected already, and
-// `RD_TAKEN_OVER <client> <seconds ago>` after a recent take-over.
+// with RD_OK, also an RD_XRDP line when xrdp runs besides GNOME, `RD_CLIENTS N`, the clients connected already,
+// `RD_TAKEN_OVER <client> <seconds ago>` after a recent take-over, `RD_DESK <key>` with 'desk' on, and an `RD_NOTE <text>`
+// for each rc file it couldn't change.
 // The RDP password is generated once per remote user and kept in a 0600 file; grd reads credentials only
 // at startup, so grd is restarted only when its configuration actually changes (that drops live sessions).
-// (grdctl takes the credentials as arguments, so they are briefly visible in the remote's process list.)
+// Secrets never go on a command line, which any user there can see in the process list, except where grdctl can't
+// read the password from its input: then it is an argument once, when the credentials are set.
 const SETUP_SCRIPT = String.raw`
 say () { printf '%s\n' "$*"; }
 fail () { say "RD_ERR $*"; exit 0; }
@@ -84,12 +91,49 @@ OLD="$HOME/.local/share/tabby-remote-desktop"
 if [ -d "$OLD" ] && [ ! -e "$D" ]; then
     mv "$OLD" "$D" || fail "could not move $OLD to $D"
 fi
-for rc in "$HOME/.bashrc" "$HOME/.zshrc"; do
-    if [ -f "$rc" ] && grep -qF '# tabby-remote-desktop' "$rc"; then
-        sed -i.trd-bak '/# tabby-remote-desktop$/d' "$rc" && rm -f "$rc.trd-bak"
-    fi
-done
 mkdir -p "$D" && chmod 700 "$D" || fail "could not create $D"
+# The login hook ('desk'): this one line in ~/.bashrc and ~/.zshrc, added and removed exactly, so that a line of the
+# user's own that only looks like it stays.
+HOOK='[ -f "$HOME/.local/share/tabby-rdp/login.sh" ] && . "$HOME/.local/share/tabby-rdp/login.sh"  # tabby-rdp'
+# Takes the lines that are exactly $2 out of rc file $1 and changes nothing else. grep reads it byte by byte, as text
+# (LC_ALL=C, -a): otherwise a NUL byte, or a byte the host's locale can't read, has it leave lines out or print "Binary
+# file … matches" in their place. What it leaves must be the file less those lines, to the byte, and is written into
+# the file itself, so that a symbolic link to it, another name for it (a hard link), its mode and its owner all stay.
+# A file that can't be written (read-only) or doesn't add up is left as it is, and the setup says so (RD_NOTE).
+unhook () {
+    [ -f "$1" ] || return 0
+    LC_ALL=C grep -a -q -xF -- "$2" "$1" 2>/dev/null
+    case $? in 0) ;; 1) return 0 ;; *) say "RD_NOTE desk's line may be in $1, which can't be read"; return 0 ;; esac
+    uh_tmp=$(mktemp "$D/rc.XXXXXX") || { say "RD_NOTE desk's line stays in $1: no temporary file could be made in $D"; return 0; }
+    LC_ALL=C grep -a -v -xF -- "$2" "$1" > "$uh_tmp"
+    # 1: no line left, the file held only the hook. Each line taken out goes with its newline, and grep ends a last line
+    # that has none with one: so what is left is shorter by exactly that, or one byte longer than that. A step that fails
+    # counts as a mismatch (rather than ending the script, as a failed sum would).
+    if [ $? -le 1 ] && uh_was=$(wc -c < "$1") && uh_lines=$(LC_ALL=C grep -a -c -xF -- "$2" "$1") && uh_now=$(wc -c < "$uh_tmp"); then
+        uh_more=$(( $uh_now - ($uh_was - $uh_lines * (${"$"}{#2} + 1)) ))
+    else
+        uh_more=-1
+    fi
+    if [ "$uh_more" != 0 ] && [ "$uh_more" != 1 ]; then
+        say "RD_NOTE desk's line stays in $1: the rest of it didn't copy exactly"
+    elif ! cat "$uh_tmp" 2>/dev/null > "$1"; then
+        # Not opened (read-only), the file is as it was, its line in it. Otherwise writing it failed on the way (a full
+        # disk): what it is to hold stays where the user can find it.
+        if ! LC_ALL=C grep -a -q -xF -- "$2" "$1" 2>/dev/null; then
+            say "RD_NOTE writing $1 failed; what it should hold (without desk's line) is in $uh_tmp"
+            return 0
+        fi
+        say "RD_NOTE desk's line stays in $1: it can't be written (read-only?)"
+    fi
+    rm -f "$uh_tmp"
+}
+# The hook from before 0.2, as those versions wrote it, and what it sources, where the old folder is still there (it
+# couldn't be moved over): so that a copy of the line that was changed since, and stays, does nothing either.
+OLD_HOOK='[ -f "$HOME/.local/share/tabby-remote-desktop/login.sh" ] && . "$HOME/.local/share/tabby-remote-desktop/login.sh"  # tabby-remote-desktop'
+for rc in "$HOME/.bashrc" "$HOME/.zshrc"; do
+    unhook "$rc" "$OLD_HOOK"
+done
+rm -f "$OLD/login.sh"
 NEW_CERT=0
 if [ ! -s "$D/tls.key" ]; then
     openssl req -new -newkey rsa:3072 -days 3650 -nodes -x509 -subj "/CN=$(hostname)" \
@@ -102,8 +146,29 @@ CERT=$(openssl x509 -in "$D/tls.crt" -noout -fingerprint -sha256 2>/dev/null | s
 # 'desk' support (setting, off by default): interactive SSH logins start inside a shareable session (trd-pty,
 # or tmux), so 'desk' can attach this exact console to a terminal on the desktop. Rewritten on every connect;
 # opt out per login with TABBY_NO_SESSION=1. When the setting is off, the hook and helpers are removed.
+DESK_KEY=
 if [ "${"$"}{TRD_DESK:-0}" = 1 ]; then
 mkdir -p "$D/bin"
+# 'desk' sends this key with each request, and the plugin (told it below) ignores requests without it: anything shown
+# in a terminal could print the rest. Only this user can read it. Made once, like the RDP password: a key is a file of
+# this user's own (not a link), private, holding 128 bits in hex.
+desk_key () {
+    DESK_KEY=
+    [ -f "$D/desk-key" ] && [ ! -L "$D/desk-key" ] && [ -O "$D/desk-key" ] || return 1
+    DESK_KEY=$(cat "$D/desk-key")
+    case $DESK_KEY in *[!0-9a-f]*) DESK_KEY= ;; esac
+    [ ${"$"}{#DESK_KEY} = 32 ] || { DESK_KEY=; return 1; }
+    chmod 600 "$D/desk-key"
+}
+if ! desk_key; then
+    # Put in place in one step, where there is none: of two setups making one at once (two panes, or two computers),
+    # the first one's stays, and both report it.
+    T=$(mktemp "$D/desk-key.XXXXXX") && od -An -N16 -tx1 /dev/urandom | tr -d ' \n' > "$T" || fail "could not create a key for desk"
+    { [ -e "$D/desk-key" ] || [ -L "$D/desk-key" ]; } && ! desk_key && rm -f "$D/desk-key"
+    ln "$T" "$D/desk-key" 2>/dev/null || desk_key || mv -f "$T" "$D/desk-key"
+    rm -f "$T"
+    desk_key || fail "could not create a key for desk"
+fi
 cat > "$D/login.sh" <<'TRD_EOF'
 # tabby-rdp ('desk' setting): interactive SSH logins run inside a shareable session, so 'desk' in Tabby can
 # bring this console to the remote desktop. Backend ("native" trd-pty or "tmux") is in $TRD_HOME/backend.
@@ -153,7 +218,9 @@ fi
 # Which machine this is: a shared home folder puts this script on others too, and the tab may be connected to another
 # machine than the one this runs on (ssh typed in its console).
 MACHINE=$(cat /etc/machine-id 2>/dev/null || hostname)
-SEQ=$(printf '\033]7777;desk;%s;%s;%s;%s;%s;%s\007' "$(b64 "$SESSION")" "$(b64 "$SOCKET")" "$(b64 "$PWD")" "$(b64 "$KIND")" "$(b64 "$MACHINE")" "$(b64 "$(hostname)")")
+# What Tabby knows a real request by: other output can't read this.
+KEY=$(cat "$HOME/.local/share/tabby-rdp/desk-key" 2>/dev/null)
+SEQ=$(printf '\033]7777;desk;%s;%s;%s;%s;%s;%s;%s\007' "$(b64 "$SESSION")" "$(b64 "$SOCKET")" "$(b64 "$PWD")" "$(b64 "$KIND")" "$(b64 "$MACHINE")" "$(b64 "$(hostname)")" "$(b64 "$KEY")")
 if [ "$KIND" = tmux ]; then
     printf '\033Ptmux;\033%s\033\\' "$SEQ"   # tmux only lets it through as passthrough
 else
@@ -168,19 +235,18 @@ chmod 755 "$D/bin/trd-pty"
 printf '%s\n' "${"$"}{TRD_BACKEND:-native}" > "$D/backend"
 for rc in "$HOME/.bashrc" "$HOME/.zshrc"; do
     [ -f "$rc" ] || continue
-    grep -qF '# tabby-rdp' "$rc" && continue
-    # Only one line: turning desk off deletes exactly it, so on/off cycles leave the file as it was.
-    [ -z "$(tail -c1 "$rc")" ] || echo >> "$rc"
-    printf '[ -f "$HOME/.local/share/tabby-rdp/login.sh" ] && . "$HOME/.local/share/tabby-rdp/login.sh"  # tabby-rdp\n' >> "$rc"
+    LC_ALL=C grep -a -q -xF -- "$HOOK" "$rc" && continue
+    # Only one line: turning desk off deletes exactly it, so on/off cycles leave the file as it was. A line of its own:
+    # a newline first, unless the file is empty or its last byte is one (counted, as a NUL there reads as nothing).
+    { [ ! -s "$rc" ] || [ $(( $(tail -c1 "$rc" | wc -l) )) = 1 ] || echo; printf '%s\n' "$HOOK"; } 2>/dev/null >> "$rc" \
+        || say "RD_NOTE desk's line couldn't be added to $rc (read-only?): logins there don't start in a shared session"
 done
 else
     for rc in "$HOME/.bashrc" "$HOME/.zshrc"; do
-        if [ -f "$rc" ] && grep -qF '# tabby-rdp' "$rc"; then
-            sed -i.trd-bak '/# tabby-rdp$/d' "$rc" && rm -f "$rc.trd-bak"
-        fi
+        unhook "$rc" "$HOOK"
     done
     # Sessions already running keep going; new logins are plain again.
-    rm -f "$D/login.sh" "$D/tmux.conf" "$D/backend" "$D/bin/desk" "$D/bin/trd-pty"
+    rm -f "$D/login.sh" "$D/tmux.conf" "$D/backend" "$D/bin/desk" "$D/bin/trd-pty" "$D/desk-key"
 fi
 if [ ! -s "$D/rdp-password" ]; then
     ( umask 077; od -An -N18 -tx1 /dev/urandom | tr -d ' \n' > "$D/rdp-password" ) || fail "could not create credentials"
@@ -189,7 +255,11 @@ RD_USER=tabby
 RD_PASS=$(cat "$D/rdp-password")
 
 STATUS=$(grdctl --headless status --show-credentials 2>/dev/null)
-has () { printf '%s\n' "$STATUS" | grep -qxF "$(printf '\t%s' "$1")"; }
+TAB=$(printf '\t') NL='
+'
+# Whether grd's status has this line. Compared in the shell: as a command's argument, the password would show in the
+# process list on every connect.
+has () { case "$NL$STATUS$NL" in *"$NL$TAB$1$NL"*) return 0 ;; esac; return 1; }
 g () { grdctl --headless rdp "$@" >/dev/null 2>&1; }
 RESTART=0
 # grd reads the certificate at startup: a new one at the same path needs a restart too, or grd would keep serving
@@ -201,7 +271,18 @@ fi
 if ! has "View-only: no"; then g disable-view-only || fail "grdctl could not disable view-only"; RESTART=1; fi
 if ! has "Status: enabled"; then g enable || fail "grdctl could not enable RDP"; RESTART=1; fi
 if ! has "Username: $RD_USER" || ! has "Password: $RD_PASS"; then
-    g set-credentials "$RD_USER" "$RD_PASS" || fail "grdctl could not set credentials"
+    # Left off the command line, the password stays out of the process list: grdctl versions that ask for it then read
+    # it from their input. Where that didn't take, it goes as an argument. Without timeout(1) on the host, grdctl runs
+    # as it is: its input is a pipe that ends after the password, so it doesn't wait for more.
+    if command -v timeout >/dev/null 2>&1; then
+        printf '%s\n' "$RD_PASS" | timeout 10 grdctl --headless rdp set-credentials "$RD_USER" >/dev/null 2>&1
+    else
+        printf '%s\n' "$RD_PASS" | grdctl --headless rdp set-credentials "$RD_USER" >/dev/null 2>&1
+    fi
+    STATUS=$(grdctl --headless status --show-credentials 2>/dev/null)
+    if ! has "Username: $RD_USER" || ! has "Password: $RD_PASS"; then
+        g set-credentials "$RD_USER" "$RD_PASS" || fail "grdctl could not set credentials"
+    fi
     RESTART=1
 fi
 
@@ -334,6 +415,7 @@ if [ -s "$D/taken-over" ]; then
 fi
 # xrdp besides GNOME (on a port of its own; on grd's, one of them couldn't listen): offered as another desktop.
 [ -z "$XRDP_PORT" ] || [ "$XRDP_PORT" = "$PORT" ] || say "RD_XRDP port=$XRDP_PORT user=$(id -un)"
+[ -z "$DESK_KEY" ] || say "RD_DESK $DESK_KEY"
 say "RD_OK port=$PORT user=$RD_USER pass=$RD_PASS cert=$CERT"
 `
 
@@ -375,9 +457,10 @@ export async function prepareRemoteDesktop (
     // it worth asking, so a Linux host costs nothing extra.
     if (/^RD_WINDOWS$/m.test(out) || !/^RD_(OK|XRDP|ERR) /m.test(out) && await isWindows(target)) {
         // Its RDP server makes its own certificate: trusted on first use, like a desktop behind the host.
-        return { kind: 'windows', port: 3389, username: target.key.replace(/@[^@]*$/, ''), password: '', certificate: '' }
+        return { kind: 'windows', port: 3389, username: keyUser(target.key), password: '', certificate: '' }
     }
-    const err = /^RD_ERR (.*)$/m.exec(out)
+    // The host's reason, as much of it as a status line shows: the host decides how long the line is.
+    const err = /^RD_ERR (.{0,1000})/m.exec(out)
     if (err) {
         throw new Error(err[1])
     }
@@ -386,13 +469,15 @@ export async function prepareRemoteDesktop (
     if (ok) {
         const certificate = normalizeFingerprint(ok[4])
         if (!certificate) {
-            throw new Error(`Remote setup reported no usable certificate fingerprint (${ok[4]})`)
+            // What the host put there, as long as it likes: as much of it as a fingerprint takes, for a status line.
+            throw new Error(`Remote setup reported no usable certificate fingerprint (${ok[4].slice(0, 100)})`)
         }
         const clients = Number(/^RD_CLIENTS (\d+)$/m.exec(out)?.[1] ?? 0)
         const taken = /^RD_TAKEN_OVER (\S+) (\d+)$/m.exec(out)
         return {
             kind: 'gnome', port: Number(ok[1]), username: ok[2], password: ok[3], certificate, xrdpPort: xrdp ? Number(xrdp[1]) : undefined, xrdpUser: xrdp?.[2],
-            clients, takenOver: taken && taken[1] !== client ? Number(taken[2]) : undefined,
+            clients, takenOver: taken && taken[1] !== client ? Number(taken[2]) : undefined, deskKey: /^RD_DESK ([0-9a-f]{32})$/m.exec(out)?.[1],
+            notes: [...out.matchAll(/^RD_NOTE (.+)$/gm)].map(m => m[1]),
         }
     }
     if (xrdp) {

@@ -9,9 +9,10 @@ import { formatAddress, parseAddress } from './desktopForm'
 import { RemoteDesktopHelp } from './help'
 import { signInName } from './accounts'
 import { newAccountOption } from './accountForm'
-import { desktopIdOf, DIRECT_KEY } from './desktops'
+import { CLIPBOARD_LABELS, ClipboardMode, ownClipboard } from './clipboard'
+import { configText, desktopIdOf } from './desktops'
 import { parseGateway } from './gateway'
-import { forgetCredentials } from './signin'
+import { configNumber } from './osd'
 import { isConnected, isSSHTab } from './ssh'
 import { RDP_PROFILE_TYPE, RemoteTargets } from './targets'
 
@@ -24,18 +25,27 @@ export interface RDPProfile extends ConnectableProfile {
         /** The RDP server: as this computer sees it, or as the `via` host sees it. */
         host: string
         port: number
-        kind: 'windows' | 'gnome' | 'xrdp'
+        /** Or null: Windows whatever the defaults say (an imported profile's, see RemoteDesktopService.importRdp). */
+        kind: 'windows' | 'gnome' | 'xrdp' | null
         /** Optional; the sign-in form asks. DOMAIN\user works too. */
         username: string
         domain: string
-        /** A saved account's id (see accounts.ts) to sign in with, in place of the user name and domain; or ''. */
-        account: string
+        /**
+         * A saved account's id (see accounts.ts) to sign in with, in place of the user name and domain; or '' (the
+         * group's or the global default's, else none), or null: none whatever the defaults (an imported profile's).
+         */
+        account: string | null
         /** An SSH profile's id to go through, or '' to connect directly. */
         via: string
         /** An RD Gateway's address (`host` or `host:port`) to reach the server through, or ''; `host` is then as the gateway sees it. */
         gateway: string
-        /** A saved account's id to sign in to the gateway with, or '' for the desktop's own sign-in. */
-        gatewayAccount: string
+        /**
+         * A saved account's id to sign in to the gateway with, or '' for the desktop's own sign-in (or the group's or
+         * the global default's), or null: the desktop's own whatever the defaults (an imported profile's).
+         */
+        gatewayAccount: string | null
+        /** The ways the clipboard goes with this desktop ('both', 'fromRemote', 'off'), or '' for the setting's. */
+        clipboard: '' | ClipboardMode
     }
 }
 
@@ -152,7 +162,7 @@ export class RDPTabRecovery extends TabRecoveryProvider<RDPTabComponent> {
 export class RDPProfileSettingsComponent implements ProfileSettingsComponent<RDPProfile>, OnInit {
     profile!: RDPProfile
     /** As the editor opened: what is kept per desktop moves along with a new address (see save()). */
-    private before!: { id: string, account: string, via: string }
+    private before!: { id: string, account: string, via: string, gateway: string }
 
     constructor (private element: ElementRef<HTMLElement>, private injector: Injector) { }
 
@@ -160,7 +170,7 @@ export class RDPProfileSettingsComponent implements ProfileSettingsComponent<RDP
         const o = this.profile.options
         const account = () => `${o.username ?? ''}\n${o.domain ?? ''}\n${o.account ?? ''}`
         // No id for a new profile (no address yet): it has nothing saved to take along.
-        this.before = { id: o.host ? desktopIdOf(o) : '', account: account(), via: o.via ?? '' }
+        this.before = { id: o.host ? desktopIdOf(o) : '', account: account(), via: o.via ?? '', gateway: o.gateway ?? '' }
         const root = this.element.nativeElement
         root.innerHTML = `
             <div class="mb-3">
@@ -205,6 +215,12 @@ export class RDPProfileSettingsComponent implements ProfileSettingsComponent<RDP
                 <label>Gateway account</label>
                 <select class="form-control" name="gatewayAccount"></select>
                 <div class="text-muted small">A gateway that takes another account than the desktop: a saved account for it.</div>
+            </div>
+            <div class="mb-3">
+                <label>Clipboard</label>
+                <select class="form-control" name="clipboard"></select>
+                <div class="text-muted small">Which ways text, pictures and files copied on either side go between this computer and the desktop.
+                    Applies on the next connection.</div>
             </div>`
         const field = <T extends HTMLInputElement | HTMLSelectElement = HTMLInputElement>(name: string) => root.querySelector(`[name="${name}"]`) as T
         field('address').value = o.host ? formatAddress(o.host, o.port || 3389) : ''
@@ -269,6 +285,13 @@ export class RDPProfileSettingsComponent implements ProfileSettingsComponent<RDP
         gatewayAccount.addEventListener('change', () => { o.gatewayAccount = gatewayAccount.value })
         gatewayChanged()
 
+        // Its own clipboard sharing, or the setting's (named, as it is now).
+        const clipboard = field<HTMLSelectElement>('clipboard')
+        clipboard.append(new Option(`As in Settings › Remote Desktop (${CLIPBOARD_LABELS[desktop.settings().clipboard].toLowerCase()})`, ''),
+            ...(Object.entries(CLIPBOARD_LABELS) as [ClipboardMode, string][]).map(([mode, text]) => new Option(text, mode)))
+        clipboard.value = ownClipboard(o.clipboard) ?? ''
+        clipboard.addEventListener('change', () => { o.clipboard = clipboard.value as '' | ClipboardMode })
+
         const via = field<HTMLSelectElement>('via')
         via.addEventListener('change', () => { o.via = via.value })
         this.injector.get(ProfilesService).getProfiles().then(profiles => {
@@ -283,21 +306,22 @@ export class RDPProfileSettingsComponent implements ProfileSettingsComponent<RDP
 
     save (): void {
         const o = this.profile.options
-        const { id, account, via } = this.before
+        const { id, account, via, gateway } = this.before
         if (!id) {
             return
         }
         if ((o.via ?? '') !== via) {
-            // Reached another way, it is another desktop. A direct one's saved account and certificate were its own; one
-            // behind a host shares them with that host's desktop at the same address, so they stay.
+            // Reached another way, it is another desktop. A direct one's saved passwords (through any gateway, the ones
+            // it had before included) and certificate were its own; one behind a host shares them with that host's
+            // desktop at the same address, so they stay.
             if (!via) {
-                forgetCredentials(`${DIRECT_KEY}#${id}`)
-                this.injector.get(RemoteDesktopService).forgetCertificatesFor(id, true)
+                this.injector.get(RemoteDesktopService).forgetDesktop(id, true, `"${this.profile.name}"`).catch(() => null)
             }
             return
         }
+        // Its saved password goes with its way there (see desktopEdited): another gateway is asked for again.
         const accountChanged = `${o.username ?? ''}\n${o.domain ?? ''}\n${o.account ?? ''}` !== account
-        this.injector.get(RemoteDesktopService).desktopEdited(id, desktopIdOf(o), accountChanged, !via).catch(() => null)
+        this.injector.get(RemoteDesktopService).desktopEdited(id, desktopIdOf(o), accountChanged, !via, { from: gateway, to: o.gateway }).catch(() => null)
     }
 }
 
@@ -309,7 +333,7 @@ export class RDPProfilesService extends QuickConnectProfileProvider<RDPProfile> 
     override name = 'Remote desktop (RDP)'
     override settingsComponent = RDPProfileSettingsComponent
     override configDefaults = {
-        options: { host: '', port: 3389, kind: 'windows', username: '', domain: '', account: '', via: '', gateway: '', gatewayAccount: '' },
+        options: { host: '', port: 3389, kind: 'windows', username: '', domain: '', account: '', via: '', gateway: '', gatewayAccount: '', clipboard: '' },
         clearServiceMessagesOnConnect: false,
     }
 
@@ -319,6 +343,9 @@ export class RDPProfilesService extends QuickConnectProfileProvider<RDPProfile> 
     }
 
     async getBuiltinProfiles (): Promise<PartialProfile<RDPProfile>[]> {
+        // No clipboard here: a new profile is made from a copy of this, and a value saved with it (even '', the
+        // setting's) would hide the clipboard its group's or the type's defaults give it, which may well be narrower.
+        // Left out, the profile follows those defaults (configDefaults has the key) until it is given one of its own.
         return [{
             id: `${RDP_PROFILE_TYPE}:template`,
             type: RDP_PROFILE_TYPE,
@@ -351,13 +378,17 @@ export class RDPProfilesService extends QuickConnectProfileProvider<RDPProfile> 
 
     getDescription (profile: PartialProfile<RDPProfile>): string {
         const o = profile.options ?? {}
-        if (!o.host) {
+        // Each field as text whatever the config holds (see configText): Tabby asks this of every profile as it lists
+        // them in its profile selector, and one that throws keeps the selector from opening at all.
+        const host = configText(o.host)
+        if (!host) {
             return ''
         }
-        const address = formatAddress(o.host, o.port || 3389)
+        const address = formatAddress(host, configNumber(o.port || 3389))
+        const gateway = configText(o.gateway)
         const via = [
-            ...o.gateway ? [`the gateway ${o.gateway}`] : [],
-            ...o.via ? [(this.config.store.profiles ?? []).find((p: any) => p.id === o.via)?.name ?? 'an SSH profile'] : [],
+            ...gateway ? [`the gateway ${gateway}`] : [],
+            ...o.via ? [configText((this.config.store.profiles ?? []).find((p: any) => p.id === o.via)?.name) || 'an SSH profile'] : [],
         ]
         return via.length ? `${address} via ${via.join(', via ')}` : address
     }
@@ -378,17 +409,16 @@ export class RDPProfilesService extends QuickConnectProfileProvider<RDPProfile> 
 
     intoQuickConnectString (profile: RDPProfile): string | null {
         const o = profile.options
-        return o.via ? null : `${o.username ? `${o.username}@` : ''}${formatAddress(o.host, o.port || 3389)}`
+        // As text, as getDescription reads them: the profile selector asks this of every profile too.
+        const username = configText(o.username)
+        return o.via ? null : `${username ? `${username}@` : ''}${formatAddress(configText(o.host), configNumber(o.port || 3389))}`
     }
 
     override deleteProfile (profile: RDPProfile): void {
-        // A direct desktop's saved account and certificate are its own; one behind a host shares them with that host's
-        // desktop at the same address.
+        // A direct desktop's saved passwords (through any gateway: one it went through before too) and certificate are
+        // its own; one behind a host shares them with that host's desktop at the same address.
         if (!profile.options.via) {
-            const id = desktopIdOf(profile.options)
-            forgetCredentials(`${DIRECT_KEY}#${id}`)
-            this.injector.get(RemoteDesktopService).forgetCertificatesFor(id, true)
-            this.config.save()
+            this.injector.get(RemoteDesktopService).forgetDesktop(desktopIdOf(profile.options), true, `"${profile.name}"`).catch(() => null)
         }
     }
 }

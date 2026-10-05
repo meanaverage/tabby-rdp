@@ -8,6 +8,41 @@ const REGISTRY = 'https://registry.npmjs.org/tabby-rdp/latest'
 const RELEASES = 'https://github.com/meanaverage/tabby-rdp/releases'
 const DAY = 24 * 60 * 60 * 1000
 
+/**
+ * The latest version's number, as npm says, from an answer read for `timeoutMs` and up to `maxBytes` at most (it is
+ * that version's package.json, a few KB): whoever answers in npm's name (a proxy that inspects TLS, say) could
+ * otherwise keep the request waiting for good, or fill Tabby's memory.
+ */
+export async function latestVersion (url = REGISTRY, timeoutMs = 15000, maxBytes = 256 * 1024): Promise<string> {
+    const abort = new AbortController()
+    const timer = setTimeout(() => abort.abort(), timeoutMs)
+    try {
+        const response = await fetch(url, { cache: 'no-store', signal: abort.signal })
+        if (!response.body) {
+            throw new Error(`the registry answered ${response.status} with nothing`)
+        }
+        const reader = response.body.getReader()
+        const chunks: Uint8Array[] = []
+        let size = 0
+        for (;;) {
+            const { done, value } = await reader.read()
+            if (done) {
+                break
+            }
+            size += value.byteLength
+            if (size > maxBytes) {
+                throw new Error('the registry\'s answer is too large')
+            }
+            chunks.push(value)
+        }
+        return String(JSON.parse(Buffer.concat(chunks).toString('utf8'))?.version ?? '')
+    } finally {
+        clearTimeout(timer)
+        // Ends the request, if it is still going (an answer too large).
+        abort.abort()
+    }
+}
+
 /** This package's version. */
 export function installedVersion (): string {
     try {
@@ -63,7 +98,7 @@ export class UpdateCheck {
         if (!this.enabled && latest === undefined) {
             return null
         }
-        const version = latest ?? String((await (await fetch(REGISTRY, { cache: 'no-store' })).json())?.version ?? '')
+        const version = latest ?? await latestVersion()
         this.zone.run(() => {
             this.available = newer(version, installedVersion()) ? version : null
             this.changed$.next()

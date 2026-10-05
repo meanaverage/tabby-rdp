@@ -2,8 +2,8 @@
 """trd-pty: a shell session that outlives its terminals and can be shown in several at once.
 
 A session is one small process that owns a PTY running the user's login shell and listens on a Unix
-socket in a private per-user directory (0700; peers must have the same uid). Terminals attach with
-`trd-pty attach`:
+socket in a private per-user directory (0700; both ends check that the other has the same uid).
+Terminals attach with `trd-pty attach`:
 
 - output from the shell goes, byte for byte, to every attached terminal;
 - input from any attached terminal goes to the shell;
@@ -30,6 +30,7 @@ import secrets
 import selectors
 import signal
 import socket
+import stat
 import struct
 import sys
 import termios
@@ -48,21 +49,64 @@ SIZE = struct.Struct('!HH')
 # session -> client: o output | x exit(status) | q query answer (json)
 
 
+def unsafe(message):
+    sys.stderr.write(f'trd-pty: {message}\n')
+    sys.exit(3)  # for `new`: no session could be started, so the login falls back to tmux
+
+
+def safe_base(path, owners):
+    """Whether no other user can rename or replace what is in `path`: a directory of one of `owners` that others
+    can't write to, or only for their own entries (sticky, like /tmp)."""
+    try:
+        st = os.stat(path)
+    except OSError:
+        return False
+    return (stat.S_ISDIR(st.st_mode) and st.st_uid in owners
+            and (not st.st_mode & 0o022 or bool(st.st_mode & stat.S_ISVTX)))
+
+
 def runtime_dir():
     """Private per-user directory for session sockets; refuses anything another user could touch."""
     uid = os.getuid()
     base = os.environ.get('XDG_RUNTIME_DIR')
-    if not base or not os.path.isdir(base) or os.stat(base).st_uid != uid:
+    if not base or not safe_base(base, (uid,)):
         base = '/tmp'
+        if not safe_base(base, (0, uid)):
+            unsafe(f'{base} lets other users replace what is in it (no sticky bit)')
     path = os.path.join(base, 'trd-pty' if base != '/tmp' else f'trd-pty-{uid}')
     try:
         os.mkdir(path, 0o700)
     except FileExistsError:
         pass
-    st = os.lstat(path)
-    if not os.path.isdir(path) or os.path.islink(path) or st.st_uid != uid or st.st_mode & 0o077:
-        sys.exit(f'trd-pty: unsafe session directory {path}')
+    except OSError as e:  # a base that can't be written to, say: no session here either
+        unsafe(f'cannot create the session directory {path} ({e.strerror})')
+    try:
+        st = os.lstat(path)
+    except OSError as e:
+        unsafe(f'cannot check the session directory {path} ({e.strerror})')
+    if not stat.S_ISDIR(st.st_mode) or st.st_uid != uid or st.st_mode & 0o077:
+        unsafe(f'unsafe session directory {path}')
     return path
+
+
+def peer_uid(sock):
+    """The uid of the process at the other end of a connected Unix socket, as the system tells it; None where it
+    can't (OSError if it fails)."""
+    if hasattr(socket, 'SO_PEERCRED'):  # Linux: struct ucred (pid, uid, gid); uid_t is unsigned, as os.getuid() has it
+        return struct.unpack('iII', sock.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))[1]
+    if hasattr(socket, 'LOCAL_PEERCRED'):  # macOS, BSD: struct xucred (version, uid, …) at level SOL_LOCAL, 0
+        return struct.unpack_from('=II', sock.getsockopt(0, socket.LOCAL_PEERCRED, 256))[1]
+    return None
+
+
+def serves_me(sock):
+    """Whether the session at the other end of `sock` runs as this user. The directory is private, but what answers
+    is checked too: the client is about to send it this terminal's keystrokes. Only the system's word about the
+    connection counts (who owns the socket's path now says nothing about who answered), so without it, no."""
+    try:
+        return peer_uid(sock) == os.getuid()
+    except OSError:
+        return False
 
 
 def socket_path(session_id):
@@ -212,11 +256,14 @@ class Session:
             sock, _ = self.listener.accept()
         except OSError:
             return
-        if hasattr(socket, 'SO_PEERCRED'):
-            _, uid, _ = struct.unpack('3i', sock.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))
-            if uid != os.getuid():
-                sock.close()
-                return
+        # Only a client the system says runs as this user: without that word (no peer credentials here), nobody.
+        try:
+            uid = peer_uid(sock)
+        except OSError:
+            uid = None
+        if uid != os.getuid():
+            sock.close()
+            return
         sock.setblocking(False)
         client = Client(sock)
         self.clients[sock] = client
@@ -416,11 +463,15 @@ FOCUS_IN, FOCUS_OUT = b'\x1b[I', b'\x1b[O'
 
 def attach(session_id, claim=True):
     """Relays this terminal to a session until the session ends (0) or the connection breaks (1)."""
+    path = socket_path(session_id)
     sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     try:
-        sock.connect(socket_path(session_id))
+        sock.connect(path)
     except OSError as e:
         sys.exit(f'trd-pty: no session {session_id} ({e.strerror})')
+    if not serves_me(sock):
+        sock.close()
+        sys.exit(f'trd-pty: session {session_id} is not yours')
     fd_in, fd_out = sys.stdin.fileno(), sys.stdout.fileno()
     rows, cols = term_size(fd_in)
     sock.sendall(frame(b'h', struct.pack('!HHB', rows, cols, 1 if claim else 0)))
@@ -507,6 +558,9 @@ def query(path):
     sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     sock.settimeout(2)
     sock.connect(path)
+    if not serves_me(sock):
+        sock.close()
+        raise PermissionError(f'{path} is not a session of yours')
     sock.sendall(frame(b'q'))
     frames = Frames()
     while True:
@@ -529,7 +583,11 @@ def list_sessions():
         try:
             sessions.append(query(path))
         except ConnectionRefusedError:
-            os.unlink(path)  # its owner is gone (killed, or before a reboot's tmpfs wipe)
+            try:
+                if stat.S_ISSOCK(os.lstat(path).st_mode):
+                    os.unlink(path)  # its owner is gone (killed, or before a reboot's tmpfs wipe)
+            except OSError:
+                pass
         except OSError:
             pass
     return sessions
@@ -540,6 +598,9 @@ def main(argv):
     if cmd == 'new':
         if not os.isatty(0):
             sys.exit('trd-pty: new needs a terminal')
+        if not hasattr(socket, 'SO_PEERCRED') and not hasattr(socket, 'LOCAL_PEERCRED'):
+            # Both ends check who is at the other one, and here they can't: no session (the login falls back to tmux).
+            unsafe('this system does not say which user is at the other end of a socket')
         return attach(start_session(*term_size(0)))
     if cmd == 'attach' and len(argv) == 3:
         return attach(argv[2])

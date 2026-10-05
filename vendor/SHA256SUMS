@@ -1,0 +1,26 @@
+# vendor/ is IronRDP 9b151c4c2e47c6014e1e8e55909d4180aa8bdb99 with the patches below, built by scripts/build-ironrdp.sh with
+# rustc 1.94.1 (e408947bf 2026-03-25), wasm-pack 0.15.0 (wasm-bindgen 0.2.126, binaryen version_117) and
+# Node.js v26.8.2, on aarch64-apple-darwin. Check from the repository's root: sha256sum -c vendor/SHA256SUMS
+# (or shasum -a 256 -c vendor/SHA256SUMS).
+965bc4a29f18bd6d766fe397c96dbe1483b23607ae8dd5a7458149d3625c2023  ironrdp/BASE_COMMIT
+315f1de9185945c1bf248706353758ef0af9f94a2bcd01d9709454f5da752dca  ironrdp/patches/0001-fix-dvc-drop-data-for-a-channel-that-is-not-open-ins.patch
+637157633fc962bdd4f300477134d42106dc606aaad933f74d70f9f2fc90cecd  ironrdp/patches/0002-fix-web-fit-the-canvas-to-the-host-element-not-the-w.patch
+81b3ea3fd8d339cf982f1dfb10fa765aae0beec9aa1333b2c918c3f57a89eccb  ironrdp/patches/0003-fix-web-dispatch-the-ready-event-after-clipboard-ini.patch
+30c1202263bd6654b2617e787ca3385f15361eb26d809ebc9ad9aef52c7b98cf  ironrdp/patches/0004-fix-rdpsnd-echo-the-Training-PDU-s-wPackSize-in-the-.patch
+f6193b9fcc3d9be6442f7ad906a1a586c842459952ed201dabee0364e6437ae0  ironrdp/patches/0005-feat-web-graphics-pipeline-EGFX-per-connection-and-f.patch
+4b8d33f188be91d478886fd2f1ee58c8ae86ac7594ca682b7b3f54de2fe57839  ironrdp/patches/0006-feat-web-audio-playback-RDPSND-through-an-audioPlayb.patch
+ebe7d796727f9855c32ba1b8d5b5d2429483be54cb6654a130bfb9c57bbab2c1  ironrdp/patches/0007-feat-web-microphone-redirection-AUDIO_INPUT-through-.patch
+8859fbb775635beaef4d558fe8512ad47dac4b9610b31e44fa99987d8d4cbe76  ironrdp/patches/0008-feat-web-H.264-in-the-graphics-pipeline-decoded-by-W.patch
+f597cc1fa3e8c4fce560b55024f6e4f3ea58d469c4f775da7abd0e6555a7c2ef  ironrdp/patches/0009-feat-web-let-the-host-hand-init-the-WebAssembly-modu.patch
+c7f82ac4b382e478a135734e7864ba83bcb2ba715b27cf40b17ad90342a936f3  ironrdp/patches/0010-fix-graphics-read-Progressive-SRL-code-words-as-valu.patch
+92237eed373c3b597fea0dd6e5548052ac13ad34f6b3276d0ce53dd667a1c0d7  ironrdp/patches/0011-feat-web-let-the-host-send-key-events-to-a-session.patch
+4c843f724d8f348297b5d17174c0c2d1dbc611a57f7eb2bb5cba633ebf8c5ba3  ironrdp/patches/0012-fix-web-keep-clipboard-monitoring-and-focus-writes-p.patch
+48e697ea31969259faebc743026f91995b33af1e9cbc6af6970861c7c59c671c  ironrdp/patches/0013-fix-web-sync-the-clipboard-automatically-for-the-foc.patch
+a9029bbb677deb208eda1202daec144b6a9e033fc987480eab4bf8b8e0ac70d6  ironrdp/patches/0014-fix-web-read-H.264-pictures-correctly-where-WebKit-i.patch
+459b08a00dc1e0341e1e80c0dab9b724b952b886964042ebe6ed9d80be5880c4  ironrdp/patches/0015-feat-web-drive-redirection-through-a-JavaScript-file.patch
+d67aa6029edb142daa1e5069fa79ab1917687474a89a61bd221081f204ba8e12  ironrdp/patches/0016-fix-svc-send-chunked-messages-without-CHANNEL_FLAG_S.patch
+35a592496b2c735d78450cf417e16a260143af2490817e57cd6a13b5f5b340c4  ironrdp/patches/0017-perf-web-read-H.264-regions-that-are-far-apart-one-b.patch
+08ccf512db2cfe21b16f958eda6fa4b23e052a0c0e91829a4fc2657f8bd8dd4d  vendor/IRONRDP-LICENSE
+538641d863e52972074b032c111a67cfa02d06290bff0601423f3dfd25ad563b  vendor/iron-remote-desktop-rdp.js
+5a6363b9140a5a2abf0218aa39edb38f10445e8d7e9c5a798c321772e1f07c11  vendor/iron-remote-desktop.js
+31f961cc5fc60f6a3dc580333f871bf9b380950dc849395465844dcc90f871f3  vendor/ironrdp_web_bg.wasm

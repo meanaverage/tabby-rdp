@@ -1,12 +1,14 @@
 /**
- * Redirects the local microphone to a remote desktop (IronRDP's `audioInput` extension). The server asks for it
- * only while an application there records: IronRDP says `open` (with the format the server chose) and `close`, and
- * the microphone is captured only in between. The browser's capture runs at the audio device's rate; it is resampled
- * and converted to interleaved 16-bit PCM here, in blocks of about 20 ms.
+ * Redirects the local microphone to a remote desktop (IronRDP's `audioInput` extension). The server asks for it when it
+ * likes (by its own account, while an application there records): IronRDP says `open` (with the format the server
+ * chose) and `close`, and the microphone is captured only in between. The browser's capture runs at the audio device's
+ * rate; it is resampled and converted to interleaved 16-bit PCM here, in blocks of about 20 ms.
  *
  * It keeps capturing while the desktop layer is hidden: the remote application is still recording (a call, say), and
- * the console being in front doesn't mean the user stopped talking to it. The system shows its own microphone
- * indicator meanwhile.
+ * the console being in front doesn't mean the user stopped talking to it. What the remote does with it is out of
+ * sight then, so it shows elsewhere (see RemoteDesktopService.microphoneChanged): a red microphone in Tabby's header
+ * for as long as it lasts, and a note when a capture starts on a desktop that isn't showing. turnOff() stops it here,
+ * and turnOn() takes the remote's requests again.
  */
 export class Microphone {
     /** The format the server asked for, while it has the microphone open. */
@@ -26,6 +28,8 @@ export class Microphone {
     private starting = false
     private resampler: Resampler | null = null
     private reportedError = false
+    /** Turned off here (see turnOff): the remote's requests are refused for the rest of the connection. */
+    private off = false
 
     /**
      * `send`: pushes PCM to IronRDP. `changed`: capturing started or stopped (for the indicator). `error`: the
@@ -50,6 +54,10 @@ export class Microphone {
                 }
                 this.format = { sampleRate, channels }
                 this.log(`microphone: the remote opened it (${sampleRate} Hz, ${channels === 1 ? 'mono' : 'stereo'})`)
+                if (this.off) {
+                    this.log('microphone: not sent: turned off here')
+                    return
+                }
                 this.start().catch(e => this.failed(e))
             } else if (message?.type === 'close') {
                 this.log('microphone: the remote closed it')
@@ -72,8 +80,8 @@ export class Microphone {
         } finally {
             this.starting = false
         }
-        // Closed and opened again while starting: that start was dropped, so start over.
-        if (!this.stream && this.format) {
+        // Closed and opened again while starting: that start was dropped, so start over (unless turned off meanwhile).
+        if (!this.stream && this.format && !this.off) {
             await this.start()
         }
     }
@@ -99,27 +107,41 @@ export class Microphone {
         let capture: AudioNode
         try {
             await context.audioWorklet.addModule(workletURL())
+            if (generation !== this.generation) {
+                return  // closed meanwhile: stop() released the stream and closed the context, which takes no new nodes
+            }
             const node = new AudioWorkletNode(context, 'trd-microphone', { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1] })
-            node.port.onmessage = event => this.captured(event.data, context.sampleRate)
+            node.port.onmessage = event => {
+                // A block the worklet posted before the capture stopped can still arrive after it: dropped, not sent.
+                if (generation === this.generation) {
+                    this.captured(event.data, context.sampleRate)
+                }
+            }
             capture = node
         } catch (e: any) {
+            if (generation !== this.generation) {
+                return  // closed meanwhile, which may be why the module was refused: as above, and not an error
+            }
             // No AudioWorklet (or its module was refused): the deprecated ScriptProcessor does the same on the main thread.
             this.log(`microphone: AudioWorklet unavailable (${e?.message ?? e}), using ScriptProcessor`)
             const node = context.createScriptProcessor(1024, 2, 1)
             node.onaudioprocess = event => {
+                if (generation !== this.generation) {
+                    return  // stopped: as above
+                }
                 const input = event.inputBuffer
                 this.captured(Array.from({ length: input.numberOfChannels }, (_, i) => input.getChannelData(i).slice()), context.sampleRate)
             }
             capture = node
-        }
-        if (generation !== this.generation) {
-            return  // closed meanwhile: stop() released the stream and the context
         }
         source.connect(capture)
         capture.connect(mute)
         this.nodes = [source, capture, mute]
         if (context.state === 'suspended') {
             await context.resume().catch(() => null)
+            if (generation !== this.generation) {
+                return  // closed or turned off while resuming: stop() released everything, and it isn't capturing
+            }
         }
         const track = stream.getAudioTracks()[0]
         this.log(`microphone: capturing from ${track?.label || 'the default input'} at ${context.sampleRate} Hz`)
@@ -186,6 +208,31 @@ export class Microphone {
         if (this.capturing) {
             this.capturing = false
             this.changed()
+        }
+    }
+
+    /**
+     * Turned off here (the setting, or Stop for this desktop): stops capturing at once, also a capture still starting,
+     * and refuses the remote's later requests on this connection. Whether the next connection gets the microphone is
+     * the service's to say (see RemoteDesktopService.stopMicrophone).
+     */
+    turnOff (): void {
+        if (!this.off) {
+            this.off = true
+            this.log('microphone: turned off here')
+        }
+        this.stop()
+    }
+
+    /** Turned on again here (the desktop's menu): the remote's requests are taken again, one open now included. */
+    turnOn (): void {
+        if (!this.off) {
+            return
+        }
+        this.off = false
+        this.log('microphone: turned on again here')
+        if (this.format) {
+            this.start().catch(e => this.failed(e))
         }
     }
 

@@ -11,6 +11,7 @@ await suite('clipboard', async t => {
 
     check('SSH tab connected', await ev('H.pane = await H.openSSH(); return !!H.pane'))
     t.onCleanup(() => t.remote('H.pane', `pkill -u "$(id -u)" -f '[t]rd-pty attach'; true`))
+    await t.deskReady('H.pane')
     await sleep(2500)
     await ev(`H.pane.sendInput('desk\\r')`)
     check('desk: the desktop, with the console in a terminal', !!(await t.waitFor(`return RD.desktop.logOf(H.pane).some(l => /desk: opened/.test(l))`, 10, 100)))

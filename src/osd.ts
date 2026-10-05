@@ -30,16 +30,38 @@ export const OSD_POSITIONS = ['top-left', 'top-center', 'top-right', 'middle', '
 
 export const OSD_DEFAULTS: OsdSettings = { show: 'auto', font: 'condensed', size: 'medium', position: 'top-right', color: '', seconds: 2.5 }
 
+/** Whether `key` is one of the table's own entries: 'constructor' or '__proto__' from the config are no font or size. */
+function isOwn<T extends object> (table: T, key: unknown): key is keyof T {
+    return typeof key === 'string' && Object.prototype.hasOwnProperty.call(table, key)
+}
+
+/**
+ * A color from the config, or '' for the default. Only plain colors: a name, #hex, or a color function of numbers.
+ * CSS.supports alone isn't enough: a value with var() passes it whatever follows (`var(--x, red)"><img …>`).
+ */
+export function osdColor (value: unknown): string {
+    const plain = typeof value === 'string' && /^(#[0-9a-f]{3,8}|[a-z]+|(rgba?|hsla?|hwb|lab|lch|oklab|oklch|color)\([\w\s.,%/+-]*\))$/i.test(value)
+    return plain && CSS.supports('color', value) ? value : ''
+}
+
+/**
+ * A number from the config, or NaN: only from a number or a string. Number() of an object calls its own conversions,
+ * and a config can hold an object whose `valueOf` and `toString` aren't functions, which makes it throw.
+ */
+export function configNumber (value: unknown): number {
+    return typeof value === 'number' || typeof value === 'string' ? Number(value) : NaN
+}
+
 /** The config value, with anything missing or unknown replaced by the default. */
 export function osdSettings (value: any): OsdSettings {
     const v = value && typeof value === 'object' ? value : {}
-    const seconds = Number(v.seconds)
+    const seconds = configNumber(v.seconds)
     return {
         show: ['auto', 'always', 'off'].includes(v.show) ? v.show : OSD_DEFAULTS.show,
-        font: v.font in OSD_FONTS ? v.font : OSD_DEFAULTS.font,
-        size: v.size in OSD_SIZES ? v.size : OSD_DEFAULTS.size,
+        font: isOwn(OSD_FONTS, v.font) ? v.font : OSD_DEFAULTS.font,
+        size: isOwn(OSD_SIZES, v.size) ? v.size : OSD_DEFAULTS.size,
         position: OSD_POSITIONS.includes(v.position) ? v.position : OSD_DEFAULTS.position,
-        color: typeof v.color === 'string' && CSS.supports('color', v.color) ? v.color : '',
+        color: osdColor(v.color),
         seconds: Number.isFinite(seconds) && seconds >= 0.5 && seconds <= 30 ? seconds : OSD_DEFAULTS.seconds,
     }
 }
@@ -75,22 +97,43 @@ function place (position: OsdSettings['position']): { box: string, glow: string,
     return { box, glow, align: h === 'left' ? 'flex-start' : h === 'right' ? 'flex-end' : 'center' }
 }
 
-/** Fills `el` (a .trd-osd) with `name` and an optional second line, as the settings say. */
+/**
+ * Fills `el` (a .trd-osd) with `name` and an optional second line, as the settings say. The settings are checked
+ * again, whoever passes them, and the overlay is built node by node with its styles set through the CSSOM: nothing
+ * from the config is ever parsed as markup, which in Tabby's window (Node integration) would run as code.
+ */
 export function renderOsd (el: HTMLElement, name: string, sub: string, settings: OsdSettings): void {
-    const font = OSD_FONTS[settings.font]
-    const { box, glow, align } = place(settings.position)
+    const checked = osdSettings(settings)
+    const font = OSD_FONTS[checked.font]
+    const { box, glow, align } = place(checked.position)
     // Smaller in a narrow pane: a name should fit in about two thirds of it.
     const width = el.offsetWidth || 800  // layout width: the settings preview is a scaled-down desktop
-    const size = Math.max(18, Math.min(OSD_SIZES[settings.size], width / Math.max(4, name.length) * 1.1))
-    el.innerHTML = `<div class="trd-osd-glow" style="${glow}"></div>
-        <div class="trd-osd-box" style="${box}; align-items: ${align}; font-family: ${font.family.replace(/"/g, '&quot;')};
-            font-weight: ${font.weight}; font-stretch: ${font.stretch}; font-size: ${size}px${settings.color ? `; color: ${settings.color}` : ''}">
-            <div class="trd-osd-name"></div><div class="trd-osd-sub"></div></div>`
-    el.querySelector('.trd-osd-name')!.textContent = name
-    const subEl = el.querySelector<HTMLElement>('.trd-osd-sub')!
+    const size = Math.max(18, Math.min(OSD_SIZES[checked.size], width / Math.max(4, name.length) * 1.1))
+    const part = (className: string) => {
+        const div = document.createElement('div')
+        div.className = className
+        return div
+    }
+    const glowEl = part('trd-osd-glow')
+    glowEl.style.cssText = glow
+    const boxEl = part('trd-osd-box')
+    boxEl.style.cssText = box
+    boxEl.style.setProperty('align-items', align)
+    boxEl.style.setProperty('font-family', font.family)
+    boxEl.style.setProperty('font-weight', String(font.weight))
+    boxEl.style.setProperty('font-stretch', font.stretch)
+    boxEl.style.setProperty('font-size', `${size}px`)
+    if (checked.color) {
+        boxEl.style.setProperty('color', checked.color)
+    }
+    const nameEl = part('trd-osd-name')
+    nameEl.textContent = name
+    const subEl = part('trd-osd-sub')
     if (sub) {
         const bar = document.createElement('span')
         bar.className = 'trd-osd-bar'
         subEl.append(bar, document.createTextNode(sub))
     }
+    boxEl.append(nameEl, subEl)
+    el.replaceChildren(glowEl, boxEl)
 }

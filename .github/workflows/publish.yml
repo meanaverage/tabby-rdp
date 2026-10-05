@@ -5,28 +5,79 @@ name: Publish
 # and creates the GitHub release for the tag from its CHANGELOG.md section.
 # Authenticates by npm trusted publishing (OIDC, no token); see CONTRIBUTING.md for the one-time setup on npmjs.com.
 #
-# vendor/ (IronRDP's build) is committed and published as it is in the tagged commit; CI does not rebuild it.
+# vendor/ (IronRDP's build) is committed and published as it is in the tagged commit, once ironrdp.yml has rebuilt it
+# from IronRDP and the patch series and found it identical; otherwise the package isn't staged, nor the release created.
+# The package is built and packed in a job of its own, which reports its SHA-256. The job that can publish runs none of
+# the dependencies' code: it takes the package by that hash (any job of the run can replace an artifact, and the
+# IronRDP jobs run a great deal of others' code), checks that it holds the tagged commit's files
+# (scripts/check-vendor.mjs: vendor/ against the commit's vendor/SHA256SUMS, not the package's own copy, and every other
+# committed file in it), and stages that very file. dist/ is as the package job built it: only a maintainer's own build
+# (`--same-as`, CONTRIBUTING.md) checks it before the staged package is approved.
+#
+# Actions are pinned to a commit, their tag in the comment: a tag can be moved to other code, a commit can't
+# (CONTRIBUTING.md, "Actions").
 
 on:
   push:
     tags: ['v*']
 
 permissions:
-  id-token: write   # the OIDC token for trusted publishing and provenance
   contents: read
 
 jobs:
-  publish:
-    name: Publish to npm
+  ironrdp:
+    name: IronRDP
+    uses: ./.github/workflows/ironrdp.yml
+
+  package:
+    name: Package
     runs-on: ubuntu-latest
+    outputs:
+      sha256: ${{ steps.pack.outputs.sha256 }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
+      # No install scripts: the build is tsc.
+      - run: npm ci --ignore-scripts
+      - run: npm run build
+      # The package's hash, for the publish job to take it by (below). Without a package of the tag's version, no hash,
+      # and nothing is staged.
+      - id: pack
+        run: |
+          mkdir -p "$RUNNER_TEMP/package"
+          npm pack --ignore-scripts --pack-destination "$RUNNER_TEMP/package"
+          sum=$(sha256sum "$RUNNER_TEMP/package/tabby-rdp-${GITHUB_REF_NAME#v}.tgz" | cut -c1-64)
+          echo "sha256=$sum" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: package
+          path: ${{ runner.temp }}/package/
+          if-no-files-found: error
+
+  publish:
+    name: Publish to npm
+    needs: [ironrdp, package]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write   # the OIDC token for trusted publishing and provenance, in this job only
+    steps:
+      # The tagged commit, to check the package against, and scripts/check-vendor.mjs (Node.js and git only).
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      # Node.js 26.8.2 exactly, for the npm that comes with it, 11.19.1: staged publishing needs npm 11.15.0 or later
+      # (trusted publishing 11.5.1), and Node 22's is npm 10. This npm publishes with the job's identity, so it comes
+      # inside Node.js's own download, which runs everything here anyway, not as a second download from the registry;
+      # and a newer one comes in by a change here, not by its release.
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 26.8.2
           registry-url: https://registry.npmjs.org
-      # Staged publishing needs npm 11.15.0 or later (trusted publishing 11.5.1); Node 22 comes with npm 10.
-      - run: npm install -g npm@11
       - run: node -e "const [a, b] = process.argv[1].split('.').map(Number); if (a < 11 || (a === 11 && b < 15)) { console.error('npm ' + process.argv[1] + ' cannot stage a publish'); process.exit(1) }" "$(npm --version)"
       - name: Tag matches package.json
         run: |
@@ -35,18 +86,35 @@ jobs:
             echo "tag $GITHUB_REF_NAME, but package.json says $version" >&2
             exit 1
           fi
-      - run: npm ci
-      - run: npm run build
-      # Staged, not live: the trusted publisher is allowed to stage only (npm's recommended setting).
-      - run: npm stage publish --provenance --access public
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: package
+          path: ${{ runner.temp }}/package
+      # Any job of this run can replace an artifact by its name (the IronRDP jobs too, which run build scripts and tests
+      # of a great many crates and packages): the package is taken by the hash the package job reported, or not at all.
+      - name: The package is the one the package job made
+        env:
+          SHA256: ${{ needs.package.outputs.sha256 }}
+        run: |
+          echo "$SHA256" | grep -qxE '[0-9a-f]{64}'
+          echo "$SHA256  $RUNNER_TEMP/package/tabby-rdp-${GITHUB_REF_NAME#v}.tgz" | sha256sum --strict -c -
+      - name: The package holds the tagged commit's files
+        run: node scripts/check-vendor.mjs package "$RUNNER_TEMP/package/tabby-rdp-${GITHUB_REF_NAME#v}.tgz" HEAD
+      # Staged, not live: the trusted publisher is allowed to stage only (npm's recommended setting). The file just
+      # checked, as it is: publishing a tarball runs none of the package's scripts.
+      - run: npm stage publish "$RUNNER_TEMP/package/tabby-rdp-${GITHUB_REF_NAME#v}.tgz" --provenance --access public --ignore-scripts
 
   release:
     name: GitHub release from the changelog
+    # Once the package is staged: the release's notes tell users to install it.
+    needs: publish
     runs-on: ubuntu-latest
     permissions:
       contents: write   # creates the release for the tag
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
       # The tag's section of CHANGELOG.md (## 1.2.3 up to the next ## heading) becomes the release notes, with the
       # install line the earlier releases carry; "What's new" in the plugin opens this page.
       - name: Release notes

@@ -3,7 +3,9 @@
 // the desktop signs in; TRD_TEST_GATEWAY_TARGET: the desktop as the gateway sees it, default the gateway's own host):
 // - a remote desktop profile with a gateway: a password the gateway refuses brings the form back, saying it was the
 //   gateway, with nothing sent to the desktop; the right one connects through the gateway's tunnel;
-// - the gateway's certificate is remembered by its address, and a changed one stops before the sign-in goes to it;
+// - the gateway's certificate, and the desktop's behind it, are asked about the first time unless a certificate
+//   authority this computer trusts vouches for them (the testbed's are self-signed), before anything goes to either;
+//   then remembered by the gateway's address, and a changed one stops before the sign-in goes to it;
 // - a gateway with a saved account of its own is asked for separately, and a refusal asks for that account again;
 // - with a Linux test host (TRD_TEST_HOST): a desktop behind that SSH host, through the gateway as the host sees it.
 // See test/README.md and testbed/windows-server.
@@ -67,7 +69,8 @@ await suite('gateway', async t => {
         setTrusted (key, sha256) {
             H.inZone(() => {
                 const others = (H.config.store.remoteDesktop.trustedCertificates ?? []).filter(e => e?.desktop !== key)
-                H.config.store.remoteDesktop.trustedCertificates = [...others, { desktop: key, sha256 }]
+                // As one the user trusted: a replacement stops the connection, whatever vouches for it.
+                H.config.store.remoteDesktop.trustedCertificates = [...others, { desktop: key, sha256, authority: false }]
                 H.config.save()
             })
         },
@@ -85,6 +88,16 @@ await suite('gateway', async t => {
     const form = await t.waitFor<Form>('return H.form(H.rdp)', 20)
     check('the sign-in form: the desktop\'s, its user name filled in', form?.title === `Sign in to ${NAME}` && form.user === user, form)
     await ev('H.submit(H.rdp, "not-the-password-1")')
+    // The gateway's certificate, never seen: asked about first, before the sign-in goes to the gateway, unless an
+    // authority this computer trusts vouches for it.
+    const unverified = await t.waitFor<StatusInfo | Form>(`const s = H.status(H.rdp); if (s && /can't verify/.test(s.text)) return s
+        const f = H.form(H.rdp); return f?.error ? f : null`, 60)
+    if (unverified && 'buttons' in unverified) {
+        check('a gateway certificate no authority vouches for: asked about first, as the gateway\'s, why, its fingerprint, Cancel or trust',
+            /gateway/.test(unverified.text) && /([0-9A-F]{2}:){15}[0-9A-F]{2}/.test(unverified.text) && unverified.buttons.join() === 'Trust the certificate,Cancel', unverified)
+        check('... before the sign-in went to the gateway', !(await log('H.rdp')).some(l => /^gateway: signed in/.test(l)), await log('H.rdp'))
+        await ev(`H.inZone(() => H.clickStatus(H.rdp, 'Trust the certificate'))`)
+    }
     const refused = await t.waitFor<Form>('const f = H.form(H.rdp); return f?.error ? f : null', 60)
     check('a password the gateway refuses: the form again, saying it was the gateway', /gateway/i.test(refused?.error ?? ''), refused ?? await log('H.rdp'))
     check('... refused at the gateway: nothing reached the desktop', !(await log('H.rdp')).some(l => /RDCleanPath relay up|^certificate:/.test(l)), await log('H.rdp'))
@@ -93,6 +106,16 @@ await suite('gateway', async t => {
     // 2. The right password: through the gateway's tunnel to the desktop.
     const t0 = Date.now()
     await ev(`H.submit(H.rdp, ${JSON.stringify(password)})`)
+    // The desktop behind it is connected to directly too (through the gateway's tunnel): its certificate, never seen,
+    // is asked about as well, saying the gateway has had the sign-in, unless an authority vouches for it.
+    const desktop = await t.waitFor<StatusInfo | true>(`const s = H.status(H.rdp); if (s && /can't verify/.test(s.text)) return s
+        return H.up(H.rdp) || null`, 90)
+    if (desktop && desktop !== true) {
+        check('the desktop\'s certificate, never seen: asked about too, naming the gateway on the way, which has had the sign-in',
+            /through the gateway/.test(desktop.text) && /only the gateway has had your sign-in/.test(desktop.text) && desktop.buttons.join() === 'Trust the certificate,Cancel', desktop)
+        check('... before anything went to the desktop', !(await log('H.rdp')).some(l => /RDCleanPath relay up/.test(l)), await log('H.rdp'))
+        await ev(`H.inZone(() => H.clickStatus(H.rdp, 'Trust the certificate'))`)
+    }
     check('the desktop connects through the gateway', !!(await t.waitFor('return H.up(H.rdp)', 90)), (await log('H.rdp')).slice(-8))
     t.time('a desktop through the gateway, from the sign-in', Date.now() - t0)
     const connected = await log('H.rdp')
