@@ -1,6 +1,10 @@
 # Changelog
 
-## Unreleased
+## 0.5.1
+
+Security fixes from an audit of 0.5.0: saved passwords and certificates, what a host says about its desktops, `desk`,
+shared folders and file transfers, what a server, gateway or SSH host can make Tabby do, and what a connected desktop
+can do. Clipboard sharing can be narrowed or turned off, and a release ships IronRDP only as its sources build it.
 
 **Security**
 - **An imported .rdp profile no longer signs in with a saved account on its own.** If you had set a default account
