@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+**Changed**
+- **CI and the release workflow check out the code with actions/checkout 7.0.1** (#56), pinned to its commit as before,
+  in place of 4.4.0. Nothing in the package changes.
+
 ## 0.5.1
 
 Security fixes from an audit of 0.5.0: saved passwords and certificates, what a host says about its desktops, `desk`,
