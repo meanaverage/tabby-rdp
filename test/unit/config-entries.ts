@@ -178,6 +178,10 @@ function service (remoteDesktop: Record<string, unknown>, profiles: unknown[] = 
     const zone = { run: (f: () => unknown) => f(), runOutsideAngular: (f: () => unknown) => f() }
     const notifications = { notice () { }, info () { }, error () { } }
     const svc = new RemoteDesktopService({ tabs: [] }, {}, notifications, config, zone, {}, {}, {}, platform)
+    const revisions = new Map<string, string>()
+    svc.accountRevisions = new (require('../../dist/accountRevisions.js').AccountRevisions)(() => ({
+        getItem: (key: string) => revisions.get(key) ?? null, setItem: (key: string, value: string) => revisions.set(key, value),
+    }), () => true)
     return { svc, store: config.store.remoteDesktop as any, asked }
 }
 
@@ -241,7 +245,11 @@ test('the service names, asks about and removes such an entry, and checks a new 
     assert.equal(await svc.confirmRemoveDesktop(store.desktops.indexOf(null)), false)
     assert.equal(store.desktops.length, before)
     // Removing the account takes it out of the entries that used it; the items that are no entries stay as they were.
+    await signin.saveCredentials('account#acct1', { username: 'admin', password: 'dummy' })
+    const accountRevision = svc.accountRevisions.capture(ACCOUNTS[0])
     await svc.removeAccount('acct1')
+    assert.equal(svc.accountRevisions.current('acct1', accountRevision), false)
+    assert.equal(keychain.has('account#acct1'), false)
     const user = store.desktops.find((d: any) => d?.name === 'Uses it')
     assert.deepEqual(['account' in user, 'gatewayAccount' in user], [false, false])
     assert.deepEqual(store.desktops.filter((d: any) => typeof d !== 'object' || d === null || Array.isArray(d)), [null, 5, 'a line of text', ['a', 'list']])
