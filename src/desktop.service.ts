@@ -10,6 +10,7 @@ import { domainToASCII, pathToFileURL } from 'url'
 import { DesktopPane, desktopPaneOf, isRDPTab, NestedSSH, RDP_PROFILE_TYPE, RemoteTarget, RemoteTargets } from './targets'
 import { consoleScript, DeskGate, deskKeyDigest, DeskRequest, MACHINE_ID_COMMAND } from './deskScript'
 import { AudioPlayer } from './audio'
+import { IronRDPLoader } from './ironrdp'
 import { CLIPBOARD_LABELS, ClipboardMode, clipboardSetting, ClipboardWays, clipboardWays, narrowest, ownClipboard, setUpClipboard, splitPaste } from './clipboard'
 import { ConnectionStatus, STYLE as STATS_STYLE } from './connectionStatus'
 import { Microphone } from './microphone'
@@ -540,9 +541,38 @@ export class DesktopSession {
     }
 
     private disposers: (() => void)[] = []
+    private connectionDisposers: (() => void)[] = []
 
     onDispose (f: () => void): void {
         this.disposers.push(f)
+    }
+
+    onConnectionEnd (f: () => void): void {
+        this.connectionDisposers.push(f)
+    }
+
+    /** Release browser resources and references to one backend, including when its WASM has trapped. */
+    endConnection (): void {
+        const clean = (f: () => void) => {
+            try { f() } catch (error: any) { this.log.push(`cleanup: ${error?.message ?? error}`) }
+        }
+        this.connectionDisposers.splice(0).forEach(clean)
+        clean(() => this.ui?.shutdown())
+        // Removing the component stops its clipboard loop and removes its global listeners.
+        clean(() => this.host.replaceChildren())
+        this.ui = null
+        this.stopSending = null
+        clean(() => this.audio?.close())
+        this.audio = null
+        clean(() => this.h264?.close())
+        this.h264 = null
+        clean(() => this.mic?.close())
+        this.mic = null
+        clean(() => this.files?.dispose())
+        this.files = null
+        clean(() => this.drives?.dispose())
+        this.drives = null
+        this.remoteSize = null
     }
 
     /** Focuses the remote desktop. IronRDP reveals its canvas asynchronously, so retry for about half a second. */
@@ -578,12 +608,7 @@ export class DesktopSession {
         this.container.removeEventListener('focusin', this.reclaimFocus, true)
         this.disposers.forEach(f => f())
         this.indicator?.dispose()
-        try { this.ui?.shutdown() } catch { }
-        this.audio?.close()
-        this.h264?.close()
-        this.mic?.close()
-        this.files?.dispose()
-        this.drives?.dispose()
+        this.endConnection()
         this.proxy?.close()
         this.overlay.remove()
     }
@@ -599,7 +624,13 @@ export class RemoteDesktopService {
     /** Emits whenever a pane's desktop is opened, shown, hidden, connected, ended or disconnected. */
     readonly changed$ = new Subject<void>()
     private sessions = new Map<DesktopPane, DesktopSession>()
-    private ironrdp: Promise<any> | null = null
+    private ironrdp = new IronRDPLoader(async () => {
+        const [factory, bytes] = await Promise.all([
+            importESM(vendor('iron-remote-desktop.js')).then(() => importESM(vendor('ironrdp-factory.js'))),
+            fs.promises.readFile(vendorFile('ironrdp_web_bg.wasm')),
+        ])
+        return { module: await WebAssembly.compile(bytes), createBackend: factory.createBackend }
+    })
     /** Whether the browser decodes H.264 (asked once). */
     private h264Support: Promise<boolean> | null = null
     /** Desktops (session keys) where H.264 decoding failed: they connect without it until Tabby restarts. */
@@ -2405,7 +2436,7 @@ export class RemoteDesktopService {
             timer = setTimeout(() => this.followPane(pane, session), 300)
         })
         observer.observe(session.overlay)
-        session.onDispose(() => {
+        session.onConnectionEnd(() => {
             clearTimeout(timer)
             observer.disconnect()
         })
@@ -2920,22 +2951,9 @@ export class RemoteDesktopService {
     }
 
     private loadIronRDP (): Promise<any> {
-        this.ironrdp ??= (async () => {
-            // The WebAssembly ships as its own file (not inlined in the bundle). It is read here and handed to init,
-            // rather than fetched by the bundle from next to itself: fetch() of file:// URLs is up to the Electron
-            // build (a fuse turns it off), and a plain file path needs no URL escaping for spaces or drive letters.
-            const [rdp, wasm] = await Promise.all([
-                importESM(vendor('iron-remote-desktop.js')).then(() => importESM(vendor('iron-remote-desktop-rdp.js'))),
-                fs.promises.readFile(vendorFile('ironrdp_web_bg.wasm')),
-            ])
-            // Troubleshooting: localStorage.trdLogLevel = 'DEBUG' (or TRACE), then restart Tabby.
-            let level = 'INFO'
-            try { level = localStorage.getItem('trdLogLevel') || level } catch { }
-            await rdp.init(level, wasm)
-            return rdp
-        })()
-        this.ironrdp.catch(() => { this.ironrdp = null })
-        return this.ironrdp
+        let level = 'INFO'
+        try { level = localStorage.getItem('trdLogLevel') || level } catch { }
+        return this.ironrdp.create(level)
     }
 
     /**
@@ -3727,8 +3745,35 @@ export class RemoteDesktopService {
     private async run (
         pane: DesktopPane, target: RemoteTarget, spec: DesktopSpec, session: DesktopSession, rdp: any, endpoint: Endpoint,
     ): Promise<{ connected: boolean, signInFailed?: string, gatewayRefused?: boolean, withoutNla?: boolean, error?: string, reason?: string, certificate?: CertificateProblem }> {
+        const attempt = new AbortController()
+        let unwatch: (() => void) | undefined
+        const trapped = new Promise<{ connected: boolean, error: string }>(resolve => {
+            unwatch = rdp.runtime?.onTrap((error: Error) => {
+                session.log.push(`wasm: this desktop's instance trapped: ${error.message}`)
+                // Drop the socket even if Rust's run() promise can no longer settle after a trap.
+                session.proxy?.close()
+                session.proxy = null
+                resolve({ connected: session.state === 'connected', error: `WebAssembly instance failed: ${error.message}` })
+            })
+        })
+        try {
+            return await Promise.race([
+                this.runConnection(pane, target, spec, session, rdp, endpoint, attempt.signal),
+                trapped,
+                session.disposed.then(() => ({ connected: false })),
+            ])
+        } finally {
+            attempt.abort()
+            unwatch?.()
+            session.endConnection?.()
+        }
+    }
+
+    private async runConnection (
+        pane: DesktopPane, target: RemoteTarget, spec: DesktopSpec, session: DesktopSession, rdp: any, endpoint: Endpoint, signal: AbortSignal,
+    ): Promise<{ connected: boolean, signInFailed?: string, gatewayRefused?: boolean, withoutNla?: boolean, error?: string, reason?: string, certificate?: CertificateProblem }> {
         const credentials = endpoint.credentials
-        const alive = () => this.sessions.get(pane) === session
+        const alive = () => !signal.aborted && this.sessions.get(pane) === session
         session.certificateProblem = null
         session.gatewayRefused = null
         session.withoutNla = false
@@ -3742,7 +3787,9 @@ export class RemoteDesktopService {
             session.host.replaceChildren(el)
             // The element only gets ready in the page: one whose desktop was closed meanwhile (the layer gone) never does.
             // Closed as it got ready, it isn't given the clipboard, files and the rest that closing it has ended already.
-            session.ui = await Promise.race([ready, session.disposed.then(() => null)])
+            session.ui = await Promise.race([ready, session.disposed.then(() => null), new Promise<null>(resolve => {
+                signal.addEventListener('abort', () => resolve(null), { once: true })
+            })])
             if (!session.ui || !alive()) {
                 return { connected: false }
             }

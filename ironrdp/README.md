@@ -21,6 +21,14 @@ build script takes it back out (checking it is byte for byte wasm-pack's output)
 the file next to it. The plugin reads the file itself and passes the bytes to `init` (patch 9), since `fetch()` of
 `file://` URLs is up to the Electron build.
 
+The local prototype for issue #49 also builds `vendor/ironrdp-factory.js` from that standalone JavaScript bundle,
+through [`make-ironrdp-factory.mjs`](../scripts/make-ironrdp-factory.mjs). It parses the bundle's exports and puts its
+entire body inside `createBackend(compiledModule, logLevel)`: each call owns the wasm-bindgen heap tables, memory
+views, classes and finalizers. The web component is registered once and takes that desktop's backend; the compiled
+module is shared, the instance is not. The build uses TypeScript's parser from the RDP package's installed build
+dependencies. No new Rust patch or WASM rebuild is needed for this factory. See [prototype notes](../docs/wasm-isolation-prototype.md)
+for measurements, checks and remaining live tests.
+
 ## The patches
 
 | # | Patch | Why | Upstream |
