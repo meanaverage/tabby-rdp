@@ -1,7 +1,8 @@
 # Tests
 
-The suites drive a real Tabby window over the Chrome DevTools protocol, against real remote desktops: key presses,
-clicks, the clipboard, menus, the plugin's own state, and checks on the remote side over SSH. There are no mocks.
+The suites drive a real Tabby window over the Chrome DevTools protocol. The desktop suites use real remote desktops:
+key presses, clicks, the clipboard, menus, plugin state, and checks on the remote side over SSH. The host smoke suite
+needs no remote machine; smoke profiles substitute in-memory credentials for the native keychain.
 
 ```sh
 export TRD_TEST_HOST=192.168.64.5 TRD_TEST_USER=ubuntu   # a Linux test host, see ../testbed/README.md
@@ -26,6 +27,42 @@ also on failure or Ctrl+C. Your own Tabby isn't touched. Tabby is found at its u
 
 The suites need an SSH key or agent that logs in to the test host without a password. A new host key is accepted
 automatically in the test profile.
+
+## Host upgrade smoke tests
+
+Build the plugin, then test an unmodified Tabby release, release candidate, or nightly binary:
+
+```sh
+npm run build
+npm run test:smoke -- --tabby /path/to/Tabby --expect-xterm 5
+# When testing a host built with xterm 6:
+npm run test:smoke -- --tabby /path/to/Tabby --expect-xterm 6
+# Require live RDP coverage as well (TRD_TEST_HOST and SSH test credentials must be configured):
+npm run test:smoke -- --tabby /path/to/Tabby --expect-xterm 6 --require-rdp
+```
+
+On macOS, pass the executable inside the app: `/path/to/Tabby.app/Contents/MacOS/Tabby`.
+The command installs a local `npm pack` tarball in a fresh profile, starts a hidden window, runs `smoke-host` and
+`smoke-rdp`, then closes the host and removes the profile. The credential guard is a profile-local test plugin;
+it does not change the application bundle or signature. These checks do not read or write the native keychain or
+use the system clipboard. Run them against a dedicated test desktop: the RDP suite sends a few harmless keystrokes.
+
+Each suite prints `HOST` with the application version, Electron version, and xterm dependency declared by the host.
+`--expect-xterm` fails on a different or missing declaration. A version number alone does not establish xterm 6
+coverage: a tagged release can precede the xterm upgrade. Run both the shipping release and a build containing the
+upgrade. The suites accept host-provided modal drag regions and the plugin's fallback on older hosts.
+
+`smoke-host` exercises both terminal frontend choices (`xterm` and `xterm-webgl`), actual local PTY input,
+Alt+arrow word-jump sequences, output through session middleware, resize, font changes, scroll position, background
+output, tab closing, plugin settings, dummy-account revision saves, RDP profile editing, and modal/plugin drag bars.
+`smoke-rdp` covers a real decoded RDP frame, repeated console/RDP switching, keyboard focus and covered-console
+input isolation, live display resize, host-tab switching, and disconnect cleanup. Renderer exceptions, console
+errors, and caught xterm resize failures fail either suite. Neither suite recreates a complete terminal-renderer
+or protocol conformance test.
+
+Without `TRD_TEST_HOST`, `smoke-rdp` explicitly reports `SKIP`; `--require-rdp` makes missing configuration a failure
+before launching Tabby. The host suite still runs without a remote. Smoke tests require the runner's credential
+guard, so `--port` only works with a test profile already prepared by this runner (`--keep`).
 
 ## Settings
 
@@ -73,6 +110,8 @@ system keychain doesn't answer (Linux without an unlocked keyring), the keychain
 
 | Suite | What it covers |
 |---|---|
+| [smoke-host](suites/smoke-host.ts) | Host upgrades without a remote: both terminal frontends, keyboard, resize/font/scroll, tab lifecycle, settings, account revision saves, profile editor, modal dragging. |
+| [smoke-rdp](suites/smoke-rdp.ts) | Host upgrades with real RDP: connection/frame, console switching and input isolation, display resize, tab focus, disconnect. |
 | [e2e](suites/e2e.ts) | Every entry point (toolbar button, hotkey, menus, header), focus and typing, one desktop per account across tabs, a local terminal running `ssh`, Disconnect. |
 | [desk](suites/desk.ts) | Logins in the shared session, `desk`, requests without its key ignored, typing in the desktop terminal, RDP and SSH disconnects keeping the session, turning `desk` off and on. |
 | [resize](suites/resize.ts) | Resize to fit, reconnect at the new size, keep the resolution, Retina with GNOME's scale. |

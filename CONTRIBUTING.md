@@ -50,6 +50,11 @@ whose TLS library is the one Tabby has (the fallback for Windows' own certificat
 says a certificate isn't valid), when `TRD_ELECTRON` names an Electron binary that may run as Node (an app's with that
 fuse on, such as Visual Studio Code's `Contents/MacOS/Code`); without it, they are skipped.
 
+For a Tabby host upgrade, run `npm run build` and then `npm run test:smoke -- --tabby <binary> --expect-xterm <major>`.
+This checks a locally packed plugin in an isolated host profile, with dummy credential storage. Add `--require-rdp`
+to require the live desktop checks. See [the host smoke instructions](test/README.md#host-upgrade-smoke-tests) for
+coverage and the release/nightly test matrix.
+
 ## IronRDP
 
 Changes to IronRDP go in the patch series, one focused patch per change, with tests where IronRDP has a place for

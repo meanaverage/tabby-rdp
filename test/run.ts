@@ -19,12 +19,17 @@ import { waitForPort } from './lib/cdp.js'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const LINUX_SUITES = ['e2e', 'desk', 'resize', 'keyboard', 'actions', 'clipboard', 'files', 'audio', 'microphone', 'graphics', 'reconnect', 'desktops', 'profiles', 'certificates', 'status', 'wake', 'help', 'nested', 'vms', 'headless', 'takeover']
-const ALL_SUITES = [...LINUX_SUITES, 'windows', 'winhost', 'hyperv', 'gateway', 'xrdp', 'trd-pty', 'screenshots', 'demo']
+const ALL_SUITES = [...LINUX_SUITES, 'windows', 'winhost', 'hyperv', 'gateway', 'xrdp', 'trd-pty', 'screenshots', 'demo', 'smoke-host', 'smoke-rdp']
 
 const args = process.argv.slice(2)
 const flag = (name: string) => args.includes(name)
 const option = (name: string) => { const i = args.indexOf(name); return i >= 0 ? args[i + 1] : undefined }
-const suites = args.filter((a, i) => !a.startsWith('--') && !['--port', '--tabby'].includes(args[i - 1]))
+const suites = args.filter((a, i) => !a.startsWith('--') && !['--port', '--tabby', '--expect-xterm'].includes(args[i - 1]))
+const expectedXterm = option('--expect-xterm')
+if (args.includes('--expect-xterm') && (!expectedXterm || !/^[1-9]\d*$/.test(expectedXterm))) {
+    console.error('--expect-xterm needs a major version, such as 5 or 6')
+    process.exit(2)
+}
 for (const s of suites) {
     if (!ALL_SUITES.includes(s)) {
         console.error(`Unknown suite "${s}". Suites: ${ALL_SUITES.join(', ')}`)
@@ -32,6 +37,11 @@ for (const s of suites) {
     }
 }
 const selected = suites.length ? suites : LINUX_SUITES
+const smoke = selected.some(s => s.startsWith('smoke-'))
+if (flag('--require-rdp') && selected.includes('smoke-rdp') && !process.env.TRD_TEST_HOST) {
+    console.error('--require-rdp needs TRD_TEST_HOST; live RDP coverage cannot be skipped')
+    process.exit(2)
+}
 
 function tabbyBinary (): string {
     const candidates = [
@@ -93,6 +103,16 @@ function makeSandbox (): string {
     } else {
         fs.symlinkSync(ROOT, path.join(plugins, 'node_modules', 'tabby-rdp'), 'dir')
     }
+    if (smoke) {
+        // Install after npm, which prunes unlisted plugins. The host application and its signature stay intact.
+        const guard = path.join(plugins, 'node_modules', 'tabby-aaa-smoke-credentials')
+        fs.mkdirSync(guard)
+        fs.writeFileSync(path.join(guard, 'package.json'), JSON.stringify({
+            name: 'tabby-aaa-smoke-credentials', version: '1.0.0', author: 'tabby-rdp tests',
+            main: 'index.js', keywords: ['tabby-plugin'],
+        }))
+        fs.copyFileSync(path.join(ROOT, 'test', 'fixtures', 'smoke-credentials.cjs'), path.join(guard, 'index.js'))
+    }
     return dir
 }
 
@@ -136,12 +156,13 @@ function runTrdPty (): number {
     }
 }
 
-const results: [string, number, number][] = []
+const results: [string, number, number, boolean][] = []
 let port = Number(option('--port') || 0)
 if (selected.some(s => s !== 'trd-pty') && !port) {
     sandbox = makeSandbox()
     port = await freePort()
     tabby = spawn(tabbyBinary(), [
+        ...(flag('--hidden') ? ['--hidden'] : []),
         `--user-data-dir=${sandbox}`,
         `--remote-debugging-port=${port}`,
         // Keep timers and rendering going while the window is behind others.
@@ -159,24 +180,30 @@ if (selected.some(s => s !== 'trd-pty') && !port) {
 for (const name of selected) {
     console.log(`\n=== ${name}`)
     const started = Date.now()
-    const code = name === 'trd-pty'
+    const skipped = name === 'smoke-rdp' && !process.env.TRD_TEST_HOST
+    if (skipped) console.log('SKIP  smoke-rdp: set TRD_TEST_HOST (see test/README.md)')
+    const code = skipped ? 0 : name === 'trd-pty'
         ? runTrdPty()
         : await new Promise<number>(resolve => {
             // tsx, not this Node alone: the suites are TypeScript (see tsconfig.test.json). Node 22.18+ could strip the
             // types itself, but the suites run on any Node 22 (lib/cdp.ts) and this keeps it that way. Resolved from
             // here: by name, Node would look for it from the current directory, which need not be this checkout.
             const child = spawn(process.execPath, ['--import', import.meta.resolve('tsx'), path.join(ROOT, 'test', 'suites', `${name}.ts`)], {
-                env: { ...process.env, TRD_CDP_PORT: String(port) },
+                env: {
+                    ...process.env, TRD_CDP_PORT: String(port),
+                    ...(expectedXterm ? { TRD_SMOKE_EXPECT_XTERM: expectedXterm } : {}),
+                    ...(flag('--require-rdp') ? { TRD_SMOKE_REQUIRE_RDP: '1' } : {}),
+                },
                 stdio: 'inherit',
             })
             child.on('exit', code => resolve(code ?? 1))
         })
-    results.push([name, code, Math.round((Date.now() - started) / 1000)])
+    results.push([name, code, Math.round((Date.now() - started) / 1000), skipped])
 }
 
 console.log('\n=== summary')
-for (const [name, code, seconds] of results) {
-    console.log(`${code === 0 ? 'ok  ' : 'FAIL'}  ${name.padEnd(10)} ${seconds} s`)
+for (const [name, code, seconds, skipped] of results) {
+    console.log(`${skipped ? 'SKIP' : code === 0 ? 'ok  ' : 'FAIL'}  ${name.padEnd(10)} ${seconds} s`)
 }
 teardown()
 process.exit(results.some(([, code]) => code !== 0) ? 1 : 0)
