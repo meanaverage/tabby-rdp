@@ -2,11 +2,16 @@
 // a keychain that never answers (Linux without an unlocked keyring) is given up on after one call, not one per
 // caller: each waiting call holds one of Node's four worker threads, which Tabby needs for files and name lookups.
 // Runs against the built plugin: npm run build && npm run test:unit
-import { test } from 'node:test'
+import { after, test } from 'node:test'
 import assert from 'node:assert/strict'
 import Module, { createRequire } from 'node:module'
 
 const require = createRequire(import.meta.url)
+// This fixture tests the local queue. Newer Node exposes Web Locks too; retaining a real lock around the deliberately
+// never-settling native stub would keep its worker alive. Cross-window ordering is covered in account-credentials.ts.
+const navigatorBefore = Object.getOwnPropertyDescriptor(globalThis, 'navigator')
+Object.defineProperty(globalThis, 'navigator', { configurable: true, value: undefined })
+after(() => { if (navigatorBefore) { Object.defineProperty(globalThis, 'navigator', navigatorBefore) } })
 
 /** What the plugin's `require('keytar')` gets while a test runs. */
 let keytar: Record<string, (...args: string[]) => Promise<unknown>> = {}

@@ -4,6 +4,8 @@ import * as path from 'path'
 import { execFile } from 'child_process'
 import { ClipboardWays } from './clipboard'
 import type { ServerFlow } from './rdcleanpath'
+import { DISK_PATH, DiskStorage } from './diskStorage'
+export { DiskStorage } from './diskStorage'
 
 /**
  * Limits for a folder copied here and pasted with ⌘V: entries offered, and how deep. (IronRDP walks dropped folders
@@ -436,57 +438,6 @@ export function entriesFor (paths: string[]): { entries: any[], leftOut: number,
         }
     }
     return { entries, leftOut, cut }
-}
-
-/** On a download's result: the temporary file holding it (see DiskStorage). */
-const DISK_PATH = Symbol('tabby-rdp download')
-
-/**
- * Where downloads are kept while they arrive (IronRDP's FileStorageBackend): a file each in a private temporary
- * folder, written chunk by chunk, so a large file takes its size on disk rather than twice that in memory. The
- * result handed back is an empty Blob that names the file; saveAll moves it into place.
- */
-export class DiskStorage {
-    readonly name = 'disk'
-    private dir: Promise<string> | null = null
-    private count = 0
-
-    async createWriteHandle (_fileName: string, _expectedSize: number): Promise<any> {
-        this.dir ??= fs.promises.mkdtemp(path.join(os.tmpdir(), 'tabby-rdp-'))  // 0700, a name nobody could prepare
-        const file = path.join(await this.dir, String(++this.count))
-        const handle = await fs.promises.open(file, 'wx', 0o600)
-        let bytesWritten = 0
-        let open = true
-        const close = async () => {
-            if (open) {
-                open = false
-                await handle.close()
-            }
-        }
-        return {
-            get bytesWritten () { return bytesWritten },
-            async write (chunk: Uint8Array) {
-                await handle.appendFile(chunk)
-                bytesWritten += chunk.length
-            },
-            async finalize () {
-                await close()
-                return Object.assign(new Blob([]), { [DISK_PATH]: file })
-            },
-            async abort () {
-                await close().catch(() => null)
-                await fs.promises.rm(file, { force: true })
-            },
-        }
-    }
-
-    async dispose (): Promise<void> {
-        const dir = this.dir
-        this.dir = null
-        if (dir) {
-            await dir.then(d => fs.promises.rm(d, { recursive: true, force: true }), () => null)
-        }
-    }
 }
 
 /** A file the remote offers (IronRDP's FileInfo). */

@@ -36,8 +36,14 @@ export function storeName (): string {
  * back, so two at once (two desktops signing in together) would lose one's change.
  */
 let vaultQueue: Promise<unknown> = Promise.resolve()
+/** Same-origin windows share these locks. Store work holds the lock through its actual completion. */
+async function storeLock<T> (name: string, work: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+    const locks = globalThis.navigator?.locks
+    return locks ? await locks.request(`tabby-rdp.credentials.${name}`, signal ? { signal } : {}, work) : work()
+}
 function queued<T> (work: () => Promise<T>): Promise<T> {
-    const next = vaultQueue.then(work, work)
+    const run = () => storeLock('vault', work)
+    const next = vaultQueue.then(run, run)
     vaultQueue = next.catch(() => null)
     return next
 }
@@ -78,16 +84,18 @@ function keytar (): any {
  */
 function keychain<T> (call: (keytar: any) => Promise<T>): Promise<T | undefined> {
     const run = () => new Promise<T | undefined>((resolve, reject) => {
-        const store = keytar()
-        if (!store) {
-            resolve(undefined)
-            return
-        }
+        if (keychainStuck) { reject(new Error('the keychain did not answer earlier')); return }
+        const abort = new AbortController()
         const timer = setTimeout(() => {
             keychainStuck = true
+            abort.abort() // cancels a lock still waiting, never a native call already running
             reject(new Error('the keychain did not answer'))
         }, KEYCHAIN_TIMEOUT_MS)
-        Promise.resolve(call(store)).then(
+        // Timeout is outside the lock: a late native write keeps other windows' writes behind it until it ends.
+        storeLock('keychain', async () => {
+            const store = keytar()
+            return store ? call(store) : undefined
+        }, abort.signal).then(
             value => { clearTimeout(timer); resolve(value) },
             error => { clearTimeout(timer); reject(error) })
     })
@@ -364,16 +372,36 @@ export async function hasCredentials (key: string): Promise<'yes' | 'no' | 'unkn
 }
 
 export async function saveCredentials (key: string, credentials: Credentials, label?: string): Promise<void> {
+    await saveCredentialsIf(key, credentials, () => true, label)
+}
+
+/**
+ * Checks a revision within the store queue/lock, including after an asynchronous write. If invalidated while writing,
+ * removes that write before a newer queued replacement can run. Never schedules a deletion behind a newer write.
+ */
+export async function saveCredentialsIf (key: string, credentials: Credentials, current: () => boolean, label?: string): Promise<boolean> {
     await used()
     if (vaultOn()) {
-        await queued(() => vault.addSecret({ type: VAULT_SECRET_TYPE, key: { ...vaultKey(key), description: label ?? vaultName(key) }, value: JSON.stringify(credentials) }))
+        const saved = await queued(async () => {
+            if (!current()) { return false }
+            await vault.addSecret({ type: VAULT_SECRET_TYPE, key: { ...vaultKey(key), description: label ?? vaultName(key) }, value: JSON.stringify(credentials) })
+            if (!current()) { await vault.removeSecret(VAULT_SECRET_TYPE, vaultKey(key)); return false }
+            return true
+        })
+        if (!saved) { return false }
         newlySaved(key, true)
         // Not in two places: what the keychain had for it goes.
-        try { await keychain(store => store.deletePassword(KEYCHAIN_SERVICE, key)) } catch { }
-        return
+        try { await keychain(async store => { if (current()) { await store.deletePassword(KEYCHAIN_SERVICE, key) } }) } catch { }
+        return true
     }
-    await keychain(store => store.setPassword(KEYCHAIN_SERVICE, key, JSON.stringify(credentials)))
-    newlySaved(key, false)
+    const saved = await keychain(async store => {
+        if (!current()) { return false }
+        await store.setPassword(KEYCHAIN_SERVICE, key, JSON.stringify(credentials))
+        if (!current()) { await store.deletePassword(KEYCHAIN_SERVICE, key); return false }
+        return true
+    })
+    if (saved) { newlySaved(key, false) }
+    return !!saved
 }
 
 /**
@@ -435,6 +463,16 @@ export async function forgetCredentialsOrFail (key: string): Promise<void> {
     noteForget(k => k === key)
     await used()
     return forgetNow(key)
+}
+
+/** An account edit/removal must not delete a replacement committed by a later edit. */
+export async function forgetCredentialsIf (key: string, current: () => boolean): Promise<void> {
+    noteForget(k => k === key)
+    await used()
+    if (vaultOn()) {
+        await queued(async () => { if (current()) { await vault.removeSecret(VAULT_SECRET_TYPE, vaultKey(key)) } })
+    }
+    await keychain(async store => { if (current()) { await store.deletePassword(KEYCHAIN_SERVICE, key) } })
 }
 
 /** Forgets what is saved under `key`, in both stores. */

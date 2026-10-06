@@ -121,7 +121,7 @@ test('a link in the folder doesn\'t take files elsewhere', { skip: process.platf
 test('a download arrives in a temporary file and is moved into place', async () => {
     const { downloads } = sandbox()
     const storage = new DiskStorage()
-    const handle = await storage.createWriteHandle('big.bin', 10)
+    const handle = await storage.createWriteHandle('big.bin', 6)
     await handle.write(new Uint8Array([1, 2, 3, 4]))
     await handle.write(new Uint8Array([5, 6]))
     assert.equal(handle.bytesWritten, 6)
