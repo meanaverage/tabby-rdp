@@ -42,10 +42,16 @@ npm run test:smoke -- --tabby /path/to/Tabby --expect-xterm 6 --require-rdp
 ```
 
 On macOS, pass the executable inside the app: `/path/to/Tabby.app/Contents/MacOS/Tabby`.
-The command installs a local `npm pack` tarball in a fresh profile, starts a hidden window, runs `smoke-host` and
+The command installs a local `npm pack` tarball in a fresh profile, runs `smoke-host` and
 `smoke-rdp`, then closes the host and removes the profile. The credential guard is a profile-local test plugin;
 it does not change the application bundle or signature. These checks do not read or write the native keychain or
 use the system clipboard. Run them against a dedicated test desktop: the RDP suite sends a few harmless keystrokes.
+
+On macOS the test window is hidden. Linux and Windows keep it mapped so Chromium advances the animation frames
+used for terminal fitting; `--hidden` applies only on macOS. For unattended Linux runs, use Xvfb with a window
+manager such as xfwm4 and keep Tabby's window visible inside that virtual display. An unmapped Linux window can
+leave terminal geometry stale and produce false resize failures. When attaching with `--port`, prepare the host
+with the same mapped-window requirement.
 
 Each suite prints `HOST` from the plugin's shared compatibility snapshot: host name/version, platform, Electron/Node
 versions, xterm dependency declared by the host, and observed capabilities. Unknown or unobserved values are `null`.

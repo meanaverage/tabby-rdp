@@ -162,7 +162,9 @@ if (selected.some(s => s !== 'trd-pty') && !port) {
     sandbox = makeSandbox()
     port = await freePort()
     tabby = spawn(tabbyBinary(), [
-        ...(flag('--hidden') ? ['--hidden'] : []),
+        // Unmapped Linux/Windows windows can stop animation frames even with timer throttling disabled.
+        // Terminal fit uses those frames. Keep the window mapped there; use Xvfb for unattended Linux runs.
+        ...(flag('--hidden') && process.platform === 'darwin' ? ['--hidden'] : []),
         `--user-data-dir=${sandbox}`,
         `--remote-debugging-port=${port}`,
         // Keep timers and rendering going while the window is behind others.
