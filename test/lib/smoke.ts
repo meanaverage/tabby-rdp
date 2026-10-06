@@ -1,19 +1,16 @@
 import type { TestContext } from './harness.js'
+import type { HostSnapshot } from '../../src/hostCompat.js'
 
 /** Report the host's declared dependency, rather than guessing xterm's version from private field names. */
 export async function smokeHost (t: TestContext): Promise<void> {
     if (!await t.ev('return globalThis.__trdSmokeCredentials === true')) {
         throw new Error('Smoke tests require their isolated profile credential guard. Use npm run test:smoke without --port.')
     }
-    const info = await t.ev<{ host: string, electron: string, xterm: string | null }>(`
-        const terminal = require('tabby-terminal/package.json');
-        return { host: require('@electron/remote').app.getVersion(), electron: process.versions.electron,
-            xterm: terminal.devDependencies?.['@xterm/xterm'] ?? terminal.dependencies?.['@xterm/xterm'] ?? null };
-    `)
+    const info = await t.ev<HostSnapshot>('return RD.compat.snapshot()')
     console.log('HOST  ' + JSON.stringify(info))
     const expected = process.env.TRD_SMOKE_EXPECT_XTERM
-    if (expected && info.xterm?.match(/\d+/)?.[0] !== expected) {
-        throw new Error(`Expected xterm ${expected}; this host declares ${JSON.stringify(info.xterm)}`)
+    if (expected && info.xtermMajor !== Number(expected)) {
+        throw new Error(`Expected xterm ${expected}; this host declares ${JSON.stringify(info.xtermDeclaration)}`)
     }
 }
 

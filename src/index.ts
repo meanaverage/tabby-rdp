@@ -1,6 +1,6 @@
 import { Injector, NgModule } from '@angular/core'
 import {
-    AppService, CommandProvider, ConfigProvider, HotkeyProvider, HotkeysService, ProfileProvider, TabContextMenuItemProvider,
+    AppService, CommandProvider, ConfigProvider, HotkeyProvider, HotkeysService, PlatformService, ProfileProvider, TabContextMenuItemProvider,
     TabRecoveryProvider, VaultService,
 } from 'tabby-core'
 import { SettingsTabProvider } from 'tabby-settings'
@@ -10,6 +10,7 @@ import { DeskTriggerDecorator } from './desk'
 import { HeaderControls } from './header'
 import { DesktopKeyboard } from './keyboard'
 import { RemoteDesktopHelp } from './help'
+import { createHostCompatibility, HostCompatibility } from './hostCompat'
 import { useVault } from './signin'
 import { parseRdpFile } from './rdpFile'
 import {
@@ -25,6 +26,7 @@ import {
 
 @NgModule({
     providers: [
+        { provide: HostCompatibility, useFactory: createHostCompatibility, deps: [PlatformService] },
         { provide: HotkeyProvider, useClass: RemoteDesktopHotkeys, multi: true },
         { provide: ConfigProvider, useClass: RemoteDesktopConfig, multi: true },
         { provide: TabContextMenuItemProvider, useClass: RemoteDesktopContextMenu, multi: true },
@@ -42,7 +44,8 @@ import {
 })
 export default class RemoteDesktopModule {
     constructor (app: AppService, hotkeys: HotkeysService, desktop: RemoteDesktopService, header: HeaderControls, targets: RemoteTargets, keyboard: DesktopKeyboard, injector: Injector) {
-        installStyle()
+        const compat = injector.get(HostCompatibility)
+        installStyle(compat)
         header.install()
         // Passwords go to Tabby's Vault while it is enabled (as Tabby's SSH passwords do), else to the system keychain.
         try { useVault(injector.get(VaultService)) } catch { }
@@ -73,6 +76,6 @@ export default class RemoteDesktopModule {
         })
         // Handle for tests and troubleshooting from DevTools.
         const w = window as any
-        w.__remoteDesktop = { app, desktop, targets, desktopPaneOf, injector, execRemote, parseRdpFile, help: injector.get(RemoteDesktopHelp), updates: injector.get(UpdateCheck) }
+        w.__remoteDesktop = { app, desktop, targets, desktopPaneOf, injector, compat, execRemote, parseRdpFile, help: injector.get(RemoteDesktopHelp), updates: injector.get(UpdateCheck) }
     }
 }

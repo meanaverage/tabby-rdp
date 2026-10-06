@@ -116,6 +116,7 @@ g.window = {}
 const { HeaderControls } = require('../../dist/header.js')
 const { desktopActions, settingsMenu } = require('../../dist/ui.js')
 const { RemoteDesktopSettingsComponent } = require('../../dist/settingsPage.js')
+const { HostCompatibility } = require('../../dist/hostCompat.js')
 
 const zone = { run: (f: () => unknown) => f(), runOutsideAngular: (f: () => unknown) => f() }
 const alpha = { name: 'alpha' }
@@ -216,7 +217,7 @@ test('in full screen, without Tabby\'s header, the microphone shows over the win
 
 test('the note that typing goes into all desktops, at the top in the middle too, moves below the microphone over the window', () => {
     const { installStyle } = require('../../dist/desktop.service.js')
-    installStyle()
+    installStyle(new HostCompatibility({}))
     const css = (g.document.head as FakeElement).children.map(c => c.textContent).join('\n')
     assert.match(css, /\.trd-overlay\.trd-broadcast-on::before \{[^}]*position: absolute; top: 8px; left: 50%;\s*transform: translateX\(-50%\);/)
     const { controls, desktop } = header()
@@ -352,7 +353,7 @@ test('the settings page lists a profile\'s clipboard as it connects with it: its
     const element = { nativeElement: { querySelector: (selector: string) => selector === '[data-list=desktops]' ? list : null } }
     const desktop = { accounts: () => [], configuredDesktops: () => [] }
     const injector = { get: () => ({ getConfigProxyForProfile: proxy }) }
-    const settings = new RemoteDesktopSettingsComponent(element, desktop, {}, { store: { profiles, groups } }, {}, injector, zone, {})
+    const settings = new RemoteDesktopSettingsComponent(element, desktop, {}, { store: { profiles, groups } }, {}, injector, zone, {}, new HostCompatibility({}))
     settings.renderDesktops()
     assert.deepEqual(rows.slice(0, 3).map(row => /Clipboard: ([^<]*)/.exec(row.innerHTML)?.[1] ?? null),
         ['only from the remote desktop to this computer', 'off', null])
@@ -362,11 +363,26 @@ test('the settings page says which hosts a desktop added from an SSH tab is for:
     // The page as it is written (nothing after that is needed here).
     let html = ''
     const root = { set innerHTML (text: string) { html = text; throw new Error('written') } }
-    const settings = new RemoteDesktopSettingsComponent({ nativeElement: root }, {}, {}, { store: {} }, {}, {}, zone, {})
+    const settings = new RemoteDesktopSettingsComponent({ nativeElement: root }, {}, {}, { store: {} }, {}, {}, zone, {}, new HostCompatibility({}))
     assert.throws(() => settings.render(), /written/)
     // Not "an ssh typed in a terminal", which reads as an SSH tab's console, whose machines get no desktops of the tab's host.
     assert.equal(/data-tip="(A desktop added from an SSH tab[^"]*)"/.exec(html)?.[1],
         'A desktop added from an SSH tab&#39;s menu belongs to that host. That is for hosts without a profile, such as ssh run in a local terminal.')
+})
+
+test('copied connection logs include host compatibility information before the connection entries', () => {
+    const compat = new HostCompatibility({
+        name: () => 'Tabbz Preview', version: () => '1.0.238-beta.1', platform: 'darwin', electron: '43.7.0', node: '22.0.0',
+        terminalPackage: () => ({ devDependencies: { '@xterm/xterm': '^5' } }),
+    })
+    let copied = ''
+    const platform = { setClipboard: ({ text }: { text: string }) => { copied = text } }
+    const settings = new RemoteDesktopSettingsComponent({}, {}, {}, {}, platform, {}, zone, {}, compat)
+    settings.copyLog('Test desktop', ['connected: test desktop', 'resized: 800x600'])
+    const lines = copied.split('\n')
+    assert.match(lines[0], /^tabby-rdp .+ on .+: Test desktop$/)
+    assert.deepEqual(lines.slice(1, 5), compat.diagnosticLines())
+    assert.deepEqual(lines.slice(5), ['connected: test desktop', 'resized: 800x600'])
 })
 
 test('only the plugin\'s own hotkeys act: a name every object inherits does nothing, and throws nothing', async () => {

@@ -55,6 +55,18 @@ This checks a locally packed plugin in an isolated host profile, with dummy cred
 to require the live desktop checks. See [the host smoke instructions](test/README.md#host-upgrade-smoke-tests) for
 coverage and the release/nightly test matrix.
 
+## Host compatibility
+
+[`src/hostCompat.ts`](src/hostCompat.ts) owns host identity, optional metadata reads, and host capability probes.
+The plugin provides one `HostCompatibility` instance per window, available as `window.__remoteDesktop.compat` in
+DevTools. `snapshot(paneElement?)` reports host/runtime versions and observed capabilities; `null` means unknown or
+unobserved. Copied connection logs include its diagnostic lines.
+
+Keep host workarounds and terminal DOM adapters here. Probe the feature being used rather than inferring it from
+the application version: forks, nightlies and backports can have different features. Xterm information is the
+terminal package's declared dependency, with an unknown major for ranges spanning majors; it is not a verified
+runtime version. Modal capability is checked for every dialog, so theme and UI scale changes are respected.
+
 ## IronRDP
 
 Changes to IronRDP go in the patch series, one focused patch per change, with tests where IronRDP has a place for

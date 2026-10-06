@@ -13,6 +13,7 @@ import { esc, HelpTopic, HOTKEYS, RemoteDesktopHelp, SETTINGS_TAB_ID, TROUBLESHO
 import { installedVersion, UpdateCheck } from './updates'
 import { RDP_PROFILE_TYPE } from './targets'
 import { showable } from './unshowable'
+import { HostCompatibility } from './hostCompat'
 
 const REPO = 'https://github.com/meanaverage/tabby-rdp'
 
@@ -162,6 +163,7 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
         private injector: Injector,
         private zone: NgZone,
         private hotkeys: HotkeysService,
+        private compat: HostCompatibility,
     ) { }
 
     ngOnInit (): void {
@@ -1037,7 +1039,7 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
                 return '?'
             }
         })()
-        this.platform.setClipboard({ text: [`tabby-rdp ${version} on ${process.platform}: ${name}`, ...log].join('\n') })
+        this.platform.setClipboard({ text: [`tabby-rdp ${version} on ${process.platform}: ${name}`, ...this.compat.diagnosticLines(), ...log].join('\n') })
     }
 
     private showTab (id: string): void {

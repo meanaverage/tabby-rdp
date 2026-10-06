@@ -5,6 +5,7 @@ import { configText, ExtraDesktopConfig, xrdpFromHost } from './desktops'
 import { parseGateway } from './gateway'
 import { configNumber } from './osd'
 import { wakeFromText } from './wake'
+import { terminalInputs } from './hostCompat'
 
 /** host:port, [v6]:port, or a bare host (RDP's 3389); null if it doesn't look like an address. */
 export function parseAddress (text: string): { host: string, port: number } | null {
@@ -155,7 +156,7 @@ export function askDesktop (pane: HTMLElement, options: DesktopFormOptions): Pro
     }
     pane.appendChild(overlay)
     // Same as a desktop layer: the terminal underneath can't take the keyboard while the form shows.
-    const inputs = Array.from(pane.querySelectorAll<HTMLTextAreaElement>('textarea.xterm-helper-textarea')).filter(t => !t.disabled)
+    const inputs = terminalInputs(pane).filter(t => !t.disabled)
     inputs.forEach(t => { t.disabled = true })
     const focusForm = () => {
         if (!form.contains(document.activeElement)) {

@@ -80,6 +80,7 @@ g.window = {}
 const { RemoteDesktopService } = require('../../dist/desktop.service.js')
 const { RemoteDesktopContextMenu, settingsMenu } = require('../../dist/ui.js')
 const { RemoteDesktopSettingsComponent } = require('../../dist/settingsPage.js')
+const { HostCompatibility } = require('../../dist/hostCompat.js')
 const { RDPProfilesService } = require('../../dist/rdpProfile.js')
 const { desktopIdOf, desktopsFor, entryText, specOf } = require('../../dist/desktops.js')
 const signin = require('../../dist/signin.js')
@@ -198,7 +199,7 @@ test('the settings page lists every entry and profile by what of each is text, a
     const element = { nativeElement: { querySelector: (selector: string) => lists[selector] ?? null } }
     const injector = { get: () => ({ getConfigProxyForProfile: (p: any) => p }) }
     const zone = { run: (f: () => unknown) => f() }
-    const page = new RemoteDesktopSettingsComponent(element, svc, {}, { store: { profiles, groups: [] } }, {}, injector, zone, {})
+    const page = new RemoteDesktopSettingsComponent(element, svc, {}, { store: { profiles, groups: [] } }, {}, injector, zone, {}, new HostCompatibility({}))
     page.renderDesktops()
     const rows = lists['[data-list=desktops]'].children.map(row => row.innerHTML.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim())
     assert.deepEqual(rows, [
@@ -294,7 +295,7 @@ test('a desktop at a host named hyperv is no Hyper-V VM: it is listed, asked abo
     const lists: Record<string, Element> = { '[data-list=desktops]': new Element(), '[data-list=accounts]': new Element() }
     const element = { nativeElement: { querySelector: (selector: string) => lists[selector] ?? null } }
     const injector = { get: () => ({ getConfigProxyForProfile: (p: any) => p }) }
-    const page = new RemoteDesktopSettingsComponent(element, svc, {}, { store: { profiles: [], groups: [] } }, {}, injector, { run: (f: () => unknown) => f() }, {})
+    const page = new RemoteDesktopSettingsComponent(element, svc, {}, { store: { profiles: [], groups: [] } }, {}, injector, { run: (f: () => unknown) => f() }, {}, new HostCompatibility({}))
     page.renderDesktops()
     const rows = lists['[data-list=desktops]'].children.map(row => row.innerHTML.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim())
     assert.equal(rows[0], 'Hyper-V server hyperv:3389 behind h Through the gateway gw.example.com')

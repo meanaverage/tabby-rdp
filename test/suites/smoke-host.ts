@@ -51,6 +51,7 @@ await suite('smoke-host', async t => {
     for (const frontend of ['xterm', 'xterm-webgl']) {
         await ev(`H.config.store.terminal.frontend = ${JSON.stringify(frontend)}; await H.config.save(); H.local = await H.smokeLocal()`)
         check(`${frontend}: terminal input can take focus`, await ev(`H.local.frontend.focus(); const input = H.local.element.nativeElement.querySelector('textarea.xterm-helper-textarea'); return !!input && !input.disabled && document.activeElement === input`))
+        check(`${frontend}: shared compatibility reports this pane's input`, await ev('return RD.compat.snapshot(H.local.element.nativeElement).capabilities.terminalInput === true'))
         await ev('H.local.frontend.focus()')
         await t.type('echo SMOKE_CONSOLE_OK')
         await t.enter()
@@ -119,6 +120,7 @@ await suite('smoke-host', async t => {
                 controls: document.activeElement === input };
         `)
         check(`modal spacing ${value}: one effective drag region and usable controls`, drag.hit && drag.controls && drag.bars === (drag.native ? 0 : 1), drag)
+        check(`modal spacing ${value}: shared compatibility records the observed host capability`, await ev(`return RD.compat.snapshot().capabilities.nativeModalDragRegion === ${drag.native}`))
         check('profile editor offers the saved account', await ev(`return [...document.querySelectorAll('.modal rdp-profile-settings [name=account] option')].some(o => /Smoke dummy/.test(o.textContent))`))
         await ev(`H.inZone(() => RD.injector.get(require('@ng-bootstrap/ng-bootstrap').NgbModal).dismissAll())`)
         await waitFor('return !document.querySelector(".modal")', 5)

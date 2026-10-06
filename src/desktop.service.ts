@@ -36,6 +36,7 @@ import { formatGateway, Gateway, GatewaySignInError, openThroughGateway, parseGa
 import { CertificateDetails, describeCertificate, vouched, whyNotValid } from './authorities'
 import { scanVMs, vmSpec } from './vms'
 import { SessionLog } from './sessionLog'
+import { HostCompatibility, terminalInputs } from './hostCompat'
 import { UNSHOWABLE, withoutWordJoiners } from './unshowable'
 
 /**
@@ -503,7 +504,7 @@ export class DesktopSession {
     setVisible (visible: boolean): void {
         this.visible = visible
         this.overlay.style.display = visible ? '' : 'none'
-        this.container.querySelectorAll<HTMLTextAreaElement>('textarea.xterm-helper-textarea').forEach(input => {
+        terminalInputs(this.container).forEach(input => {
             input.disabled = visible
         })
         if (visible) {
@@ -3969,7 +3970,7 @@ export class RemoteDesktopService {
 }
 
 let styleInstalled = false
-export function installStyle (): void {
+export function installStyle (compat: HostCompatibility): void {
     if (styleInstalled) {
         return
     }
@@ -3977,7 +3978,7 @@ export function installStyle (): void {
     const style = document.createElement('style')
     style.textContent = STYLE + SIGNIN_STYLE + FILES_STYLE + STATS_STYLE + OSD_STYLE + DRAGBAR_STYLE + ACCOUNT_FORM_STYLE
     document.head.appendChild(style)
-    keepWindowDraggable()
+    keepWindowDraggable(compat)
 }
 
 /** A strip the height of the tab bar that stays a window drag region over a dialog (the plugin's, and Tabby's). */
@@ -3990,11 +3991,9 @@ const DRAGBAR_STYLE = `
  * Older Tabby dialogs cover the tab bar without a drag region. Supply their fallback strip, deferring to the host's
  * modal pseudo-element when it provides one. The plugin's own dialogs still need their strips (see settingsPage.ts).
  */
-function keepWindowDraggable (): void {
+function keepWindowDraggable (compat: HostCompatibility): void {
     const strip = (modal: Element) => {
-        const native = getComputedStyle(modal, '::before')
-        if (native.content !== 'none' && native.content !== 'normal' && native.display !== 'none' &&
-            native.getPropertyValue('-webkit-app-region') === 'drag' && parseFloat(native.height) > 0) {
+        if (compat.hasNativeModalDragRegion(modal)) {
             return
         }
         if (!modal.querySelector(':scope > .trd-form-dragbar')) {
