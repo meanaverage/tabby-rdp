@@ -38,7 +38,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
       # No install scripts: the build is tsc.
@@ -74,7 +74,7 @@ jobs:
       # (trusted publishing 11.5.1), and Node 22's is npm 10. This npm publishes with the job's identity, so it comes
       # inside Node.js's own download, which runs everything here anyway, not as a second download from the registry;
       # and a newer one comes in by a change here, not by its release.
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 26.8.2
           registry-url: https://registry.npmjs.org
