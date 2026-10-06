@@ -3987,12 +3987,16 @@ const DRAGBAR_STYLE = `
 `
 
 /**
- * Tabby's dialogs (ng-bootstrap modals) cover the whole window, tab bar included, with nothing marked as a drag
- * region, so the window can't be moved while one shows. Each gets a strip where the tab bar is; the dialog box itself
- * is below it. The plugin's own dialogs do the same (see settingsPage.ts).
+ * Older Tabby dialogs cover the tab bar without a drag region. Supply their fallback strip, deferring to the host's
+ * modal pseudo-element when it provides one. The plugin's own dialogs still need their strips (see settingsPage.ts).
  */
 function keepWindowDraggable (): void {
     const strip = (modal: Element) => {
+        const native = getComputedStyle(modal, '::before')
+        if (native.content !== 'none' && native.content !== 'normal' && native.display !== 'none' &&
+            native.getPropertyValue('-webkit-app-region') === 'drag' && parseFloat(native.height) > 0) {
+            return
+        }
         if (!modal.querySelector(':scope > .trd-form-dragbar')) {
             const bar = document.createElement('div')
             bar.className = 'trd-form-dragbar'
