@@ -15,6 +15,8 @@ export interface SavedAccount {
     name: string
     username: string
     domain?: string
+    /** Opaque credential-edit revision, synced with the account; never a password or password hash. */
+    credentialRevision?: string
 }
 
 /** The usable entries of `remoteDesktop.accounts` (hand-written ones may lack fields). */
@@ -29,7 +31,8 @@ export function accountsOf (store: any): SavedAccount[] {
         }
         seen.add(id)
         const domain = typeof a.domain === 'string' && a.domain.trim() ? a.domain.trim() : undefined
-        return [{ id, name: typeof a.name === 'string' && a.name.trim() ? a.name.trim() : signInName({ username, domain }), username, ...domain ? { domain } : {} }]
+        return [{ id, name: typeof a.name === 'string' && a.name.trim() ? a.name.trim() : signInName({ username, domain }), username,
+            ...domain ? { domain } : {}, ...typeof a.credentialRevision === 'string' ? { credentialRevision: a.credentialRevision } : {} }]
     })
 }
 

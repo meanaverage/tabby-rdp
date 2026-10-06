@@ -67,6 +67,10 @@ function service (remoteDesktop: Record<string, unknown> = {}, deps: { targets?:
     const notifications = { notice () { }, info () { }, error () { } }
     const zone = { run: (f: () => unknown) => f(), runOutsideAngular: (f: () => unknown) => f() }
     const svc = new RemoteDesktopService(deps.app ?? {}, deps.targets ?? {}, notifications, config, zone, {}, {}, deps.selector ?? {}, {})
+    const revisions = new Map<string, string>()
+    svc.accountRevisions = new (require('../../dist/accountRevisions.js').AccountRevisions)(() => ({
+        getItem: (key: string) => revisions.get(key) ?? null, setItem: (key: string, value: string) => revisions.set(key, value),
+    }), () => true)
     return { svc, store: config.store.remoteDesktop as any, config }
 }
 

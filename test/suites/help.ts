@@ -84,7 +84,13 @@ await suite('help', async t => {
     const accountOptions = await ev<string[]>('return [...document.querySelector(".modal rdp-profile-settings [name=account]").options].map(o => o.text)')
     check('its Account field offers the saved account and New account…', accountOptions.some(o => /Lab admin/.test(o)) && accountOptions.at(-1) === 'New account…', accountOptions)
     // The strip over the dialog, where the tab bar is (hit-tested at the corner: a small window's dialog covers the middle).
-    check('the window stays draggable by its tab bar', await ev('const bar = document.querySelector(".modal > .trd-form-dragbar"); const el = document.elementFromPoint(4, 4); return !!bar && getComputedStyle(bar).webkitAppRegion === "drag" && el === bar'))
+    check('the window stays draggable by its tab bar', await ev(`
+        const modal = document.querySelector('.modal'), bar = modal?.querySelector(':scope > .trd-form-dragbar');
+        const el = document.elementFromPoint(4, 4), native = modal && getComputedStyle(modal, '::before');
+        return !!bar && getComputedStyle(bar).webkitAppRegion === 'drag' && el === bar ||
+            !!native && native.content !== 'none' && native.content !== 'normal' && native.display !== 'none' &&
+            native.getPropertyValue('-webkit-app-region') === 'drag' && parseFloat(native.height) > 4 && el === modal;
+    `))
     await ev('RD.injector.get(require("@ng-bootstrap/ng-bootstrap").NgbModal).dismissAll()')
     await sleep(300)
 

@@ -37,7 +37,9 @@ jobs:
           grep -q 'vendor/iron-remote-desktop-rdp.js' pack.txt
           grep -q 'vendor/ironrdp_web_bg.wasm' pack.txt
           grep -q 'remote/trd-pty.py' pack.txt
-          ! grep -qE ' (src|test|testbed|docs|ironrdp)/' pack.txt
+          if grep -qE ' (src|test|testbed|ironrdp)/' pack.txt; then exit 1; fi
+          # The troubleshooting page links this one packaged guide; other documentation stays out.
+          awk '/ docs\// && !/ docs\/desk\.md[[:space:]]*$/ { bad = 1 } END { exit bad }' pack.txt
       - name: The package holds the commit's files
         # The check publish.yml makes before it stages a release, here on every change, so that nothing trips it
         # first at a release: vendor/ as the commit's vendor/SHA256SUMS lists it, and every file outside dist/ as

@@ -6,6 +6,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import Module, { createRequire } from 'node:module'
+import { PassThrough } from 'node:stream'
 
 const require = createRequire(import.meta.url)
 
@@ -34,6 +35,10 @@ function service () {
     const notifications = { notice () { }, info () { }, error () { } }
     const zone = { run: (f: () => unknown) => f(), runOutsideAngular: (f: () => unknown) => f() }
     const svc = new RemoteDesktopService({ tabs: [] }, {}, notifications, config, zone, {}, {}, {}, {})
+    const revisions = new Map<string, string>()
+    svc.accountRevisions = new (require('../../dist/accountRevisions.js').AccountRevisions)(() => ({
+        getItem: (key: string) => revisions.get(key) ?? null, setItem: (key: string, value: string) => revisions.set(key, value),
+    }), () => true)
     for (const method of ['applySize', 'watchSize', 'tip', 'label', 'syncIndicator']) {
         svc[method] = () => { }
     }
@@ -332,3 +337,136 @@ test('a sign-in that completes after its desktop was edited or removed doesn\'t 
     await signin.forgetCredentialsFor('10.0.0.5:3389', { direct: true, scope: '' })
     assert.deepEqual(await signedIn(direct), kept(direct))
 })
+
+test('unavailable account coordination reports an actionable error without changing config or secrets', async t => {
+    const svc = service()
+    const account = { id: 'shared', name: 'Account', username: 'user' }
+    svc.config.store.remoteDesktop.accounts = [account]
+    svc.accountRevisions = new (require('../../dist/accountRevisions.js').AccountRevisions)(() => ({}), () => false)
+    const messages: string[] = []
+    svc.notifications.error = (message: string) => messages.push(message)
+    svc.platform.showMessageBox = async () => ({ response: 0 })
+    stubs.keytar = { setPassword: () => assert.fail('unexpected store write'), deletePassword: () => assert.fail('unexpected store deletion') }
+    t.after(() => { delete stubs.keytar })
+    assert.match((await svc.saveAccount(account, 'unused')).keychainError, /Restart or update Tabby/)
+    assert.equal(await svc.confirmRemoveAccount(account.id), false)
+    assert.match(messages[0], /Restart or update Tabby/)
+    assert.deepEqual(svc.accounts(), [account])
+})
+
+for (const store of ['keychain', 'vault']) {
+    test(`account edits during an active ${store} write clean stale work before removal or replacement`, async t => {
+        const signin = require('../../dist/signin.js')
+        const saved = new Map<string, string>()
+        let finish!: () => void
+        let started!: () => void
+        let waiting: Promise<void>
+        const put = async (key: string, value: string) => {
+            if (JSON.parse(value).password === 'before') { started(); await waiting }
+            saved.set(key, value)
+        }
+        stubs.keytar = {
+            getPassword: async (_: string, key: string) => store === 'keychain' ? saved.get(key) ?? null : null,
+            setPassword: (_: string, key: string, value: string) => put(key, value),
+            deletePassword: async (_: string, key: string) => { if (store === 'keychain') { saved.delete(key) } },
+            findCredentials: async () => [],
+        }
+        signin.useVault(store === 'vault' ? {
+            isEnabled: () => true, isOpen: () => true, load: async () => ({ secrets: [] }),
+            addSecret: (secret: any) => put(secret.key.key, secret.value),
+            removeSecret: async (_: string, key: any) => { saved.delete(key.key) },
+        } : null)
+        t.after(() => { finish?.(); signin.useVault(null); delete stubs.keytar })
+        for (const action of ['remove', 'rename']) {
+            saved.clear()
+            waiting = new Promise<void>(resolve => { finish = resolve })
+            const writing = new Promise<void>(resolve => { started = resolve })
+            const svc = service()
+            const account = { id: 'shared', name: 'Account', username: 'user' }
+            svc.config.store.remoteDesktop.accounts = [account]
+            const old = svc.saveAccount(account, 'before')
+            await writing
+            const revision = svc.accounts()[0].credentialRevision
+            const edit = action === 'remove' ? svc.removeAccount(account.id) : svc.saveAccount({ ...account, username: 'renamed' }, 'after')
+            assert.equal(svc.accountRevisions.current(account.id, revision), false, 'explicit edit invalidates before waiting on the active store')
+            finish()
+            const [outcome] = await Promise.all([old, edit])
+            assert.match(outcome.keychainError, /newer change was kept/)
+            if (action === 'remove') {
+                assert.equal(saved.has('account#shared'), false)
+                assert.deepEqual(svc.accounts(), [])
+            } else {
+                assert.deepEqual(JSON.parse(saved.get('account#shared')!), { username: 'renamed', password: 'after' })
+                assert.equal(svc.accounts()[0].username, 'renamed')
+            }
+        }
+    })
+
+    for (const route of ['desktop', 'gateway']) {
+        test(`${route} shared-account persistence (${store}) honors newer edits, names, removal and cancelled forms`, async t => {
+            const signin = require('../../dist/signin.js')
+            const gateway = require('../../dist/gateway.js')
+            const open = gateway.openThroughGateway
+            const ask = signin.askCredentials
+            const saved = new Map<string, string>()
+            const extraKeychain = new Map<string, string>()
+            const keychain = store === 'keychain' ? saved : extraKeychain
+            stubs.keytar = {
+                getPassword: async (_: string, key: string) => keychain.get(key) ?? null,
+                setPassword: async (_: string, key: string, value: string) => { keychain.set(key, value) },
+                deletePassword: async (_: string, key: string) => { keychain.delete(key) },
+                findCredentials: async () => [...keychain].map(([account, password]) => ({ account, password })),
+            }
+            signin.useVault(store === 'vault' ? {
+                isEnabled: () => true, isOpen: () => true,
+                load: async () => ({ secrets: [...saved].map(([key, value]) => ({ type: signin.VAULT_SECRET_TYPE, key: { key }, value })) }),
+                getSecret: async (_: string, key: any) => ({ value: saved.get(key.key) }),
+                addSecret: async (secret: any) => { saved.set(secret.key.key, secret.value) },
+                removeSecret: async (_: string, key: any) => { saved.delete(key.key) },
+            } : null)
+            t.after(() => { signin.useVault(null); gateway.openThroughGateway = open; signin.askCredentials = ask; delete stubs.keytar })
+            for (const action of ['unchanged', 'password', 'rename', 'remove', 'cancel', 'stale']) {
+                saved.clear(); extraKeychain.clear()
+                const svc = service()
+                const account = { id: 'shared', name: 'Account', username: 'user' }
+                svc.config.store.remoteDesktop.accounts = [account]
+                svc.config.store.remoteDesktop.gatewayPasswordsMigrated = true
+                if (action === 'stale') { svc.accountRevisions.change(account.id) }
+                const pane = {}
+                const between = async () => {
+                    if (action === 'password') { await svc.saveAccount(account, 'new-value') }
+                    if (action === 'rename') { await svc.saveAccount({ ...account, username: 'new-user' }) }
+                    if (action === 'remove') { await svc.removeAccount(account.id) }
+                }
+                const { rdp, ready } = ironrdp(async () => { await between(); return { run: async () => ({ reason: () => 'ended' }) } })
+                const s = session(svc, pane, ready)
+                s.credentialKey = s.key
+                s.spec.account = account.id
+                s.spec.gatewayAccount = account.id
+                const options: any[] = []
+                signin.askCredentials = async (_: unknown, form: any) => {
+                    options.push(form)
+                    return action === 'cancel' ? null : { username: 'user', password: 'old-value', remember: true }
+                }
+                const gw = { host: 'gateway.example', port: 443 }
+                if (route === 'desktop') {
+                    const found = await svc.endpointFor(pane, target, s.spec, s, false)
+                    if (found) { await svc.run(pane, target, s.spec, s, rdp, found) }
+                    else { assert.equal(action, 'cancel') }
+                } else {
+                    const own = await svc.gatewayAccountFor(s.spec, s, gw)
+                    gateway.openThroughGateway = async () => { await between(); return new PassThrough() }
+                    if (own) { (await svc.throughGateway(target, s.spec, s, gw, { ...endpoint, gatewayAccount: own })).destroy() }
+                    else { assert.equal(action, 'cancel') }
+                }
+                for (let i = 0; i < 12; i++) { await new Promise(resolve => setImmediate(resolve)) }
+                assert.equal(options[0].canRemember, action !== 'stale')
+                if (action === 'stale') { assert.match(options[0].error, /save the account again in Settings and reopen/) }
+                const stored = saved.get('account#shared')
+                assert.equal(stored && JSON.parse(stored).password, action === 'unchanged' ? 'old-value' : action === 'password' ? 'new-value' : undefined, `${route}: ${action}`)
+                if (action === 'rename') { assert.equal(svc.accounts()[0].username, 'new-user') }
+                if (action === 'remove') { assert.equal(svc.accounts().length, 0) }
+            }
+        })
+    }
+}

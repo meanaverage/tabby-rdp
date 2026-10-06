@@ -16,6 +16,7 @@ import { Microphone } from './microphone'
 import { SharedDrives, SharedFolder, sharedFolders } from './drives'
 import { askDesktop, formatAddress } from './desktopForm'
 import { accountKey, accountsOf, newAccountId, SavedAccount, signInName } from './accounts'
+import { ACCOUNT_REMEMBER_UNAVAILABLE, AccountRevisions } from './accountRevisions'
 import { NewAccountInput, STYLE as ACCOUNT_FORM_STYLE } from './accountForm'
 import { FileTransfer, STYLE as FILES_STYLE, uniquePath } from './fileTransfer'
 import { configText, desktopIdOf, DesktopSpec, desktopsFor, DIRECT_KEY, entryText, ExtraDesktopConfig, isDesktopEntry, keyFields, keyParts, keyUser, OWN_DESKTOP, OwnDesktopFound, sessionKey, specOf, xrdpUnasked } from './desktops'
@@ -25,8 +26,8 @@ import { MICROPHONE_NOTE, parseRdpFile } from './rdpFile'
 import { prepareRemoteDesktop, RemoteDesktopEndpoint } from './remoteSetup'
 import { normalizeFingerprint, RDCleanPathProxy, startRDCleanPathProxy, withoutToken } from './rdcleanpath'
 import {
-    askCredentials, Credentials, forgetCredentials, forgetCredentialsFor, forgetCredentialsOrFail, forgetMark, forgetOnce, forgottenSince, gatewayScope, hasCredentials,
-    isFor, loadCredentials, moveCredentialsFor, saveCredentials, Store, storeName, STYLE as SIGNIN_STYLE,
+    askCredentials, Credentials, forgetCredentials, forgetCredentialsFor, forgetCredentialsIf, forgetCredentialsOrFail, forgetMark, forgetOnce, forgottenSince, gatewayScope, hasCredentials,
+    isFor, loadCredentials, moveCredentialsFor, saveCredentials, saveCredentialsIf, Store, storeName, STYLE as SIGNIN_STYLE,
 } from './signin'
 import { isSSHTab } from './ssh'
 import { desktopUp, shutDownWhenIdle, waitForRdp, wakeDesktop } from './wake'
@@ -122,6 +123,7 @@ interface Endpoint {
     saveLabel?: string
     /** The account's sign-in name when the prompt was made: saved only while the account still has it. */
     saveFor?: string
+    accountRevision?: string
     /**
      * Where the forgets stood when the prompt was made (see forgetMark): a desktop's own sign-in is saved only if
      * nothing was forgotten for it since, so that an edit or a removal made while the server delayed it isn't undone.
@@ -146,6 +148,7 @@ interface GatewaySignIn {
     saveKey: string
     saveLabel: string
     saveFor: string
+    accountRevision?: string
 }
 
 /** A server certificate the proxy refused (see checkCertificate). */
@@ -999,6 +1002,13 @@ export class RemoteDesktopService {
         return accountsOf(this.config.store.remoteDesktop)
     }
 
+    private accountRevisions = new AccountRevisions()
+
+    private accountCurrent (key: string, name: string | undefined, revision: string | undefined): boolean {
+        const account = this.accounts().find(a => accountKey(a.id) === key)
+        return !!account && signInName(account) === name && (account.credentialRevision ?? '') === revision && this.accountRevisions.current(account.id, revision)
+    }
+
     /**
      * The desktops that sign in with a saved account, or sign in to their RD Gateway with it: configured ones behind
      * SSH hosts, and RDP profiles (their own choice, or their profile group's default when they make none). Each comes
@@ -1030,14 +1040,26 @@ export class RemoteDesktopService {
             username: account.username.trim(),
             ...account.domain?.trim() ? { domain: account.domain.trim() } : {},
         }
+        let revision: string
+        try { revision = this.accountRevisions.change(entry.id) } catch (error: any) {
+            return { id: entry.id, keychainError: error?.message ?? String(error) }
+        }
+        entry.credentialRevision = revision
+        // Invalidate before any store await. Keep the old sign-in name until changing its password succeeds.
+        if (old) {
+            this.config.store.remoteDesktop.accounts = list.map(a => a.id === old.id ? { ...a, credentialRevision: revision } : a)
+            await this.config.save()
+        }
+        const current = () => this.accountRevisions.current(entry.id, revision) && (!old || this.accounts().some(a => a.id === entry.id && a.credentialRevision === revision))
         // The password first: a new user name must not be written while the old password (for the old name) stays, nor
         // a new password reported as saved when the store refused it.
         let keychainError: string | undefined
         if (password !== undefined && password !== '') {
-            await saveCredentials(accountKey(entry.id), { username: signInName(entry), password }, `saved account ${entry.name}`).catch(e => { keychainError = String(e?.message ?? e) })
+            await saveCredentialsIf(accountKey(entry.id), { username: signInName(entry), password }, current, `saved account ${entry.name}`).catch(e => { keychainError = String(e?.message ?? e) })
         } else if (old && signInName(old) !== signInName(entry)) {
-            await forgetCredentialsOrFail(accountKey(entry.id)).catch(e => { keychainError = `the old password couldn't be removed: ${e?.message ?? e}` })
+            await forgetCredentialsIf(accountKey(entry.id), current).catch(e => { keychainError = `the old password couldn't be removed: ${e?.message ?? e}` })
         }
+        if (!current()) { return { id: entry.id, keychainError: 'The account changed again while this edit was being saved. The newer change was kept.' } }
         if (keychainError && !old) {
             // Not added at all: a retry would otherwise make a second account.
             return { id: entry.id, keychainError: `${keychainError}. The account wasn't added` }
@@ -1051,7 +1073,8 @@ export class RemoteDesktopService {
                 delete entry.domain
             }
         }
-        this.config.store.remoteDesktop.accounts = old ? list.map(a => a === old ? entry : a) : [...list, entry]
+        const now = this.accounts()
+        this.config.store.remoteDesktop.accounts = old ? now.map(a => a.id === old.id ? entry : a) : [...now, entry]
         await this.config.save()
         this.changed$.next()
         return { id: entry.id, keychainError }
@@ -1091,12 +1114,18 @@ export class RemoteDesktopService {
         if (response !== 0) {
             return false
         }
-        await this.removeAccount(id)
-        return true
+        try {
+            await this.removeAccount(id)
+            return true
+        } catch (error: any) {
+            this.notifications.error(`The account could not be fully removed: ${error?.message ?? error}`)
+            return false
+        }
     }
 
     /** Removes a saved account and its password; desktops that used it go back to asking. */
     async removeAccount (id: string): Promise<void> {
+        const revision = this.accountRevisions.change(id)
         const store = this.config.store.remoteDesktop
         store.accounts = this.accounts().filter(a => a.id !== id)
         if (this.configuredDesktops().some(d => isDesktopEntry(d) && (d.account === id || d.gatewayAccount === id))) {
@@ -1133,7 +1162,7 @@ export class RemoteDesktopService {
         }
         await this.config.save()
         this.changed$.next()
-        await forgetCredentialsOrFail(accountKey(id)).catch(e => this.notifications.error(`The account is removed, but its password could not be: ${e?.message ?? e}`))
+        await forgetCredentialsIf(accountKey(id), () => this.accountRevisions.current(id, revision)).catch(e => this.notifications.error(`The account is removed, but its password could not be: ${e?.message ?? e}`))
     }
 
     /** `remoteDesktop.desktops`: the desktops configured behind SSH hosts. */
@@ -2990,6 +3019,7 @@ export class RemoteDesktopService {
         }
         session.status('')
         const mark = forgetMark()
+        const accountRevision = account && this.accountRevisions.capture(account)
         // The host's own desktops (its own, or its xrdp besides GNOME) and direct ones need no "via". A machine reached
         // with ssh typed in a host's console says which host: that host is what leads there.
         const hostOwn = spec.id === OWN_DESKTOP || spec.kind === 'xrdp' && spec.host === '127.0.0.1'
@@ -2998,8 +3028,8 @@ export class RemoteDesktopService {
             title: spec.hyperv ? `Sign in to ${target.label}${target.via ? ` (via ${target.via})` : ''}, to open ${spec.name}`
                 : hostOwn && !target.via || target.direct ? `Sign in to ${spec.name}` : `Sign in to ${spec.name} (via ${via})`,
             username: account ? signInName(account) : spec.username,
-            error: retryError,
-            canRemember: true,
+            error: [retryError, account && accountRevision === undefined ? ACCOUNT_REMEMBER_UNAVAILABLE : ''].filter(Boolean).join(' '),
+            canRemember: !account || accountRevision !== undefined,
             account: account?.name,
         }, session.disposed)
         // Only in the pane in front, as when connected (see run()): the form gets the keyboard when its pane does.
@@ -3010,7 +3040,7 @@ export class RemoteDesktopService {
         return entered && {
             host: spec.host, port: spec.port, credentials: entered, remember: entered.remember, domain: account ? account.domain ?? '' : undefined,
             saveKey: account && accountKey(account.id), saveLabel: account && `saved account ${account.name}`, saveFor: account && signInName(account),
-            hyperv, mark,
+            hyperv, mark, accountRevision,
         }
     }
 
@@ -3169,7 +3199,7 @@ export class RemoteDesktopService {
             session.log.push('gateway: its saved account no longer exists; signing in with the desktop\'s')
             return undefined
         }
-        const signIn = { domain: account.domain, saveKey: accountKey(account.id), saveLabel: `saved account ${account.name}`, saveFor: signInName(account) }
+        const signIn = { domain: account.domain, saveKey: accountKey(account.id), saveLabel: `saved account ${account.name}`, saveFor: signInName(account), accountRevision: this.accountRevisions.capture(account) }
         const saved = retryError ? null : await loadCredentials(signIn.saveKey)
         if (saved && saved.username === signInName(account)) {
             session.log.push(`gateway: the saved account "${account.name}"`)
@@ -3179,8 +3209,8 @@ export class RemoteDesktopService {
         const asked = askCredentials(session.overlay, {
             title: `Sign in to the gateway ${gateway.host}, to reach ${spec.name}`,
             username: signInName(account),
-            error: retryError,
-            canRemember: true,
+            error: [retryError, signIn.accountRevision === undefined ? ACCOUNT_REMEMBER_UNAVAILABLE : ''].filter(Boolean).join(' '),
+            canRemember: signIn.accountRevision !== undefined,
             account: account.name,
         }, session.disposed)
         // Only in the pane in front (see endpointFor).
@@ -3210,12 +3240,10 @@ export class RemoteDesktopService {
             // Entered a moment ago and taken by the gateway: kept, while the account is still what it was signed in as.
             if (own?.remember) {
                 own.remember = false
-                const accountNow = this.accounts().find(a => accountKey(a.id) === own.saveKey)
-                if (accountNow && signInName(accountNow) === own.saveFor) {
-                    saveCredentials(own.saveKey, own.credentials, own.saveLabel).then(
-                        () => session.log.push(`gateway: saved as the account's password in ${storeName()}`),
-                        e => session.log.push(`gateway: ${storeName()}: ${e?.message ?? e}`))
-                }
+                saveCredentialsIf(own.saveKey, own.credentials,
+                    () => this.accountCurrent(own.saveKey, own.saveFor, own.accountRevision), own.saveLabel).then(
+                    saved => session.log.push(saved ? `gateway: saved as the account's password in ${storeName()}` : 'gateway: not saved: the account changed meanwhile'),
+                    e => session.log.push(`gateway: ${storeName()}: ${e?.message ?? e}`))
             }
             return stream
         } catch (e: any) {
@@ -3876,10 +3904,12 @@ export class RemoteDesktopService {
             this.changed$.next()
             // Under a saved account only while that account is still there with the same sign-in name: the prompt may
             // have been open while it was removed or changed in Settings.
-            const accountNow = endpoint.saveKey ? this.accounts().find(a => accountKey(a.id) === endpoint.saveKey) : undefined
-            if (endpoint.remember && endpoint.saveKey && (!accountNow || signInName(accountNow) !== endpoint.saveFor)) {
-                session.log.push(`sign-in: not saved: the account ${accountNow ? 'changed' : 'was removed'} meanwhile`)
-            } else if (endpoint.remember && !endpoint.saveKey && endpoint.mark !== undefined && forgottenSince(session.credentialKey, endpoint.mark)) {
+            if (endpoint.remember && endpoint.saveKey) {
+                const key = endpoint.saveKey
+                saveCredentialsIf(key, credentials, () => this.accountCurrent(key, endpoint.saveFor, endpoint.accountRevision), endpoint.saveLabel).then(
+                    saved => session.log.push(saved ? `sign-in: saved as the account's password in ${storeName()}` : 'sign-in: not saved: the account changed meanwhile'),
+                    e => session.log.push(`sign-in: ${storeName()}: ${e?.message ?? e}`))
+            } else if (endpoint.remember && endpoint.mark !== undefined && forgottenSince(session.credentialKey, endpoint.mark)) {
                 // Edited (its user name, gateway or address) or removed while the server delayed the sign-in: what was
                 // forgotten then stays forgotten, and the desktop asks the next time.
                 session.log.push('sign-in: not saved: the desktop was changed or removed meanwhile')
@@ -3957,12 +3987,16 @@ const DRAGBAR_STYLE = `
 `
 
 /**
- * Tabby's dialogs (ng-bootstrap modals) cover the whole window, tab bar included, with nothing marked as a drag
- * region, so the window can't be moved while one shows. Each gets a strip where the tab bar is; the dialog box itself
- * is below it. The plugin's own dialogs do the same (see settingsPage.ts).
+ * Older Tabby dialogs cover the tab bar without a drag region. Supply their fallback strip, deferring to the host's
+ * modal pseudo-element when it provides one. The plugin's own dialogs still need their strips (see settingsPage.ts).
  */
 function keepWindowDraggable (): void {
     const strip = (modal: Element) => {
+        const native = getComputedStyle(modal, '::before')
+        if (native.content !== 'none' && native.content !== 'normal' && native.display !== 'none' &&
+            native.getPropertyValue('-webkit-app-region') === 'drag' && parseFloat(native.height) > 0) {
+            return
+        }
         if (!modal.querySelector(':scope > .trd-form-dragbar')) {
             const bar = document.createElement('div')
             bar.className = 'trd-form-dragbar'
