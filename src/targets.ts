@@ -191,7 +191,15 @@ export class SystemSSHTarget implements RemoteTarget {
             child.stderr.on('data', d => { stderr = (stderr + d).slice(-4096) })
             const timer = setTimeout(() => stop(new Error('Remote command timed out after 60s')), 60000)
             child.on('error', reject)
-            child.on('exit', code => {
+            // ssh can exit before it reads stdin, or the command may not use it. Its status and stderr say why:
+            // EPIPE on the input pipe must not escape as an uncaught error or replace ssh's own explanation.
+            child.stdin.on('error', (e: NodeJS.ErrnoException) => {
+                if (e.code !== 'EPIPE') {
+                    stop(e)
+                }
+            })
+            // All output, and any input pipe error, has arrived only once the process's streams have closed.
+            child.on('close', code => {
                 clearTimeout(timer)
                 if (stopped) {
                     reject(stopped)

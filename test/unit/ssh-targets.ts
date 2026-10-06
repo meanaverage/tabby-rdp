@@ -135,6 +135,20 @@ test('a command through the system ssh that fails says why in the host\'s words,
     })
 })
 
+test('ssh refusing a command before it reads stdin reports its own error, without an uncaught broken pipe', { skip: process.platform === 'win32' }, async () => {
+    // More than the pipe can hold, and ssh never reads it: a write must fail even when the machine is fast.
+    await withCommand('ssh', 'exec 0<&-; printf "channel refused\\n" >&2; exit 255', async () => {
+        await assert.rejects(system().exec('true', 'x'.repeat(1 << 20)), /^Error: ssh to h failed: channel refused$/)
+    })
+})
+
+test('a command that does not read stdin still returns its output when its input pipe closes', { skip: process.platform === 'win32' }, async () => {
+    // A remote command's own exit status remains its output's business, even if it ignores what we sent it.
+    await withCommand('ssh', 'exec 0<&-; printf "answer\\n"; exit 1', async () => {
+        assert.equal(await system().exec('false', 'x'.repeat(1 << 20)), 'answer\n')
+    })
+})
+
 test('a tunnel through the system ssh keeps only the end of what ssh prints, however much the host has it print', { skip: process.platform === 'win32' }, async () => {
     // ssh prints a host's sign-in banners, for as long as the tunnel lasts, and the host decides how much: 32 MB here.
     // The tunnel says it is up once that is all printed, and lasts until it is closed.

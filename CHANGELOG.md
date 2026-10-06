@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+**Fixed**
+- **Commands through the system SSH report SSH's own failure** when it exits before reading their input,
+  instead of letting a broken-pipe error escape unhandled. Commands that ignore their input still return their output.
+
 **Changed**
 - **CI and the release workflow check out the code with actions/checkout 7.0.1** (#56), pinned to its commit as before,
   in place of 4.4.0. Nothing in the package changes.
