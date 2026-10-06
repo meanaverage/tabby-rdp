@@ -9,9 +9,11 @@ public IronRDP binary and patch series; no held IronRDP security changes are inc
 - Instantiate fresh glue and WASM for every connection attempt, including sign-in retries and reconnects.
 - Keep backend classes, heap tables, cached memory views, finalizers and extension objects together per desktop.
 - Observe WASM exports for traps, and signal that desktop even if a Rust async task leaves `run()` pending. Close
-  that desktop's proxy; the existing bounded reconnect policy creates a fresh backend for that pane.
+  that desktop's proxy; the existing bounded reconnect policy creates a fresh backend for that pane. A connection
+  that stayed up for 30 seconds resets the backoff even when it ends through an asynchronous trap.
 - Release the component, clipboard listeners/loop, video decoder, sound, microphone, file provider, shared drives
-  and size observer when an attempt ends. Clear references to the old backend. Skip Rust finalizers after a trap.
+  and size observer when an attempt ends. Restore and release the statistics indicator's canvas hook, including
+  while the ended desktop and its snapshot remain open. Skip Rust finalizers after a trap.
 - Own and cancel the backend's browser timers and event listeners on a trap or normal disposal. Rust cannot do
   that cleanup after an abort; the initial live fault test found three retained heaps through interval callbacks.
 - Keep a plain pixel copy of the last frame for the dimmed disconnect screen, while releasing the old component.
@@ -35,16 +37,24 @@ node scripts/smoke-ironrdp-instances.mjs
 The tests use real IronRDP WASM to show distinct classes, independent clipboard data and independent memory growth.
 A tiny synthetic WASM module containing `unreachable` tests trap notification, continued operation of another
 backend, and recovery with a new instance of the same compiled module. Service tests cover cleanup after failed
-shutdown and an asynchronous trap whose run promise never resolves.
+shutdown, asynchronous traps whose run promises never resolve, stable-connection backoff resets, bounded repeated
+faults, and late Rust settlement after a retry or replacement session. Statistics tests cover releasing the canvas
+hook on hide/end/replacement, restoring the original drawing method, and rehooking without duplicate frame counts.
 
 The browser smoke script starts isolated headless Chrome with a disposable profile, mounts two actual web components
-with distinct backends, closes one, mounts a replacement and closes both. It checks component readiness and all
-seven component-owned global listeners; it makes no RDP connection. Set `CHROME_BIN` to a Chromium executable if
-it is not installed at the default macOS Chrome path.
+with distinct backends, closes one, mounts a replacement and closes both. It also mounts a fourth component in the
+actual `DesktopSession` class with statistics enabled, ends it, and checks that its WASM memory is collected while
+the session, indicator and pixel snapshot remain alive. The DOM-facing application code is compiled from source
+into the test page. The script checks component readiness, snapshot pixels and all seven component-owned global
+listeners; it makes no RDP connection. Set `CHROME_BIN` to a Chromium executable if it is not installed at the default
+macOS Chrome path.
 
-Local verification passed: build and typecheck; 484 unit tests (482 passed, two existing Electron-only skips);
-headless Chrome smoke (three components ready, seven listeners per component, zero remaining owned listeners);
-factory output identical with the project's and web build's TypeScript parsers.
+Initial local verification passed: build and typecheck; 484 unit tests (482 passed, two existing Electron-only skips);
+factory output identical with the project's and web build's TypeScript parsers. The subsequent lifecycle review
+fixes passed build, typecheck and 105 targeted unit tests. Their new regressions reproduced five failures against
+the original build before passing with the fixes. Updated headless Chrome smoke passed: four components ready,
+seven listeners per component, zero remaining owned listeners, and the ended backend's memory collected with its
+session and snapshot retained. These follow-up checks made no live RDP connections.
 
 ## Live verification, 2026-10-06
 

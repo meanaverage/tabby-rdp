@@ -578,6 +578,7 @@ export class DesktopSession {
             }
         })
         this.connectionDisposers.splice(0).forEach(clean)
+        clean(() => this.indicator?.setActive(false))
         clean(() => this.ui?.shutdown())
         // Removing the component stops its clipboard loop and removes its global listeners.
         clean(() => this.host.replaceChildren(...picture ? [picture] : []))
@@ -628,7 +629,6 @@ export class DesktopSession {
         clearTimeout(this.labelTimer)
         this.container.removeEventListener('focusin', this.reclaimFocus, true)
         this.disposers.forEach(f => f())
-        this.indicator?.dispose()
         this.endConnection(false)
         this.proxy?.close()
         this.overlay.remove()
@@ -3767,6 +3767,7 @@ export class RemoteDesktopService {
         pane: DesktopPane, target: RemoteTarget, spec: DesktopSpec, session: DesktopSession, rdp: any, endpoint: Endpoint,
     ): Promise<{ connected: boolean, signInFailed?: string, gatewayRefused?: boolean, withoutNla?: boolean, error?: string, reason?: string, certificate?: CertificateProblem }> {
         const attempt = new AbortController()
+        let connectedAt: number | undefined
         let unwatch: (() => void) | undefined
         const trapped = new Promise<{ connected: boolean, error: string }>(resolve => {
             unwatch = rdp.runtime?.onTrap((error: Error) => {
@@ -3779,20 +3780,26 @@ export class RemoteDesktopService {
         })
         try {
             return await Promise.race([
-                this.runConnection(pane, target, spec, session, rdp, endpoint, attempt.signal),
+                this.runConnection(pane, target, spec, session, rdp, endpoint, attempt.signal, at => { connectedAt = at }),
                 trapped,
                 session.disposed.then(() => ({ connected: false })),
             ])
         } finally {
             attempt.abort()
             unwatch?.()
+            // Rust's run() can stay pending after an asynchronous trap. Account for the completed attempt here,
+            // exactly once, and never update retry state belonging to a replacement session in this pane.
+            if (connectedAt !== undefined && this.sessions.get(pane) === session) {
+                this.reconnectedUntilNow(pane, connectedAt)
+            }
             session.endConnection?.()
             rdp.runtime?.dispose?.()
         }
     }
 
     private async runConnection (
-        pane: DesktopPane, target: RemoteTarget, spec: DesktopSpec, session: DesktopSession, rdp: any, endpoint: Endpoint, signal: AbortSignal,
+        pane: DesktopPane, target: RemoteTarget, spec: DesktopSpec, session: DesktopSession, rdp: any, endpoint: Endpoint,
+        signal: AbortSignal, onConnected: (at: number) => void,
     ): Promise<{ connected: boolean, signInFailed?: string, gatewayRefused?: boolean, withoutNla?: boolean, error?: string, reason?: string, certificate?: CertificateProblem }> {
         const credentials = endpoint.credentials
         const alive = () => !signal.aborted && this.sessions.get(pane) === session
@@ -3956,6 +3963,8 @@ export class RemoteDesktopService {
             if (!alive()) {
                 return { connected: false }
             }
+            const connectedAt = Date.now()
+            onConnected(connectedAt)
             session.ui.setVisibility(true)
             this.applyKeyboardMode(session)
             session.remoteSize = { width, height, scale: 100 }
@@ -3999,11 +4008,13 @@ export class RemoteDesktopService {
                     e => session.log.push(`sign-in: ${storeName()}: ${e?.message ?? e}`))
             }
             this.focusIfInFront(pane, session)
-            const connectedAt = Date.now()
             let end: any
             try {
                 end = await info.run()
             } catch (e: any) {
+                if (!alive()) {
+                    return { connected: false }
+                }
                 if (session.h264?.failed) {
                     // Reconnects (automatically, like any dropped connection) without H.264, unless the browser only
                     // took an idle decoder back (a hidden window): then with it, as a new stream starts with a key frame.
@@ -4023,15 +4034,8 @@ export class RemoteDesktopService {
                     return { connected: false, signInFailed: `${target.label} ended the connection at once: this account may not open ${spec.name}'s console. Use an administrator of the host, a member of its Hyper-V Administrators, or an account given access with Grant-VMConnectAccess.` }
                 }
                 return { connected: true, error }
-            } finally {
-                // The server can't close the microphone, or its files, once the connection is gone.
-                session.mic?.close()
-                session.drives?.dispose()
-                if (alive()) {
-                    this.reconnectedUntilNow(pane, connectedAt)
-                }
             }
-            return { connected: true, reason: end?.reason?.() }
+            return alive() ? { connected: true, reason: end?.reason?.() } : { connected: false }
         } catch (e: any) {
             return { connected: false, error: e?.message ?? String(e) }
         }

@@ -1749,16 +1749,17 @@ test('ending a backend releases its browser resources and references, even when 
     desktop.host.appendChild(new FakeElement('iron-remote-desktop'))
     desktop.ui = { shutdown () { closed.push('ui'); throw new WebAssembly.RuntimeError('synthetic trap') } }
     desktop.stopSending = () => { }
+    desktop.indicator = { setActive (active: boolean) { assert.equal(active, false); closed.push('stats') } }
     for (const name of ['audio', 'h264', 'mic', 'files', 'drives']) {
         desktop[name] = { close: () => closed.push(name), dispose: () => closed.push(name) }
     }
     desktop.onConnectionEnd(() => closed.push('observer'))
     desktop.endConnection()
-    assert.deepEqual(closed, ['observer', 'ui', 'audio', 'h264', 'mic', 'files', 'drives'])
+    assert.deepEqual(closed, ['observer', 'stats', 'ui', 'audio', 'h264', 'mic', 'files', 'drives'])
     assert.equal(desktop.host.children.length, 0)
     for (const name of ['ui', 'stopSending', 'audio', 'h264', 'mic', 'files', 'drives']) assert.equal(desktop[name], null)
     desktop.endConnection()
-    assert.equal(closed.length, 7)
+    assert.deepEqual(closed.slice(8), ['stats'])
     desktop.dispose()
 })
 

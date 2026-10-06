@@ -419,7 +419,7 @@ async function connecting (service: any, pane: any, session: any, rdp: Record<st
         audioInput: (callback: (message: unknown) => void) => { microphone = callback; return 'microphone' },
         audioInputData: () => 'audio',
         ...rdp,
-    }, { host: '10.0.0.5', port: 3389, credentials: { username: 'u', password: 'p' } }, new AbortController().signal)
+    }, { host: '10.0.0.5', port: 3389, credentials: { username: 'u', password: 'p' } }, new AbortController().signal, () => { })
     assert.equal(outcome.error, 'not connected here')
     return microphone as ((message: unknown) => void) | null
 }
