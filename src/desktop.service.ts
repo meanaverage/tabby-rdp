@@ -79,6 +79,7 @@ const STYLE = `
 .trd-overlay { position: absolute; inset: 0; z-index: 30; display: flex; background: #111; }
 .trd-host { flex: auto; min-width: 0; min-height: 0; display: flex; }
 .trd-host iron-remote-desktop { flex: auto; }
+.trd-last-frame { max-width: 100%; max-height: 100%; object-fit: contain; align-self: center; margin: auto; }
 .trd-status { position: absolute; inset: 0; display: flex; flex-direction: column; gap: 14px; align-items: center;
     justify-content: center; padding: 2em; text-align: center; color: #bbb; font-size: 13px; white-space: pre-line;
     pointer-events: none; }
@@ -552,14 +553,34 @@ export class DesktopSession {
     }
 
     /** Release browser resources and references to one backend, including when its WASM has trapped. */
-    endConnection (): void {
+    endConnection (keepPicture = true): void {
         const clean = (f: () => void) => {
             try { f() } catch (error: any) { this.log.push(`cleanup: ${error?.message ?? error}`) }
         }
+        let picture = keepPicture ? this.host.querySelector<HTMLCanvasElement>('.trd-last-frame') : null
+        // Preserve the dimmed disconnect picture as plain pixels, without the component's backend or listeners.
+        clean(() => {
+            const frame = keepPicture ? this.canvas() : null
+            if (!frame?.width || !frame.height) {
+                return
+            }
+            const copy = document.createElement('canvas')
+            copy.width = frame.width
+            copy.height = frame.height
+            copy.className = 'trd-last-frame'
+            const rect = frame.getBoundingClientRect()
+            copy.style.width = `${rect.width || frame.width}px`
+            copy.style.height = `${rect.height || frame.height}px`
+            const ctx = copy.getContext('2d')
+            if (ctx) {
+                ctx.drawImage(frame, 0, 0)
+                picture = copy
+            }
+        })
         this.connectionDisposers.splice(0).forEach(clean)
         clean(() => this.ui?.shutdown())
         // Removing the component stops its clipboard loop and removes its global listeners.
-        clean(() => this.host.replaceChildren())
+        clean(() => this.host.replaceChildren(...picture ? [picture] : []))
         this.ui = null
         this.stopSending = null
         clean(() => this.audio?.close())
@@ -608,7 +629,7 @@ export class DesktopSession {
         this.container.removeEventListener('focusin', this.reclaimFocus, true)
         this.disposers.forEach(f => f())
         this.indicator?.dispose()
-        this.endConnection()
+        this.endConnection(false)
         this.proxy?.close()
         this.overlay.remove()
     }
@@ -3766,6 +3787,7 @@ export class RemoteDesktopService {
             attempt.abort()
             unwatch?.()
             session.endConnection?.()
+            rdp.runtime?.dispose?.()
         }
     }
 

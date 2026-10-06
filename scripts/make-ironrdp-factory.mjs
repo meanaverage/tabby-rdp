@@ -29,6 +29,13 @@ export function makeFactory (source) {
         }
     }
     const visit = node => {
+        if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression) &&
+            ['addEventListener', 'removeEventListener'].includes(node.expression.name.text)) {
+            const helper = node.expression.name.text === 'addEventListener' ? '__trdListen' : '__trdUnlisten'
+            // Change only the call prefix: callback bodies may contain another listener call of their own.
+            edits.push([node.expression.getStart(ast), node.arguments.pos,
+                `${helper}(${node.expression.expression.getText(ast)}, `])
+        }
         // wasm-bindgen's finalizer assigns instance.exports to its module-scoped WASM binding. Watch those calls so
         // asynchronous traps in event callbacks can end the owning desktop even if its run() promise never settles.
         if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
@@ -51,6 +58,47 @@ export function makeFactory (source) {
     if (!(__trdModule instanceof WebAssembly.Module)) throw new TypeError('createBackend needs a compiled WebAssembly.Module');
     let __trdTrap;
     const __trdListeners = new Set();
+    let __trdReleased = false;
+    const __trdTimers = new Set();
+    const __trdEvents = new Set();
+    function setInterval (callback, delay, ...args) {
+        if (__trdReleased) return 0;
+        const handle = globalThis.setInterval(() => { if (!__trdReleased) callback(...args); }, delay);
+        __trdTimers.add(handle);
+        return handle;
+    }
+    function setTimeout (callback, delay, ...args) {
+        if (__trdReleased) return 0;
+        const handle = globalThis.setTimeout(() => {
+            __trdTimers.delete(handle);
+            if (!__trdReleased) callback(...args);
+        }, delay);
+        __trdTimers.add(handle);
+        return handle;
+    }
+    function clearInterval (handle) { __trdTimers.delete(handle); globalThis.clearInterval(handle); }
+    function clearTimeout (handle) { __trdTimers.delete(handle); globalThis.clearTimeout(handle); }
+    function __trdListen (target, type, callback, options) {
+        if (__trdReleased) return;
+        target.addEventListener(type, callback, options);
+        __trdEvents.add({ target, type, callback, capture: typeof options === 'boolean' ? options : !!options?.capture });
+    }
+    function __trdUnlisten (target, type, callback, options) {
+        const capture = typeof options === 'boolean' ? options : !!options?.capture;
+        target.removeEventListener(type, callback, options);
+        for (const event of __trdEvents) {
+            if (event.target === target && event.type === type && event.callback === callback && event.capture === capture) {
+                __trdEvents.delete(event);
+            }
+        }
+    }
+    function __trdReleaseBrowserRoots () {
+        __trdReleased = true;
+        for (const handle of __trdTimers) { globalThis.clearTimeout(handle); globalThis.clearInterval(handle); }
+        __trdTimers.clear();
+        for (const { target, type, callback, capture } of __trdEvents) target.removeEventListener(type, callback, capture);
+        __trdEvents.clear();
+    }
     function __trdWatchExports (raw) {
         return Object.fromEntries(Object.entries(raw).map(([name, value]) => [name, typeof value !== 'function' ? value : (...args) => {
             // Rust destructors cannot safely run after an abort. Late JS finalizers become harmless.
@@ -61,6 +109,8 @@ export function makeFactory (source) {
             try { return value(...args); } catch (error) {
                 if (error instanceof WebAssembly.RuntimeError) {
                     __trdTrap = error;
+                    // Rust cannot cancel its timers/listeners after an abort. Their browser roots retain the heap.
+                    __trdReleaseBrowserRoots();
                     for (const listener of __trdListeners) listener(error);
                     __trdListeners.clear();
                 }
@@ -69,10 +119,12 @@ export function makeFactory (source) {
         }]));
     }
 ${body.trimEnd()}
-    await ${init}(__trdLevel, __trdModule);
+    try { await ${init}(__trdLevel, __trdModule); }
+    catch (error) { __trdReleaseBrowserRoots(); throw error; }
     return {
 ${exports.map(([name, local]) => `        ${name}: ${local},`).join('\n')}
         runtime: {
+            dispose () { __trdReleaseBrowserRoots(); __trdListeners.clear(); },
             get memory () { return ${wasm}.memory; },
             get trapped () { return __trdTrap; },
             onTrap (listener) {

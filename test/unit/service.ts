@@ -1798,3 +1798,32 @@ test('an asynchronous trap ends only its desktop even when Rust run never settle
     assert.equal(svc.reconnects.has(otherPane), false)
     svc.cancelReconnect(pane)
 })
+
+test('ending a connection keeps only a pixel copy of its picture, and disposal removes that too', t => {
+    const page = installDocument()
+    t.after(page.restore)
+    const desktop = new DesktopSession(new FakeElement(), 'picture', specOf({ host: 'host' }))
+    const source = { width: 1280, height: 720, getBoundingClientRect: () => ({ width: 640, height: 360 }) }
+    const copied: unknown[] = []
+    const create = document.createElement.bind(document)
+    document.createElement = ((tag: string) => {
+        if (tag !== 'canvas') return create(tag)
+        return Object.assign(new FakeElement('canvas'), { getContext: () => ({ drawImage: (...args: unknown[]) => copied.push(args) }) })
+    }) as typeof document.createElement
+    desktop.canvas = () => source as HTMLCanvasElement
+    desktop.host.appendChild(new FakeElement('iron-remote-desktop'))
+    desktop.ui = { shutdown () { } }
+    desktop.endConnection()
+    const picture = desktop.host.querySelector('.trd-last-frame') as any
+    assert.deepEqual(copied, [[source, 0, 0]])
+    assert.deepEqual([picture.width, picture.height, picture.style.width, picture.style.height], [1280, 720, '640px', '360px'])
+    assert.equal(desktop.host.querySelector('iron-remote-desktop'), null)
+    assert.equal(desktop.ui, null)
+    // A hidden pane has no CSS rectangle; its saved picture must still be visible when brought forward.
+    source.getBoundingClientRect = () => ({ width: 0, height: 0 })
+    desktop.endConnection()
+    const hidden = desktop.host.querySelector('.trd-last-frame') as any
+    assert.deepEqual([hidden.style.width, hidden.style.height], ['1280px', '720px'])
+    desktop.dispose()
+    assert.equal(desktop.host.children.length, 0)
+})

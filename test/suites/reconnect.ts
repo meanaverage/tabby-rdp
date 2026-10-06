@@ -22,6 +22,7 @@ await suite('reconnect', async t => {
     const lost = await t.waitFor<StatusInfo>(`const s = H.status(H.pane); return s && /Connection lost/.test(s.text) && /Waiting for the SSH connection/.test(s.text) ? s : null`, 15)
     check('SSH drop: "Connection lost", waiting for SSH, with "Reconnect SSH" and "Stop"', lost?.buttons.includes('Reconnect SSH') && lost.buttons.includes('Stop'), lost ?? await ev('return [H.status(H.pane), RD.desktop.logOf(H.pane).slice(-3)]'))
     check('the last picture is dimmed', await ev(`return H.overlay(H.pane).classList.contains('trd-dim')`))
+    check('the dimmed last picture still contains the remote frame', await ev(`return H.canvas(H.pane)?.colors > 3`), await ev('return H.canvas(H.pane)'))
     const t0 = Date.now()
     await ev(`H.inZone(() => H.clickStatus(H.pane, 'Reconnect SSH'))`)
     const back = await t.waitFor(`const log = RD.desktop.logOf(H.pane); return H.connected(H.pane) && log[0] !== ${JSON.stringify(first)} && H.status(H.pane) === null`, 45)

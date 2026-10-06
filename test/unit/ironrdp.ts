@@ -85,6 +85,42 @@ test('a WASM trap belongs to one backend; healthy and replacement backends keep 
     assert.equal(bTraps, 0)
 })
 
+test('trapped and disposed backends cancel their own browser timers and event listeners', async () => {
+    const glue = TRAP_GLUE.replace('const Backend = {', `const Backend = {
+        arm: (target, callback) => {
+            setInterval(callback, 1);
+            setTimeout(callback, 10);
+            target.addEventListener('tick', callback);
+        },`)
+    const factory = await import(`data:text/javascript,${encodeURIComponent(makeFactory(glue))}`)
+    const module = await WebAssembly.compile(TRAP_MODULE)
+    const [a, b] = await Promise.all([factory.createBackend(module), factory.createBackend(module)])
+    const target = new EventTarget()
+    let left = 0, right = 0
+    try {
+        a.Backend.arm(target, () => left++)
+        b.Backend.arm(target, () => right++)
+        assert.throws(() => a.Backend.trap(), WebAssembly.RuntimeError)
+        target.dispatchEvent(new Event('tick'))
+        assert.equal(left, 0)
+        assert.equal(right, 1)
+        await new Promise(resolve => setTimeout(resolve, 30))
+        assert.equal(left, 0)
+        assert.ok(right > 1)
+        b.runtime.dispose()
+        const stopped = right
+        target.dispatchEvent(new Event('tick'))
+        await new Promise(resolve => setTimeout(resolve, 30))
+        assert.equal(right, stopped)
+        // Late callbacks cannot install new browser roots in an ended backend.
+        b.Backend.arm(target, () => right++)
+        target.dispatchEvent(new Event('tick'))
+        assert.equal(right, stopped)
+    } finally {
+        a.runtime.dispose(); b.runtime.dispose()
+    }
+})
+
 test('a load failure can retry, while a failed instance keeps the compiled module for other desktops', async () => {
     let loads = 0
     let creates = 0

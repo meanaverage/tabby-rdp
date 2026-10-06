@@ -101,8 +101,14 @@ await suite('desktops', async t => {
     const edited = await t.waitFor<ExtraDesktopConfig>(`const d = (H.config.store.remoteDesktop.desktops ?? [])[0]; return d?.name === ${JSON.stringify(EDITED)} ? d : null`, 5)
     check('the edited entry is saved (same host, new address)', edited?.host === 'localhost' && edited.port === 3389 && edited.via === entry?.via && edited.username === 'tabby', edited)
     // These move after the saved account, which the keychain can take a moment for.
-    check('its remembered certificate moved to the new address', !!(await t.waitFor(`const list = H.config.store.remoteDesktop.trustedCertificates ?? []
-        return list.some(e => e.desktop === ${JSON.stringify(editedKey)}) && !list.some(e => e.desktop === ${JSON.stringify(key)})`, 15)))
+    // A locked credential store may still hold the old password. Its certificate must remain at the old address,
+    // while also going along to the new address (desktopEdited), so neither password can go to a changed server.
+    check('its remembered certificate follows the new address and still protects the old one', !!(await t.waitFor(`
+        const list = H.config.store.remoteDesktop.trustedCertificates ?? []
+        const old = list.find(e => e.desktop === ${JSON.stringify(key)})
+        const next = list.find(e => e.desktop === ${JSON.stringify(editedKey)})
+        return old?.sha256 && next?.sha256 === old.sha256 && next.authority === old.authority
+    `, 15)))
     check('its sharpness moved to the new address', !!(await t.waitFor(`const list = H.config.store.remoteDesktop.desktopSharpness ?? []
         return list.some(e => e.desktop === ${JSON.stringify(editedKey)}) && !list.some(e => e.desktop === ${JSON.stringify(key)})`, 15)))
     const renamed = await ev<string[]>('return await H.labels()')

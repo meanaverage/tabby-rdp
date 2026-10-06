@@ -3,6 +3,47 @@ export async function createBackend (__trdModule, __trdLevel = 'INFO') {
     if (!(__trdModule instanceof WebAssembly.Module)) throw new TypeError('createBackend needs a compiled WebAssembly.Module');
     let __trdTrap;
     const __trdListeners = new Set();
+    let __trdReleased = false;
+    const __trdTimers = new Set();
+    const __trdEvents = new Set();
+    function setInterval (callback, delay, ...args) {
+        if (__trdReleased) return 0;
+        const handle = globalThis.setInterval(() => { if (!__trdReleased) callback(...args); }, delay);
+        __trdTimers.add(handle);
+        return handle;
+    }
+    function setTimeout (callback, delay, ...args) {
+        if (__trdReleased) return 0;
+        const handle = globalThis.setTimeout(() => {
+            __trdTimers.delete(handle);
+            if (!__trdReleased) callback(...args);
+        }, delay);
+        __trdTimers.add(handle);
+        return handle;
+    }
+    function clearInterval (handle) { __trdTimers.delete(handle); globalThis.clearInterval(handle); }
+    function clearTimeout (handle) { __trdTimers.delete(handle); globalThis.clearTimeout(handle); }
+    function __trdListen (target, type, callback, options) {
+        if (__trdReleased) return;
+        target.addEventListener(type, callback, options);
+        __trdEvents.add({ target, type, callback, capture: typeof options === 'boolean' ? options : !!options?.capture });
+    }
+    function __trdUnlisten (target, type, callback, options) {
+        const capture = typeof options === 'boolean' ? options : !!options?.capture;
+        target.removeEventListener(type, callback, options);
+        for (const event of __trdEvents) {
+            if (event.target === target && event.type === type && event.callback === callback && event.capture === capture) {
+                __trdEvents.delete(event);
+            }
+        }
+    }
+    function __trdReleaseBrowserRoots () {
+        __trdReleased = true;
+        for (const handle of __trdTimers) { globalThis.clearTimeout(handle); globalThis.clearInterval(handle); }
+        __trdTimers.clear();
+        for (const { target, type, callback, capture } of __trdEvents) target.removeEventListener(type, callback, capture);
+        __trdEvents.clear();
+    }
     function __trdWatchExports (raw) {
         return Object.fromEntries(Object.entries(raw).map(([name, value]) => [name, typeof value !== 'function' ? value : (...args) => {
             // Rust destructors cannot safely run after an abort. Late JS finalizers become harmless.
@@ -13,6 +54,8 @@ export async function createBackend (__trdModule, __trdLevel = 'INFO') {
             try { return value(...args); } catch (error) {
                 if (error instanceof WebAssembly.RuntimeError) {
                     __trdTrap = error;
+                    // Rust cannot cancel its timers/listeners after an abort. Their browser roots retain the heap.
+                    __trdReleaseBrowserRoots();
                     for (const listener of __trdListeners) listener(error);
                     __trdListeners.clear();
                 }
@@ -759,12 +802,12 @@ function UA() {
       },
       __wbg_addEventListener_520e749bbae24529: function() {
         return o(function(A, I, g, B, E) {
-          A.addEventListener(y(I, g), B, E);
+          __trdListen(A, y(I, g), B, E);
         }, arguments);
       },
       __wbg_addEventListener_d85450ee1320c989: function() {
         return o(function(A, I, g, B) {
-          A.addEventListener(y(I, g), B);
+          __trdListen(A, y(I, g), B);
         }, arguments);
       },
       __wbg_apply_23dd4d2439189415: function() {
@@ -1100,7 +1143,7 @@ function UA() {
       },
       __wbg_removeEventListener_a3f23c70077bdcc1: function() {
         return o(function(A, I, g, B) {
-          A.removeEventListener(y(I, g), B);
+          __trdUnlisten(A, y(I, g), B);
         }, arguments);
       },
       __wbg_resolve_2191a4dfe481c25b: function(A) {
@@ -2474,23 +2517,23 @@ const _U = class _U {
   showFilePicker(A) {
     return new Promise((I) => {
       const g = document.createElement("input");
-      g.type = "file", g.style.display = "none", (A == null ? void 0 : A.multiple) === true && (g.multiple = true), (A == null ? void 0 : A.accept) !== void 0 && A.accept.length > 0 && (g.accept = A.accept), g.addEventListener("change", () => {
+      g.type = "file", g.style.display = "none", (A == null ? void 0 : A.multiple) === true && (g.multiple = true), (A == null ? void 0 : A.accept) !== void 0 && A.accept.length > 0 && (g.accept = A.accept), __trdListen(g, "change", () => {
         const i = Array.from(g.files || []);
-        E(), window.removeEventListener("focus", D), I(i);
+        E(), __trdUnlisten(window, "focus", D), I(i);
       });
       let B = false;
       const E = () => {
         B || (B = true, g.parentNode && document.body.removeChild(g));
       };
-      g.addEventListener("cancel", () => {
-        E(), window.removeEventListener("focus", D), I([]);
+      __trdListen(g, "cancel", () => {
+        E(), __trdUnlisten(window, "focus", D), I([]);
       });
       const D = () => {
         setTimeout(() => {
-          B || (E(), I([])), window.removeEventListener("focus", D);
+          B || (E(), I([])), __trdUnlisten(window, "focus", D);
         }, 300);
       };
-      window.addEventListener("focus", D), document.body.appendChild(g), g.click();
+      __trdListen(window, "focus", D), document.body.appendChild(g), g.click();
     });
   }
   /**
@@ -3139,7 +3182,8 @@ function hI(Q) {
 function aI(Q) {
   return new N("legacy_graphics", Q);
 }
-    await wI(__trdLevel, __trdModule);
+    try { await wI(__trdLevel, __trdModule); }
+    catch (error) { __trdReleaseBrowserRoots(); throw error; }
     return {
         Backend: GI,
         BlobStorageBackend: YA,
@@ -3180,6 +3224,7 @@ function aI(Q) {
         unlockCallback: PA,
         vmConnect: NI,
         runtime: {
+            dispose () { __trdReleaseBrowserRoots(); __trdListeners.clear(); },
             get memory () { return C.memory; },
             get trapped () { return __trdTrap; },
             onTrap (listener) {
