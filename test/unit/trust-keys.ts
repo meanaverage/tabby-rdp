@@ -237,6 +237,58 @@ test('a store that can\'t be listed: nothing moves or is left to use, and what w
     assert.deepEqual(await loadCredentials('alice@h:22#10.0.0.5:3389'), { username: 'bob', password: 'new-user' })
 })
 
+for (const available of [true, false]) {
+    test(`a new store use retries a joined failed cleanup once (${available ? 'available' : 'still unavailable'})`, async t => {
+        const saved = store()
+        const { saveCredentials, loadCredentials, forgetCredentialsFor } = signin()
+        const kept = 'rdp#kept:3389', forgotten = 'rdp#forgotten:3389'
+        await saveCredentials(kept, { username: 'dummy', password: 'before' })
+        await saveCredentials(forgotten, { username: 'dummy', password: 'forgotten' })
+        const listing = keytar.findCredentials
+        keytar.findCredentials = async () => { throw new Error('locked') }
+        await forgetCredentialsFor('kept:3389', { direct: true, scope: '' })
+        await forgetCredentialsFor('forgotten:3389', { direct: true, scope: '' })
+
+        let entered!: () => void, release!: () => void
+        const started = new Promise<void>(resolve => { entered = resolve })
+        const blocked = new Promise<never>((_resolve, reject) => { release = () => reject(new Error('older listing failed')) })
+        void blocked.catch(() => undefined) // teardown may release it before the listing has consumed it
+        // The re-save's background pass must have acquired the old, failing listing before the next read begins.
+        const put = keytar.setPassword
+        keytar.setPassword = async (...args: string[]) => {
+            await put(...args)
+            keytar.findCredentials = async () => { entered(); return blocked }
+        }
+        t.after(() => release())
+        await saveCredentials(kept, { username: 'dummy', password: 'replacement' })
+        await started
+        let attempts = 0
+        keytar.findCredentials = async () => {
+            attempts++
+            if (!available) { throw new Error('still locked') }
+            return listing()
+        }
+        const reading = loadCredentials('anything')
+        await new Promise(resolve => setImmediate(resolve))
+        assert.equal(attempts, 0, 'the new read waits for the already-started cleanup')
+        release()
+        await reading
+        assert.equal(attempts, 1, 'one fresh attempt, with no retry-until-success loop')
+        assert.deepEqual(JSON.parse(saved.get(kept)!), { username: 'dummy', password: 'replacement' })
+        assert.equal(saved.has(forgotten), !available)
+        if (!available) {
+            let readOld = false
+            const get = keytar.getPassword
+            keytar.getPassword = async (...args: string[]) => {
+                if (args[1] === forgotten) { readOld = true }
+                return get(...args)
+            }
+            assert.equal(await loadCredentials(forgotten), null)
+            assert.equal(readOld, false, 'pending credentials remain withheld while the store cannot be listed')
+        }
+    })
+}
+
 test('Tabby\'s Vault open and a keychain that doesn\'t answer: the Vault\'s part is done at once, and only the keychain\'s waits', async () => {
     // Linux without a Secret Service, where the Vault is what keeps the passwords: every keychain call fails at once.
     const fail = async () => { throw new Error('The name org.freedesktop.secrets was not provided by any .service files') }

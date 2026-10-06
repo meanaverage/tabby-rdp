@@ -149,6 +149,8 @@ async function used (): Promise<void> {
         onceRunning = doOnce(job).catch(() => undefined).finally(() => { onceRunning = null })
     }
     await onceRunning
+    // A previous background pass may have failed before the store became available. This use gets one fresh attempt.
+    await laterRunning
     if (later.length && !laterRunning) {
         laterRunning = doLater().catch(() => undefined).finally(() => { laterRunning = null })
     }
