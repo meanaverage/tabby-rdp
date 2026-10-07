@@ -7,6 +7,9 @@
   instead of letting a broken-pipe error escape unhandled. Commands that ignore their input still return their output.
 
 **Changed**
+- **Host compatibility checks share one layer**, with host and runtime versions, the host's declared xterm dependency,
+  and observed capabilities included in copied connection logs. Modal drag fallbacks and terminal input handling use
+  shared adapters that check the host's actual features, including on forks and nightly builds.
 - **CI and the release workflow check out the code with actions/checkout 7.0.1** (#56), pinned to its commit as before,
   in place of 4.4.0. Nothing in the package changes.
 

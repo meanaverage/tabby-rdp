@@ -36,6 +36,7 @@ export interface KeyEventParams {
  * so a misspelled method or a wrong parameter is a compile error. Add an entry here to call another one.
  */
 export interface CdpMethods {
+    'Runtime.enable': { params: Record<string, never>, result: unknown }
     'Runtime.evaluate': {
         params: { expression: string, awaitPromise: boolean, returnByValue: boolean }
         result: { result: { value: any }, exceptionDetails?: { exception?: { description?: string } } }
