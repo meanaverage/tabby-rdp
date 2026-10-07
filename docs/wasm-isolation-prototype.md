@@ -102,8 +102,15 @@ passed 551 tests, with two existing Electron-only skips and no failures. Release
 npm `beta` and an unpublished GitHub prerelease draft. The idle benchmark again collected all eight initial
 memories and retained none after 32 further create/use/release cycles.
 
-Candidate browser, packed-host and live RDP checks are pending. The earlier prototype results above remain
-separate from qualification of this integrated candidate.
+The browser lifecycle smoke passed: four components initialized, seven owned listeners per component, none
+remaining after closure, and the ended backend's memory collected while its session and snapshot remained alive.
+The smoke's extracted application class now imports the centralized terminal-input adapter added in 0.5.2.
+
+The packed candidate passed 35/35 host checks and 24/24 live GNOME RDP checks on the macOS arm64 Tabby 1.0.238
+test binary, which declares xterm 5. The first live isolation run connected the primary account but could not
+connect the second account; further diagnosis is pending. Earlier prototype isolation results remain separate
+from qualification of this integrated candidate. The isolation suite now reports the failed connection's status
+and bounded log instead of continuing with missing backend records.
 
 ## Initial measurements
 

@@ -57,11 +57,15 @@ await suite('wasm-isolation', async t => {
     const connected = (pane: string) => t.waitFor<boolean>(`return H.connected(${pane}) && !H.status(${pane})`, 60, 100)
     check('first SSH account connected', await ev('H.a = await H.openSSH(); return !!H.a'))
     await ev('await H.inZone(() => RD.desktop.showDesktop(H.a))')
-    check('first desktop connected', !!await connected('H.a'))
+    const firstConnected = !!await connected('H.a')
+    check('first desktop connected', firstConnected, !firstConnected ? await ev('return { status: H.status(H.a), log: RD.desktop.logOf(H.a).slice(-12) }') : undefined)
+    if (!firstConnected) return
     check('second SSH account connected', await ev(`H.b = await H.openSSH({ user: ${JSON.stringify(SECOND_USER)} }); return !!H.b`))
     t.onCleanup(() => t.remote('H.b', 'systemctl --user stop tabby-headless-shell gnome-remote-desktop-headless; true'))
     await ev('await H.inZone(() => RD.desktop.showDesktop(H.b))')
-    check('second desktop connected', !!await connected('H.b'))
+    const secondConnected = !!await connected('H.b')
+    check('second desktop connected', secondConnected, !secondConnected ? await ev('return { status: H.status(H.b), log: RD.desktop.logOf(H.b).slice(-12) }') : undefined)
+    if (!secondConnected) return
     check('both desktops decoded a picture', !!await t.waitFor(`return [H.a,H.b].every(p => H.canvas(p)?.colors > 3)`, 20))
     check('connected desktops own different memory and backend classes', await ev(`
         H.iso.a = H.iso.record(H.a); H.iso.b = H.iso.record(H.b)

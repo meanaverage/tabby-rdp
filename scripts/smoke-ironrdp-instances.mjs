@@ -13,13 +13,14 @@ import ts from 'typescript'
 const compile = source => ts.transpileModule(source, { compilerOptions: {
     target: ts.ScriptTarget.ES2021, module: ts.ModuleKind.ES2022, useDefineForClassFields: false,
 } }).outputText
-const app = new Map(await Promise.all(['sessionLog', 'connectionStatus', 'osd'].map(async name => [
+const app = new Map(await Promise.all(['sessionLog', 'connectionStatus', 'osd', 'hostCompat'].map(async name => [
     '/app/' + name + '.js', compile(await readFile(new URL('../src/' + name + '.ts', import.meta.url), 'utf8')),
 ])))
 const service = ts.createSourceFile('desktop.service.ts', await readFile(new URL('../src/desktop.service.ts', import.meta.url), 'utf8'), ts.ScriptTarget.Latest, true)
 const sessionClass = service.statements.find(node => ts.isClassDeclaration(node) && node.name?.text === 'DesktopSession')
 if (!sessionClass) throw new Error('DesktopSession class not found')
 app.set('/app/desktopSession.js', compile(`import { SessionLog } from './sessionLog.js';
+import { terminalInputs } from './hostCompat.js';
 import { renderOsd } from './osd.js';\n` + sessionClass.getText(service)))
 
 const html = `<!doctype html><html><body><pre id="result">PENDING</pre><script type="module">
