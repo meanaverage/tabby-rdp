@@ -218,7 +218,7 @@ test('an old-running newly constructed manager preserves a foreign pending chang
 test('uninstall confirms precise retained data scope and invokes only supported fixed-name API', async () => {
     const s = setup()
     await s.manager.uninstall()
-    assert.match(String(s.calls[0][2]), /saved credentials and remote helpers stay/)
+    assert.match(String(s.calls[0][2]), /Saved connections, settings, passwords and remote setup are kept/)
     assert.deepEqual(s.calls[1], ['uninstall', 'tabby-rdp'])
     assert.equal(s.manager.removed, true)
     assert.equal(s.manager.running, '0.5.1')

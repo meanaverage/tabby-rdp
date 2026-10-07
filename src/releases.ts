@@ -318,7 +318,7 @@ export class ReleaseManager {
                 if (this.storageWarning) { throw new Error('Version history cannot be saved. Use Tabby Plugins to uninstall.') }
                 if (this.pending || this.removed) { return }
                 if (!await this.env.confirm('Uninstall tabby-rdp?',
-                    'Close remote desktops first. Tabby removes the plugin package; restart Tabby yourself afterwards. Desktops, profiles, settings, saved credentials and remote helpers stay. This does not remove saved data from other computers or remote hosts.', 'Uninstall')) { return }
+                    'Close remote desktops before uninstalling, then restart Tabby. Saved connections, settings, passwords and remote setup are kept.', 'Uninstall')) { return }
                 await this.env.uninstall('tabby-rdp')
                 this.state.removed = true
                 this.persist()

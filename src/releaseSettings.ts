@@ -14,14 +14,14 @@ export function renderReleaseSettings (
     const reason = selected ? releases.reason(selected) : null
     const stable = releases.catalog?.stable
     const previous = releases.state.previous
-    const status = releases.checking ? 'Checking npm…' : releases.checkedAt !== null ? `Last checked ${new Date(releases.checkedAt).toLocaleString()}.` : 'Published versions have not been checked yet.'
+    const status = releases.checking ? 'Checking…' : releases.checkedAt !== null ? `Last checked ${new Date(releases.checkedAt).toLocaleString()}.` : 'Not checked'
     root.innerHTML = `
         <div class="trd-release-summary">
             <div><span class="trd-sub">Installed version</span><h4>tabby-rdp ${esc(releases.running)}</h4></div>
             <button class="btn btn-link btn-sm" data-release-notes="${esc(releases.running)}">Release notes</button>
         </div>
-        ${releases.pending ? `<div class="trd-release-notice" role="status"><b>${esc(releases.pending)} is installed for the next restart.</b> This window still runs ${esc(releases.running)}. Close your desktops and restart Tabby when ready.</div>` : ''}
-        ${releases.removed ? '<div class="trd-release-notice" role="status"><b>The plugin package was removed.</b> This window is still running it. Close your desktops and restart Tabby when ready.</div>' : ''}
+        ${releases.pending ? `<div class="trd-release-notice" role="status"><b>Restart required to use ${esc(releases.pending)}.</b> Close remote desktops and restart Tabby.</div>` : ''}
+        ${releases.removed ? '<div class="trd-release-notice" role="status"><b>Plugin uninstalled.</b> Close remote desktops and restart Tabby.</div>' : ''}
         ${releases.notice ? `<p role="status">${esc(releases.notice)}</p>` : ''}
         ${releases.storageWarning ? `<p role="alert">${esc(releases.storageWarning)}</p>` : ''}
         <div class="form-line">
@@ -30,14 +30,13 @@ export function renderReleaseSettings (
         </div>
         <label class="trd-release-pause"><input type="checkbox" data-pause ${disable(releases.busy)} ${!releases.state.paused ? 'checked' : ''}> Check for updates automatically</label>
         <div class="trd-release-actions"><button class="btn btn-secondary btn-sm" data-check ${disable(releases.checking || releases.busy)}>Check now</button><span class="trd-sub" role="status">${esc(status)}</span></div>
-        ${releases.error ? `<p class="trd-release-error" role="alert">${esc(releases.error)}${releases.catalog ? ' The list below is from the last successful check.' : ''}</p>` : ''}
-        ${releases.state.channel === 'preview' && releases.catalog && !releases.catalog.preview ? '<p>No preview releases are currently available.</p>' : ''}
+        ${releases.error ? `<p class="trd-release-error" role="alert">${esc(releases.error)}${releases.catalog ? ' Showing the last successful check.' : ''}</p>` : ''}
+        ${releases.state.channel === 'preview' && releases.catalog && !releases.catalog.preview ? '<p>No preview releases available.</p>' : ''}
         ${releases.recommended ? `<p>Latest: <b>${esc(releases.recommended)}</b> <button class="btn btn-link btn-sm" data-release-notes="${esc(releases.recommended)}">Release notes</button></p>` : ''}
-        <h5>Choose a version</h5>
-        <label for="trd-release-version" class="trd-sub">Published versions for this channel</label>
+        <h5><label for="trd-release-version">Version</label></h5>
         <div class="trd-release-actions">
             <select id="trd-release-version" class="form-control" data-version ${disable(blocked || !releases.versions.length)}>
-                ${!releases.versions.length ? '<option>No published versions loaded</option>' : releases.versions.map(p => {
+                ${!releases.versions.length ? '<option>No versions loaded</option>' : releases.versions.map(p => {
                     const why = releases.reason(p.version)
                     return `<option value="${esc(p.version)}" ${p.version === selected ? 'selected' : ''} ${disable(!!why)}>${esc(p.version)}${why ? ` — ${esc(why)}` : ''}</option>`
                 }).join('')}
@@ -52,7 +51,7 @@ export function renderReleaseSettings (
         </div>
         ${!previous ? '<p class="trd-sub">No previous version saved.</p>' : releases.reason(previous) ? `<p class="trd-sub">Previous version unavailable: ${esc(releases.reason(previous))}</p>` : ''}
         <h5>Disable or uninstall</h5>
-        <p class="trd-sub">Uninstall removes this plugin. Saved connections, settings, passwords and remote setup are kept.</p>
+        <p class="trd-sub">Saved connections, settings, passwords and remote setup are kept.</p>
         <div class="trd-release-actions"><button class="btn btn-secondary btn-sm" data-plugins>Manage in Tabby…</button><button class="btn btn-outline-danger btn-sm" data-uninstall ${disable(blocked)}>Uninstall plugin…</button><a href="#" data-recovery>Cleanup instructions</a></div>`
     root.querySelector<HTMLSelectElement>('[data-channel]')!.addEventListener('change', e => {
         void releases.setChannel((e.target as HTMLSelectElement).value)
