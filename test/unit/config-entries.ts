@@ -63,12 +63,12 @@ class Element {
     addEventListener (type: string, listener: (event: any) => void): void { (this.listeners[type] ??= []).push(listener) }
     removeEventListener (): void { }
     querySelector (selector: string): Element | null {
-        return /^(\[name="[^"]+"\]|form|datalist|button\[type=submit\]|\.trd-signin-(title|error))$/.test(selector) ? this.parts[selector] ??= new Element() : null
+        return /^(\[name="[^"]+"\]|\[data-for=(address|gateway)\]|\[data-gateway-account\]|form|datalist|button\[type=submit\]|\.trd-signin-(title|error))$/.test(selector) ? this.parts[selector] ??= new Element() : null
     }
 
     querySelectorAll (): Element[] { return [] }
     contains (): boolean { return false }
-    focus (): void { }
+    focus (): void { g.document.activeElement = this }
     remove (): void { }
     click (): void { (this.listeners.click ?? []).forEach(listener => listener({})) }
 }
@@ -81,7 +81,7 @@ const { RemoteDesktopService } = require('../../dist/desktop.service.js')
 const { RemoteDesktopContextMenu, settingsMenu } = require('../../dist/ui.js')
 const { RemoteDesktopSettingsComponent } = require('../../dist/settingsPage.js')
 const { HostCompatibility } = require('../../dist/hostCompat.js')
-const { RDPProfilesService } = require('../../dist/rdpProfile.js')
+const { RDPProfileSettingsComponent, RDPProfilesService } = require('../../dist/rdpProfile.js')
 const { desktopIdOf, desktopsFor, entryText, specOf } = require('../../dist/desktops.js')
 const signin = require('../../dist/signin.js')
 
@@ -362,4 +362,96 @@ test('Tabby\'s profile selector can describe every RDP profile, whatever its opt
     const plain = { type: 'rdp', name: 'Plain', options: { host: '10.0.0.5', port: 3390, username: 'alice', gateway: 'rdgw.example.com', via: '' } }
     assert.equal(provider.getDescription(plain), '10.0.0.5:3390 via the gateway rdgw.example.com')
     assert.equal(provider.intoQuickConnectString(plain), 'alice@10.0.0.5:3390')
+})
+
+/** The real profile component on a form, with identity changes recorded instead of touching stored credentials. */
+function profileEditor (options: Record<string, unknown>) {
+    const root = new Element()
+    const edits: any[][] = []
+    const desktop = {
+        accounts: () => [], settings: () => ({ clipboard: 'both' }), getProfiles: async () => [],
+        desktopEdited: async (...args: any[]) => { edits.push(args) }, forgetDesktop: async () => { },
+    }
+    const settings = new RDPProfileSettingsComponent({ nativeElement: root }, { get: () => desktop })
+    const profile = { type: 'rdp', name: 'Office', options: { host: 'old.example', port: 3389, gateway: 'old-gateway.example', ...options } }
+    settings.profile = profile
+    settings.ngOnInit()
+    const field = (name: string) => root.querySelector(`[name="${name}"]`)!
+    const input = (name: string, value: string) => {
+        field(name).value = value
+        field(name).listeners.input?.forEach(listener => listener({}))
+    }
+    return { root, settings, profile, field, input, edits }
+}
+
+test('profile Save rejects invalid drafts before committing either connection field or migrating credentials', () => {
+    for (const [address, gateway, invalidField] of [
+        ['new.example:70000', 'new-gateway.example', 'address'],
+        ['new.example:3390', 'https://gateway.example', 'gateway'],
+        ['not an address', 'gateway.example:0', 'address'],
+    ]) {
+        const { root, settings, profile, field, input, edits } = profileEditor({})
+        input('address', address)
+        input('gateway', gateway)
+        assert.deepEqual([profile.options.host, profile.options.port, profile.options.gateway], ['old.example', 3389, 'old-gateway.example'])
+        assert.throws(() => settings.save(), /Cannot save this RDP profile/)
+        assert.equal(g.document.activeElement, field(invalidField))
+        assert.ok(root.querySelector(`[data-for=${invalidField}]`)!.textContent)
+        assert.deepEqual([profile.options.host, profile.options.port, profile.options.gateway], ['old.example', 3389, 'old-gateway.example'])
+        assert.deepEqual(edits, [])
+        // Correcting the drafts allows Save, including the existing credential/certificate migration hook.
+        input('address', '[2001:db8::1]:3390')
+        input('gateway', '  new-gateway.example:444  ')
+        settings.save()
+        assert.deepEqual([profile.options.host, profile.options.port, profile.options.gateway], ['2001:db8::1', 3390, 'new-gateway.example:444'])
+        assert.equal(root.querySelector('[data-for=address]')!.textContent, '')
+        assert.equal(root.querySelector('[data-for=gateway]')!.textContent, '')
+        assert.equal(edits.length, 1)
+        assert.deepEqual(edits[0], ['old.example:3389', '2001:db8::1:3390', false, true, { from: 'old-gateway.example', to: 'new-gateway.example:444' }])
+    }
+})
+
+test('profile Save rechecks fields even without input events, including a new profile with no previous destination', () => {
+    const { settings, profile, field, edits } = profileEditor({ host: '', gateway: '' })
+    field('address').value = 'new.example'
+    field('gateway').value = 'https://gateway.example'
+    assert.throws(() => settings.save(), /Cannot save this RDP profile/)
+    assert.equal(profile.options.host, '')
+    assert.equal(profile.options.gateway, '')
+    assert.deepEqual(edits, [])
+    field('gateway').value = 'gateway.example'
+    settings.save()
+    assert.deepEqual([profile.options.host, profile.options.port, profile.options.gateway], ['new.example', 3389, 'gateway.example'])
+})
+
+test('unsubmitted connection drafts leave the profile alone; empty defaults and explicitly cleared fields do not retain an old destination', () => {
+    const { settings, profile, input, edits } = profileEditor({})
+    input('address', 'draft.example:3390')
+    input('gateway', 'draft-gateway.example')
+    assert.deepEqual([profile.options.host, profile.options.port, profile.options.gateway], ['old.example', 3389, 'old-gateway.example'])
+    assert.deepEqual(edits, [])
+    input('address', '')
+    input('gateway', '')
+    settings.save()
+    assert.deepEqual([profile.options.host, profile.options.port, profile.options.gateway], ['', 3389, ''])
+    assert.deepEqual(edits, [])
+    const defaults = profileEditor({ host: '', gateway: '' })
+    assert.doesNotThrow(() => defaults.settings.save())
+})
+
+test('blank profile addresses preserve custom ports while gateway changes save and explicit address edits still set the port', () => {
+    const { settings, profile, field, input } = profileEditor({ host: '', port: 3390, gateway: '' })
+    assert.equal(field('address').value, '')
+    input('gateway', 'new-gateway.example')
+    settings.save()
+    assert.deepEqual([profile.options.host, profile.options.port, profile.options.gateway], ['', 3390, 'new-gateway.example'])
+    input('address', 'new.example:3391')
+    settings.save()
+    assert.deepEqual([profile.options.host, profile.options.port], ['new.example', 3391])
+    input('address', '')
+    settings.save()
+    assert.deepEqual([profile.options.host, profile.options.port], ['', 3391])
+    input('address', 'new.example')
+    settings.save()
+    assert.deepEqual([profile.options.host, profile.options.port], ['new.example', 3389])
 })
