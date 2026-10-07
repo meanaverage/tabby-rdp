@@ -44,6 +44,7 @@ export interface CdpMethods {
     'Emulation.setFocusEmulationEnabled': { params: { enabled: boolean }, result: unknown }
     'Emulation.setDeviceMetricsOverride': { params: { width: number, height: number, deviceScaleFactor: number, mobile: boolean }, result: unknown }
     'Emulation.clearDeviceMetricsOverride': { params: Record<string, never>, result: unknown }
+    'HeapProfiler.collectGarbage': { params: Record<string, never>, result: unknown }
     'Input.dispatchMouseEvent': { params: MouseEventParams, result: unknown }
     'Input.dispatchKeyEvent': { params: KeyEventParams, result: unknown }
     'Page.captureScreenshot': { params: { format: 'png' }, result: { data: string } }

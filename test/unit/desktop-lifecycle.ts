@@ -114,6 +114,28 @@ function session (svc: any, pane: object, onReady: () => void) {
 const target = { key: 'rdp', label: 'Win', isOpen: () => true }
 const endpoint = { host: '10.0.0.5', port: 3389, credentials: { username: 'u', password: 'p' } }
 
+/** A connected attempt whose Rust run promise can hang, trap independently, or settle after the attempt ended. */
+async function pendingConnection (svc: any, pane: object) {
+    let started!: () => void
+    const runningRust = new Promise<void>(resolve => { started = resolve })
+    let finish!: (value: unknown) => void
+    let fail!: (error: Error) => void
+    const result = new Promise((resolve, reject) => { finish = resolve; fail = reject })
+    const { rdp, ready } = ironrdp(async () => ({ run: () => { started(); return result } }))
+    rdp.h264Supported = async () => false
+    let trap!: (error: Error) => void
+    const backend = { ...rdp, runtime: { onTrap: (f: (error: Error) => void) => { trap = f; return () => { } }, dispose () { } } }
+    const s = session(svc, pane, ready)
+    let dispose!: () => void
+    s.disposed = new Promise<void>(resolve => { dispose = resolve })
+    const shown: string[] = []
+    s.status = (message: string) => { shown.push(message) }
+    const running = svc.run(pane, target, s.spec, s, backend, endpoint)
+    await runningRust
+    assert.equal(s.state, 'connected')
+    return { s, running, finish, fail, dispose, shown, trap: () => trap(new WebAssembly.RuntimeError('synthetic trap')) }
+}
+
 test('a desktop closed while its proxy starts gets the proxy closed, and doesn\'t go on to connect', async () => {
     const svc = service()
     const pane = {}
@@ -231,6 +253,110 @@ test('a reconnected desktop that drops at once goes on backing off; one that sta
     svc.reconnects.set(pane, { attempts: 4, since: 0 })
     assert.match(await drop(30000), /Reconnecting in 1 s/)
     clearTimeout(svc.reconnects.get(pane)?.timer)
+})
+
+test('a stable connection resets reconnect backoff exactly once on an asynchronous trap or ordinary end', async t => {
+    let now = 1000
+    t.mock.method(Date, 'now', () => now)
+    const svc = service(), pane = {}
+    t.after(() => svc.cancelReconnect(pane))
+    const account = t.mock.method(svc, 'reconnectedUntilNow')
+    for (const ending of ['trap', 'disconnect', 'graceful']) {
+        svc.reconnects.set(pane, { attempts: 5, since: now })
+        const attempt = await pendingConnection(svc, pane)
+        const before = account.mock.callCount()
+        now += 31000
+        if (ending === 'trap') attempt.trap()
+        else if (ending === 'disconnect') attempt.fail(new Error('ordinary disconnect'))
+        else attempt.finish({ reason: () => 'logged off' })
+        const outcome = await attempt.running
+        assert.equal(outcome.connected, true)
+        assert.equal(account.mock.callCount(), before + 1, ending)
+        assert.equal(svc.reconnects.has(pane), false, `${ending} resets the old budget`)
+        svc.afterEnd(pane, target, attempt.s.spec, attempt.s, outcome)
+        if (ending === 'graceful') {
+            assert.equal(svc.reconnects.has(pane), false)
+            assert.match(attempt.shown.at(-1)!, /Remote desktop session ended: logged off/)
+        } else {
+            assert.equal(svc.reconnects.get(pane)?.attempts, 1)
+            assert.match(attempt.shown.at(-1)!, /Reconnecting in 1 s/)
+        }
+        svc.cancelReconnect(pane)
+    }
+})
+
+test('short-lived asynchronous traps retain the bounded reconnect budget', async t => {
+    let now = 1000
+    t.mock.method(Date, 'now', () => now)
+    const svc = service(), pane = {}
+    t.after(() => svc.cancelReconnect(pane))
+    const account = t.mock.method(svc, 'reconnectedUntilNow')
+    svc.reconnects.set(pane, { attempts: 1, since: now })
+    for (const delay of [2, 4, 8, 15, 30, null]) {
+        const attempt = await pendingConnection(svc, pane)
+        const before = account.mock.callCount()
+        now += 1000
+        attempt.trap()
+        const outcome = await attempt.running
+        assert.equal(account.mock.callCount(), before + 1)
+        assert.equal(svc.reconnects.get(pane)?.since, now)
+        svc.afterEnd(pane, target, attempt.s.spec, attempt.s, outcome)
+        assert.match(attempt.shown.at(-1)!, delay === null ? /Stopped reconnecting automatically/ : new RegExp(`Reconnecting in ${delay} s`))
+        clearTimeout(svc.reconnects.get(pane)?.timer)
+    }
+    assert.equal(svc.reconnects.has(pane), false)
+})
+
+test('late Rust settlement after a trap cannot change a retry\'s accounting, decoder policy or resources', async t => {
+    let now = 1000
+    t.mock.method(Date, 'now', () => now)
+    const svc = service(), pane = {}
+    const account = t.mock.method(svc, 'reconnectedUntilNow')
+    for (const rejects of [false, true]) {
+        const attempt = await pendingConnection(svc, pane)
+        now += 1000
+        attempt.trap()
+        await attempt.running
+        const accounted = account.mock.callCount()
+        // A startup/sign-in retry can reuse the DesktopSession. Its resources and the pane's retry state are new.
+        const retry = { attempts: 2, since: now }
+        svc.reconnects.set(pane, retry)
+        let closed = 0, reasonRead = 0
+        attempt.s.mic = { close: () => closed++ }
+        attempt.s.drives = { dispose: () => closed++ }
+        attempt.s.h264 = { failed: 'new decoder', reclaimed: true }
+        now += 60000
+        if (rejects) attempt.fail(new Error('late failure'))
+        else attempt.finish({ reason: () => { reasonRead++; return 'late result' } })
+        await new Promise(resolve => setImmediate(resolve))
+        assert.equal(account.mock.callCount(), accounted)
+        assert.equal(svc.reconnects.get(pane), retry)
+        assert.deepEqual(retry, { attempts: 2, since: now - 60000 })
+        assert.equal(closed, 0)
+        assert.equal(reasonRead, 0)
+        assert.equal(svc.h264Failed.size, 0)
+        assert.equal(svc.h264Reclaimed.size, 0)
+    }
+})
+
+test('disposing an old attempt cannot reset a replacement session\'s reconnect state', async t => {
+    let now = 1000
+    t.mock.method(Date, 'now', () => now)
+    const svc = service(), pane = {}
+    const account = t.mock.method(svc, 'reconnectedUntilNow')
+    const attempt = await pendingConnection(svc, pane)
+    now += 31000
+    const replacement = session(svc, pane, () => { })
+    const retry = { attempts: 3, since: now }
+    svc.reconnects.set(pane, retry)
+    attempt.dispose()
+    assert.deepEqual(await attempt.running, { connected: false })
+    attempt.fail(new Error('old Rust run settles after disposal'))
+    await new Promise(resolve => setImmediate(resolve))
+    assert.equal(account.mock.callCount(), 0)
+    assert.equal(svc.sessions.get(pane), replacement)
+    assert.equal(svc.reconnects.get(pane), retry)
+    assert.deepEqual(retry, { attempts: 3, since: now })
 })
 
 test('a video decoder the browser takes back twice turns H.264 off for the desktop: the next connection has bitmaps', async () => {
