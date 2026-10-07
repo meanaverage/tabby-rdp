@@ -1,7 +1,9 @@
-# One WASM instance per desktop: prototype for #49
+# One WASM instance per desktop: release candidate for #49
 
-Local branch `proto/wasm-per-desktop`, based on main after #58. Nothing has been pushed or published. Uses main's
-public IronRDP binary and patch series; no held IronRDP security changes are included.
+The original prototype is retained on local branch `proto/wasm-per-desktop`. Its three isolation and lifecycle
+commits are now incorporated into `release/0.5.3-rc.1`, based on public main after 0.5.2 and the runner updates.
+The candidate uses 0.5.2's IronRDP binary, original JavaScript bundle and patch series unchanged; only the generated
+per-instance glue factory is added. No release tag is created by building the candidate.
 
 ## What works
 
@@ -59,8 +61,8 @@ session and snapshot retained. These follow-up checks made no live RDP connectio
 ## Live verification, 2026-10-06
 
 Ran the default Linux suites and additional Windows, xrdp, Windows-host, Hyper-V console, RD Gateway and PTY suites
-with the packed plugin in an isolated Tabby 1.0.236 running under Xvfb on the Linux test VM. Nothing was pushed or
-published, and no held IronRDP security changes were used.
+with the original packed prototype in an isolated Tabby 1.0.236 running under Xvfb on the Linux test VM.
+These results precede the 0.5.3-rc.1 integration; candidate verification is recorded separately below.
 
 After fixture repairs and fresh-session reruns, **27 live suites passed**. The remaining suite, direct profiles,
 is blocked by the renderer crash described below; the full standard run is therefore not entirely green.
@@ -93,6 +95,16 @@ Run the additional regression explicitly with a second GNOME account authorized 
 TRD_TEST_ISOLATION_USER=second-account npm test -- --port <isolated-tabby-cdp-port> wasm-isolation
 ```
 
+## Candidate verification, 0.5.3-rc.1
+
+After integration onto public main at `153ad9b`, build and application/test typechecks passed. The full unit suite
+passed 551 tests, with two existing Electron-only skips and no failures. Release-plan validation routes this RC to
+npm `beta` and an unpublished GitHub prerelease draft. The idle benchmark again collected all eight initial
+memories and retained none after 32 further create/use/release cycles.
+
+Candidate browser, packed-host and live RDP checks are pending. The earlier prototype results above remain
+separate from qualification of this integrated candidate.
+
 ## Initial measurements
 
 Apple Silicon, Node 26.8.2, idle initialized backends. Each instance uses **2.0625 MiB** of linear memory after setup:
@@ -114,7 +126,7 @@ These are startup costs, not connected-desktop costs: no framebuffers, protocol 
 decoders are active. Forced GC establishes that these idle memories can be collected; it does not predict when
 Electron will collect them during use.
 
-## Before merging
+## Before a stable release
 
 - Resolve the direct-profile renderer crash reproduced on public main and complete that suite. Exercise the
   platform-specific checks and unlocked credential stores that this headless Linux setup skips.

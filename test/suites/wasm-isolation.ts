@@ -1,6 +1,6 @@
 // Two real GNOME desktops, with one reconnecting or failing while the other keeps its connection and input.
 // The failure is a tiny synthetic WASM `unreachable`, inserted into a benign size getter by test instrumentation;
-// it exercises the export watcher and normal recovery without malformed protocol input or an unpublished fix.
+// it exercises the export watcher and normal recovery without malformed protocol input.
 import { suite } from '../lib/harness.js'
 
 const SECOND_USER = process.env.TRD_TEST_ISOLATION_USER

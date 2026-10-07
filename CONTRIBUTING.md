@@ -89,9 +89,9 @@ minor version (see the milestones).
 `tabbyRdp.minimumTabbyVersion` and `tabbyRdp.rollbackFloor` fields let release controls check compatibility and data
 migration limits; raise the floor only for a migration that prevents older packages from safely using the saved
 data. Version 0.5.1 is the explicitly supported baseline for packages that predate these fields.
-Preview versions use `<version>-beta.<number>` or `<version>-rc.<number>`, with the corresponding npm `beta` or `rc`
-tag. The standard release workflow publishes stable versions; preview publication needs an explicit prerelease
-and dist-tag path before use.
+Preview versions use `<version>-beta.<number>` or `<version>-rc.<number>`. Both use npm's `beta` tag, which the
+plugin's Preview channel follows; stable versions use `latest`. The release workflow validates this routing and
+compatibility policy before staging. A candidate can be built with `npm pack` without creating or pushing a tag.
 
 **How.** Pushing a tag `v<version>` (matching `version` in package.json) runs [`publish.yml`](.github/workflows/publish.yml),
 which builds the package and **stages** it on npm, with provenance. It goes live once a maintainer approves it: on
@@ -117,6 +117,10 @@ git worktree add /tmp/tabby-rdp-v<version> v<version>     # the tag, built here:
 (cd /tmp/tabby-rdp-v<version> && npm ci --ignore-scripts && npm run build && npm pack --ignore-scripts)
 node scripts/check-vendor.mjs package tabby-rdp-<version>-<stage-id>.tgz --same-as /tmp/tabby-rdp-v<version>/tabby-rdp-<version>.tgz
 ```
+
+The workflow creates a GitHub draft; preview versions also carry the prerelease flag and cannot become latest.
+After npm approval, verify the published version and its dist-tag, replace the draft's pending-approval paragraph
+with installation instructions, and publish the draft. Mark only a stable release as GitHub's latest release.
 
 It finds the tag by the package's version and reads the list and the files from git, never from the package; any file
 the tag doesn't have, or has otherwise, or a `vendor/` file missing, fails it, as does a tarball other than the plain

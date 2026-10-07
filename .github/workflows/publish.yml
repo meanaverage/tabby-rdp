@@ -2,7 +2,8 @@ name: Publish
 
 # Stages a release on npm, with provenance, when a version tag (v1.2.3) is pushed (a maintainer then approves it on
 # npmjs.com (Staged Packages) or with `npm stage approve <id>`, with two-factor authentication, before it goes live),
-# and creates the GitHub release for the tag from its CHANGELOG.md section.
+# and prepares a GitHub draft from its CHANGELOG.md section. Publish the draft only after npm approval and verification.
+# Stable X.Y.Z uses npm latest; beta.N and rc.N use beta. Both channels retain the same approval and build gates.
 # Authenticates by npm trusted publishing (OIDC, no token); see CONTRIBUTING.md for the one-time setup on npmjs.com.
 #
 # vendor/ (IronRDP's build) is committed and published as it is in the tagged commit, once ironrdp.yml has rebuilt it
@@ -41,6 +42,8 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
+      - name: Validate release version and compatibility policy
+        run: node scripts/release-plan.mjs check
       # No install scripts: the build is tsc.
       - run: npm ci --ignore-scripts
       - run: npm run build
@@ -79,13 +82,8 @@ jobs:
           node-version: 26.8.2
           registry-url: https://registry.npmjs.org
       - run: node -e "const [a, b] = process.argv[1].split('.').map(Number); if (a < 11 || (a === 11 && b < 15)) { console.error('npm ' + process.argv[1] + ' cannot stage a publish'); process.exit(1) }" "$(npm --version)"
-      - name: Tag matches package.json
-        run: |
-          version="v$(node -p "require('./package.json').version")"
-          if [ "$version" != "$GITHUB_REF_NAME" ]; then
-            echo "tag $GITHUB_REF_NAME, but package.json says $version" >&2
-            exit 1
-          fi
+      - name: Validate release version and compatibility policy
+        run: node scripts/release-plan.mjs check
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: package
@@ -102,33 +100,29 @@ jobs:
         run: node scripts/check-vendor.mjs package "$RUNNER_TEMP/package/tabby-rdp-${GITHUB_REF_NAME#v}.tgz" HEAD
       # Staged, not live: the trusted publisher is allowed to stage only (npm's recommended setting). The file just
       # checked, as it is: publishing a tarball runs none of the package's scripts.
-      - run: npm stage publish "$RUNNER_TEMP/package/tabby-rdp-${GITHUB_REF_NAME#v}.tgz" --provenance --access public --ignore-scripts
+      - run: |
+          npm_tag=$(node scripts/release-plan.mjs npm-tag)
+          npm stage publish "$RUNNER_TEMP/package/tabby-rdp-${GITHUB_REF_NAME#v}.tgz" --tag "$npm_tag" --provenance --access public --ignore-scripts
 
   release:
-    name: GitHub release from the changelog
-    # Once the package is staged: the release's notes tell users to install it.
+    name: GitHub draft from the changelog
+    # Staging is not availability. Keep the draft until npm approval and a registry check.
     needs: publish
     runs-on: ubuntu-24.04
     permissions:
-      contents: write   # creates the release for the tag
+      contents: write   # creates a draft for the existing tag
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      # The tag's section of CHANGELOG.md (## 1.2.3 up to the next ## heading) becomes the release notes, with the
-      # install line the earlier releases carry; "What's new" in the plugin opens this page.
       - name: Release notes
-        run: |
-          version="${GITHUB_REF_NAME#v}"
-          {
-            printf '**Install or update:** Tabby › Settings › Plugins › tabby-rdp, or `npm install tabby-rdp@%s` in Tabby'"'"'s plugin folder. Restart Tabby afterwards.\n\n\n' "$version"
-            awk -v v="## $version" '$0 == v { on = 1; next } /^## / && on { exit } on' CHANGELOG.md | awk 'NF || started { started = 1; print }'
-          } > notes.md
-          if [ "$(wc -l < notes.md)" -lt 4 ]; then
-            echo "CHANGELOG.md has no section '## $version'" >&2
-            exit 1
-          fi
-      - name: Create the release
+        run: node scripts/release-plan.mjs notes > notes.md
+      - name: Create the draft
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" --title "${GITHUB_REF_NAME#v}" --latest --notes-file notes.md
+        run: |
+          if [ "$(node scripts/release-plan.mjs npm-tag)" = beta ]; then
+            gh release create "$GITHUB_REF_NAME" --verify-tag --title "${GITHUB_REF_NAME#v}" --draft --prerelease --latest=false --notes-file notes.md
+          else
+            gh release create "$GITHUB_REF_NAME" --verify-tag --title "${GITHUB_REF_NAME#v}" --draft --latest=false --notes-file notes.md
+          fi
