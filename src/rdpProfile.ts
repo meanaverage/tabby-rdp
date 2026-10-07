@@ -320,7 +320,8 @@ export class RDPProfileSettingsComponent implements ProfileSettingsComponent<RDP
             }
             // Commit the two connection fields together only after both drafts pass validation.
             o.host = address?.host ?? ''
-            o.port = address?.port ?? 3389
+            // A blank destination carries no port edit: keep custom/inherited ports in group and type defaults.
+            if (address) { o.port = address.port }
             o.gateway = gatewayText
         }
         const { id, account, via, gateway } = this.before

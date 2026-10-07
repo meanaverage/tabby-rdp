@@ -64,7 +64,9 @@ Alt+arrow word-jump sequences, output through session middleware, resize, font c
 output, tab closing, plugin settings, dummy-account revision saves, RDP profile editing, and modal/plugin drag bars.
 Profile validation checks call the real host Save method with invalid address and gateway drafts, verify that the
 modal stays open and the stored profile stays unchanged, then correct the fields and save through the host button.
-Blank group defaults are also checked. These checks need no remote connection.
+Blank type/group defaults are also checked through the host's real ConfigProxy cleanup, including explicit port 3390
+and group defaults inheriting port 3390. An unrelated gateway edit preserves both the effective port and whether it
+follows later global-default changes. These checks need no remote connection.
 It also checks the compatibility snapshot against the real terminal inputs and modal behavior.
 `smoke-rdp` covers a real decoded RDP frame, repeated console/RDP switching, keyboard focus and covered-console
 input isolation, live display resize, host-tab switching, and disconnect cleanup. Renderer exceptions, console

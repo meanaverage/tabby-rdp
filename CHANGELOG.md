@@ -15,6 +15,7 @@ Local release candidate; not published on npm or as a GitHub release.
   and the statistics indicator's canvas hook, while retaining the last picture for the disconnected pane.
 - **Profile Save validates the address and RD Gateway before committing either field.** Invalid edits keep the
   editor open and focus the field to correct, instead of saving an invalid gateway or silently keeping an old address.
+  Blank destinations preserve custom and inherited default ports when saving unrelated changes.
 
 **Changed**
 - **Preview publishing uses npm's beta tag** for both beta and release-candidate versions. GitHub release drafts

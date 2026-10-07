@@ -4,7 +4,9 @@ import type { TestContext } from './harness.js'
 export async function profileValidationSmoke (t: TestContext): Promise<void> {
     const { ev, check, waitFor } = t
     const before = await ev<string>('return JSON.stringify(H.config.store.profiles)')
-    t.onCleanup(() => ev(`H.validationModalSub?.unsubscribe(); H.config.store.profiles = ${before}; await H.config.save()`))
+    const defaultsBefore = await ev<string>('return JSON.stringify(H.config.store.profileDefaults)')
+    t.onCleanup(() => ev(`H.validationModalSub?.unsubscribe(); H.config.store.profiles = ${before};
+        H.config.store.profileDefaults = ${defaultsBefore}; await H.config.save()`))
     await ev(`
         const modal = RD.injector.get(require('@ng-bootstrap/ng-bootstrap').NgbModal);
         H.validationModalSub = modal.activeInstances.subscribe(refs => { if (refs.length) H.validationModal = refs[refs.length - 1]; });
@@ -49,19 +51,44 @@ export async function profileValidationSmoke (t: TestContext): Promise<void> {
         const saved = H.config.store.profiles.find(p => p.id === 'rdp:validation-smoke').options;
         return !document.querySelector('.modal') && saved.host === 'new.example' && saved.port === 3390 && saved.gateway === 'new-gateway.example:444';
     `, 5))
-    await ev(`H.inZone(() => {
-        const modal = RD.injector.get(require('@ng-bootstrap/ng-bootstrap').NgbModal).open(require('tabby-settings').EditProfileModalComponent, { size: 'lg' });
-        modal.componentInstance.partialProfile = { type: 'rdp', options: {} };
-        modal.componentInstance.profileProvider = RD.injector.get(require('tabby-core').ProfilesService).getProviders().find(p => p.id === 'rdp');
-        modal.componentInstance.defaultsMode = 'group';
-        H.defaultsResult = modal.result.catch(() => null);
-    })`)
-    await waitFor('return !!document.querySelector(".modal rdp-profile-settings [name=address]")', 5)
-    const defaults = await ev<{ saved: boolean, host: string }>(`
-        H.inZone(() => document.querySelector('.modal .modal-footer .btn-primary').click());
-        const result = await H.defaultsResult;
-        return { saved: !!result, host: result?.options?.host ?? '' };
-    `)
-    check('blank group defaults still save and close without requiring a destination', defaults.saved && !defaults.host &&
-        !!await waitFor('return !document.querySelector(".modal")', 5), defaults)
+    for (const scenario of [
+        { label: 'empty type', mode: 'enabled', options: {}, globalPort: 3389, expectedPort: 3389, ownPort: false },
+        { label: 'empty group', mode: 'group', options: {}, globalPort: 3389, expectedPort: 3389, ownPort: false },
+        { label: 'custom type', mode: 'enabled', options: { port: 3390 }, globalPort: 3389, expectedPort: 3390, ownPort: true },
+        { label: 'custom group', mode: 'group', options: { port: 3390 }, globalPort: 3389, expectedPort: 3390, ownPort: true },
+        { label: 'inherited group', mode: 'group', options: {}, globalPort: 3390, expectedPort: 3390, ownPort: false },
+    ]) {
+        await ev(`H.inZone(() => {
+            H.config.store.profileDefaults.rdp = { options: { port: ${scenario.globalPort} } };
+            const modal = RD.injector.get(require('@ng-bootstrap/ng-bootstrap').NgbModal).open(require('tabby-settings').EditProfileModalComponent, { size: 'lg' });
+            modal.componentInstance.partialProfile = { type: 'rdp', options: ${JSON.stringify(scenario.options)} };
+            modal.componentInstance.profileProvider = RD.injector.get(require('tabby-core').ProfilesService).getProviders().find(p => p.id === 'rdp');
+            modal.componentInstance.defaultsMode = ${JSON.stringify(scenario.mode)};
+            H.defaultsResult = modal.result.catch(() => null);
+        })`)
+        if (!await waitFor('return !!document.querySelector(".modal rdp-profile-settings [name=address]")', 5)) {
+            throw new Error(`${scenario.label} defaults editor did not open`)
+        }
+        const defaults = await ev<{ saved: boolean, address: string, host: string, port: number, ownPort: boolean, gateway: string, followsDefault: boolean }>(`
+            const address = document.querySelector('.modal rdp-profile-settings [name=address]').value;
+            H.validationInput('gateway', 'defaults-gateway.example:444');
+            H.inZone(() => document.querySelector('.modal .modal-footer .btn-primary').click());
+            const result = await H.defaultsResult;
+            if (!result) return { saved: false };
+            // Resolve the modal's cleaned result through the host's real ConfigProxy, with its defaults-mode rules.
+            const profiles = RD.injector.get(require('tabby-core').ProfilesService);
+            const rules = { skipGlobalDefaults: ${scenario.mode === 'enabled'}, skipGroupDefaults: ${scenario.mode === 'group'} };
+            const effective = profiles.getConfigProxyForProfile(result, rules).options;
+            const values = { saved: true, address, host: effective.host, port: effective.port,
+                ownPort: Object.prototype.hasOwnProperty.call(result.options, 'port'), gateway: effective.gateway };
+            H.config.store.profileDefaults.rdp.options.port = 3391;
+            const followsDefault = profiles.getConfigProxyForProfile(result, rules).options.port === 3391;
+            return { ...values, followsDefault };
+        `)
+        check(`${scenario.label} defaults: gateway Save preserves blank address and port through host cleanup`,
+            defaults.saved && !defaults.address && !defaults.host && defaults.port === scenario.expectedPort &&
+            defaults.ownPort === scenario.ownPort && defaults.gateway === 'defaults-gateway.example:444' &&
+            defaults.followsDefault === (scenario.mode === 'group' && !scenario.ownPort) &&
+            !!await waitFor('return !document.querySelector(".modal")', 5), defaults)
+    }
 }
