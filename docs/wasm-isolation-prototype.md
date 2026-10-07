@@ -89,7 +89,10 @@ submitted. The same test reproduces the crash on unmodified public main (`2bede2
 is incomplete. Keychain checks requiring an unlocked keyring, macOS-specific checks and xrdp 0.9's unsupported live
 resize are skipped in this environment. Screenshots/demo generation is not part of these verification runs.
 
-Run the additional regression explicitly with a second GNOME account authorized for the test SSH key:
+Run the additional regression explicitly with a second GNOME account authorized for the test SSH key. Give its
+headless GNOME Remote Desktop service a listening port distinct from the primary account (for example,
+`grdctl --headless rdp set-port 3392` as that account, with 3392 free). Sharing a configured port can instead find
+the primary account's listener and stop at the existing-session prompt.
 
 ```sh
 TRD_TEST_ISOLATION_USER=second-account npm test -- --port <isolated-tabby-cdp-port> wasm-isolation
@@ -107,10 +110,16 @@ remaining after closure, and the ended backend's memory collected while its sess
 The smoke's extracted application class now imports the centralized terminal-input adapter added in 0.5.2.
 
 The packed candidate passed 35/35 host checks and 24/24 live GNOME RDP checks on the macOS arm64 Tabby 1.0.238
-test binary, which declares xterm 5. The first live isolation run connected the primary account but could not
-connect the second account; further diagnosis is pending. Earlier prototype isolation results remain separate
-from qualification of this integrated candidate. The isolation suite now reports the failed connection's status
-and bounded log instead of continuing with missing backend records.
+test binary, which declares xterm 5. The live isolation suite then passed all 27 checks: separate backend classes
+and memories, close/reopen with a fresh backend, three controlled instance faults, recovery without reconnecting
+the healthy desktop, real keyboard input on that desktop, and collection of all ended/faulted memories. Recovery
+took 1.5, 2.4 and 4.5 seconds. Connected linear memories were approximately 19.9 and 19.8 MiB at the tested resolution.
+
+The initial isolation runs stopped at the existing-session prompt because both test accounts had the same RDP
+port configured. Giving the second account its own free port resolved that fixture problem. The isolation suite
+now reports a failed connection's status and bounded log instead of continuing with missing backend records.
+These are integrated candidate results; the earlier prototype matrix above does not qualify every candidate
+platform or suite. Full vendor rebuild and Rust CI remain required, along with the stable-release checks below.
 
 ## Initial measurements
 
