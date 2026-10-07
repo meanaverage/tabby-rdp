@@ -517,7 +517,7 @@ They are stored in Tabby's config under `remoteDesktop`:
 | Session backend (`sessionBackend`) | `native` | For `desk`: `native` (trd-pty) or `tmux`. Config file only. |
 | Find virtual machines on SSH hosts (`discoverVMs`) | On | Lists a host's libvirt VMs with a desktop in its menu ([VMs on a host](#vms-on-a-host)). |
 | Shut down VMs it started (`shutDownIdle`) | Never | 5, 15 or 60: minutes without a desktop open after which a VM the plugin started is shut down again ([VMs on a host](#vms-on-a-host)). |
-| Tell me about new versions (`checkUpdates`) | On | Once a day, asks npm for the latest tabby-rdp (nothing else is sent), and says so in a note, the menus and the settings page when there's a newer one: Tabby itself shows plugin upgrades only on its Plugins page. |
+| Automatic updates (Updates tab) | On, Stable | Once a day, checks published versions on npm. Choose Stable or Preview, control automatic checks, view notes, or explicitly install a compatible version. Preferences and version history stay on this computer. Tabby’s own Plugins controls are separate; nothing installs or restarts automatically. |
 | Desktop name overlay (`osd`) | When it helps | `show` (`auto`, `always`, `off`), `font`, `size`, `position`, `color` (empty: white; else a color name, `#hex`, or a color function of numbers such as `rgb()`) and `seconds`; the settings page previews it, at a resolution you pick. |
 
 ## Requirements
@@ -622,11 +622,15 @@ npm run build:ironrdp        # rebuild vendor/ from IronRDP and ironrdp/patches:
 - **Waking a desktop** over the network (Wake-on-LAN) starts it but never shuts it down again; for VMs, see
   [Shut down VMs it started](#vms-on-a-host).
 
+## Versions and recovery
+
+**Settings › Remote Desktop › Updates** shows the running version, published stable and preview versions, and any installation waiting for restart. It offers explicit installation, return to stable, restore of the previous successful installation, and uninstall while preserving saved data. Returning to stable may be a downgrade; compatibility and data migration limits apply. Read [troubleshooting and recovery](TROUBLESHOOTING.md#recovery) for recovery when the plugin cannot load, and for what uninstall leaves behind. Connection logs are in **Desktops › Open desktops**.
+
 ## Questions and problems
 
 Questions ("how do I…", "is this expected?") go to [Discussions › Q&A](https://github.com/meanaverage/tabby-rdp/discussions/categories/q-a);
 bugs and feature requests to the [issues](https://github.com/meanaverage/tabby-rdp/issues). A bug report is most useful
-with the connection log: **Settings › Remote Desktop › Troubleshooting › Open desktops › Copy log**.
+with the connection log: **Settings › Remote Desktop › Desktops › Open desktops › Copy log**.
 
 ## License
 

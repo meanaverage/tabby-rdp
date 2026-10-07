@@ -9,8 +9,9 @@ import { DesktopSettings, RemoteDesktopService } from './desktop.service'
 import { configText, DIRECT_KEY, entryText, isDesktopEntry, shownKey } from './desktops'
 import { driveName } from './drives'
 import { OSD_FONTS, OSD_POSITIONS, OSD_SIZES, OSD_STYLE, OsdSettings, renderOsd } from './osd'
-import { esc, HelpTopic, HOTKEYS, RemoteDesktopHelp, SETTINGS_TAB_ID, TROUBLESHOOTING } from './help'
+import { esc, HelpTopic, HOTKEYS, RemoteDesktopHelp, SETTINGS_TAB_ID, TROUBLESHOOTING_URL } from './help'
 import { installedVersion, UpdateCheck } from './updates'
+import { renderReleaseSettings } from './releaseSettings'
 import { RDP_PROFILE_TYPE } from './targets'
 import { showable } from './unshowable'
 import { HostCompatibility } from './hostCompat'
@@ -26,7 +27,7 @@ const TABS: { id: string, title: string, topics: HelpTopic[] }[] = [
     { id: 'osd', title: 'Overlay', topics: ['osd'] },
     { id: 'desktops', title: 'Desktops', topics: ['desktops', 'certificates'] },
     { id: 'accounts', title: 'Accounts', topics: ['accounts'] },
-    { id: 'troubleshooting', title: 'Troubleshooting', topics: ['troubleshooting'] },
+    { id: 'updates', title: 'Updates', topics: ['updates'] },
 ]
 /** The tab shown last, so that the page comes back to it. */
 let lastTab = 'start'
@@ -37,13 +38,22 @@ const STYLE = `
 .trd-settings { display: block; }
 .trd-settings h3 { margin-bottom: 4px; }
 .trd-settings .trd-lead { margin-bottom: 18px; opacity: 0.75; }
-.trd-settings .trd-links { white-space: nowrap; }
-.trd-settings .trd-lead a { margin-left: 10px; }
+.trd-settings .trd-links { display: inline-flex; flex-wrap: wrap; gap: 6px 10px; margin-left: 10px; }
+.trd-settings .trd-lead a { white-space: nowrap; }
 .trd-settings section .trd-lead a { margin-left: 0; cursor: pointer; text-decoration: underline; }
-.trd-settings .trd-update { display: flex; gap: 10px; align-items: center; margin-bottom: 18px; padding: 10px 12px; border-radius: 6px;
+.trd-settings .trd-update { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 18px; padding: 10px 12px; border-radius: 6px;
     border: 1px solid rgba(80, 150, 255, 0.45); background: rgba(80, 150, 255, 0.1); }
 .trd-settings .trd-update > div { flex: auto; }
 .trd-settings .trd-update:empty { display: none; }
+.trd-settings .trd-release-summary { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 18px; }
+.trd-settings .trd-release-summary h4 { margin: 3px 0; }
+.trd-settings .trd-release-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 10px 0; }
+.trd-settings .trd-release-actions select { width: auto; max-width: 100%; flex: 1 1 240px; }
+.trd-settings .trd-release-notice { padding: 12px; border: 1px solid rgba(80,150,255,.45); border-radius: 6px; margin-bottom: 18px; }
+.trd-settings .trd-release-error { color: var(--bs-danger, #e88); }
+.trd-settings [data-release-settings] .trd-sub { font-size: 12px; opacity: .75; }
+.trd-settings .trd-release-pause { display: flex; align-items: center; gap: 8px; margin-top: 14px; }
+@media (max-width: 700px) { .trd-settings [data-release-settings] .form-line { flex-wrap: wrap; gap: 8px; } }
 .trd-settings .nav-tabs { margin-bottom: 18px; }
 .trd-settings .nav-tabs .nav-link { cursor: pointer; }
 .trd-settings section { margin-bottom: 28px; scroll-margin-top: 12px; }
@@ -143,7 +153,7 @@ type Toggle = Exclude<{ [K in keyof DesktopSettings]: DesktopSettings[K] extends
 
 /**
  * The plugin's settings page: getting started, the settings, keys, desktops and certificates it keeps, and
- * troubleshooting. Plain DOM like the rest of the plugin; the lists follow config changes made elsewhere.
+ * updates. Plain DOM like the rest of the plugin; the lists follow config changes made elsewhere.
  */
 @Component({
     selector: 'remote-desktop-settings',
@@ -174,8 +184,6 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
             document.head.appendChild(style)
         }
         this.render()
-        // A known newer version may be stale by now (the page is where it shows): ask npm again.
-        this.injector.get(UpdateCheck).refresh()
         // The preview is a desktop of the chosen resolution, scaled down to fit the page.
         const frame = this.root.querySelector<HTMLElement>('.trd-osd-preview')!
         const scale = new ResizeObserver(() => this.scalePreview())
@@ -204,19 +212,12 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
 
     private render (): void {
         const mac = process.platform === 'darwin'
-        const version = (() => {
-            try {
-                return require('../package.json').version as string
-            } catch {
-                return ''
-            }
-        })()
+        const version = installedVersion()
         this.root.innerHTML = `
             <h3>Remote Desktop</h3>
             <div class="trd-lead">Linux and Windows desktops in Tabby tabs, through SSH or directly.
                 ${version ? `<span>tabby-rdp ${esc(version)}</span>` : ''}
-                <span class="trd-links"><a href="#" data-link="${REPO}#readme">Guide</a><a href="#" data-link="${REPO}/issues">Report a problem</a><a href="#" data-link="${REPO}/discussions/categories/q-a">Ask a question</a></span></div>
-            <div class="trd-update" data-update></div>
+                <span class="trd-links"><a href="#" data-link="${REPO}#readme">Guide</a><a href="#" data-link="${REPO}/issues">Report a problem</a><a href="#" data-link="${REPO}/discussions/categories/q-a">Ask a question</a><a href="#" data-link="${TROUBLESHOOTING_URL}">Troubleshooting</a></span></div>
             <ul class="nav nav-tabs" data-nav></ul>
 
             <section data-topic="start">
@@ -324,8 +325,6 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
                     </select>
                 </div>
 
-                <h5>Updates</h5>
-                ${this.toggleLine('checkUpdates', 'Tell me about new versions', 'Once a day, asks npm (registry.npmjs.org) for the latest tabby-rdp, and says so here and in the menus when there is one. Nothing is sent but the request. Tabby itself shows plugin upgrades only on its Plugins page.')}
             </section>
 
             <section data-topic="osd">
@@ -400,7 +399,9 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
                 <div class="trd-lead">Remote desktop profiles, and desktops added from SSH tabs.
                     ${this.info('A desktop added from an SSH tab\'s menu belongs to that host. That is for hosts without a profile, such as ssh run in a local terminal.')}</div>
                 <div class="trd-list" data-list="desktops"></div>
-                <div class="trd-add"><button class="btn btn-secondary btn-sm" data-action="desktop">Add a desktop…</button></div>
+                <div class="trd-add"><button class="btn btn-secondary btn-sm" data-action="desktop">Add desktop…</button></div>
+                <h4 style="margin-top: 24px">Open desktops</h4>
+                <div class="trd-list" data-list="sessions"></div>
             </section>
 
             <section data-topic="accounts">
@@ -419,14 +420,7 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
                 <div class="trd-list" data-list="certificates"></div>
             </section>
 
-            <section data-topic="troubleshooting">
-                <h4>Troubleshooting</h4>
-                <div data-list="troubleshooting">${TROUBLESHOOTING.map(e => `
-                    <details data-entry="${esc(e.id)}"><summary>${esc(e.title)}</summary><div>${e.body}</div></details>`).join('')}
-                </div>
-                <h4 style="margin-top: 18px">Open desktops</h4>
-                <div class="trd-list" data-list="sessions"></div>
-            </section>`
+            <section data-topic="updates"><h4>Updates</h4><div class="trd-update" data-update></div><div data-release-settings></div></section>`
 
         // The sections go into the tabs' bodies; one tab shows at a time.
         const nav = this.root.querySelector('[data-nav]')!
@@ -553,7 +547,7 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
                 (el as HTMLSelectElement).value = String(settings[key])
             }
         })
-        // A newer version: say so at the top, with where to get it.
+        // Update notices and controls belong to the Updates page.
         const updates = this.injector.get(UpdateCheck)
         const banner = this.root.querySelector<HTMLElement>('[data-update]')
         if (banner) {
@@ -562,6 +556,10 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
             banner.querySelector('[data-upgrade]')?.addEventListener('click', () => updates.upgrade())
             banner.querySelector('[data-whatsnew]')?.addEventListener('click', () => updates.whatsNew())
         }
+        renderReleaseSettings(this.root.querySelector('[data-release-settings]')!, updates, {
+            notes: version => updates.whatsNew(version), plugins: () => this.help.openSettings('plugins'),
+            link: url => this.platform.openExternal(url),
+        })
         const osd = settings.osd
         this.root.querySelectorAll<HTMLInputElement | HTMLSelectElement>('[data-osd]').forEach(el => {
             const key = el.dataset.osd as keyof OsdSettings
@@ -661,7 +659,7 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
         })
         list.replaceChildren(...profileRows, ...desktopRows, this.empty(profileRows.length + desktopRows.length
             ? 'Profiles are also in Profiles &amp; connections; a desktop behind a host also in that host\'s SSH tab: right-click › Settings.'
-            : 'None yet. <b>Add a desktop…</b> makes a profile: an RDP server on your network, or one behind an SSH profile\'s host.'))
+            : 'No saved desktops.'))
     }
 
     private renderFolders (): void {
@@ -732,7 +730,7 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
                 }
             }, () => null)
             return row
-        }), ...accounts.length ? [] : [this.empty('None yet. Without one, each desktop asks for its account and can remember it for itself.')])
+        }), ...accounts.length ? [] : [this.empty('No saved accounts.')])
     }
 
     /** The form under the list, for a new account or `account`. */
@@ -1017,7 +1015,7 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
             ])
         }), this.empty(entries.length
             ? 'A forgotten certificate is asked about again on the next connection, unless a certificate authority vouches for it; one behind an SSH host is remembered again without asking.'
-            : 'None yet. A desktop connected to directly, and a gateway, are asked about the first time unless a certificate authority vouches for them; a desktop behind an SSH host is remembered on first use. Each is checked every time after. GNOME desktops only accept the one the plugin made.'))
+            : 'No saved certificates.'))
     }
 
     private renderSessions (): void {
@@ -1028,17 +1026,11 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
         const sessions = this.desktop.sessionSummaries()
         list.replaceChildren(...sessions.map(s => this.row(esc(s.name), `${s.where ? `via ${esc(s.where)} · ` : ''}${esc(s.state)}`, [
             { label: 'Copy log', run: () => this.copyLog(s.name, s.log) },
-        ])), ...sessions.length ? [] : [this.empty('No desktop is open. Each open desktop\'s connection log can be copied from here, for a bug report.')])
+        ])), ...sessions.length ? [] : [this.empty('No desktops are open.')])
     }
 
     private copyLog (name: string, log: string[]): void {
-        const version = (() => {
-            try {
-                return require('../package.json').version
-            } catch {
-                return '?'
-            }
-        })()
+        const version = installedVersion()
         this.platform.setClipboard({ text: [`tabby-rdp ${version} on ${process.platform}: ${name}`, ...this.compat.diagnosticLines(), ...log].join('\n') })
     }
 
@@ -1046,6 +1038,9 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
         lastTab = TABS.some(t => t.id === id) ? id : TABS[0].id
         this.root.querySelectorAll<HTMLElement>('[data-tab]').forEach(el => el.classList.toggle('active', el.dataset.tab === lastTab))
         this.root.querySelectorAll<HTMLElement>('[data-body]').forEach(el => { el.hidden = el.dataset.body !== lastTab })
+        if (lastTab === 'updates') {
+            this.injector.get(UpdateCheck).refresh()
+        }
     }
 
     /** Shows the tab with a section (and opens a troubleshooting entry), with a short highlight. */
