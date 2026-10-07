@@ -63,6 +63,8 @@ upgrade. The suites accept host-provided modal drag regions and the plugin's fal
 Alt+arrow word-jump sequences, output through session middleware, resize, font changes, scroll position, background
 output, tab closing, plugin settings, dummy-account revision saves, RDP profile editing, and modal/plugin drag bars.
 It also checks the compatibility snapshot against the real terminal inputs and modal behavior.
+Gateway-account checks use dummy credentials without a remote connection: real group-default resolution in the
+inventory and removal confirmation, then separate gateway prompts after removal, including cancellation.
 `smoke-rdp` covers a real decoded RDP frame, repeated console/RDP switching, keyboard focus and covered-console
 input isolation, live display resize, host-tab switching, and disconnect cleanup. Renderer exceptions, console
 errors, and caught xterm resize failures fail either suite. Neither suite recreates a complete terminal-renderer

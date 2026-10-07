@@ -1,6 +1,7 @@
 // Host upgrade checks with real Tabby, xterm, local PTYs and plugin settings. No remote desktop is required.
 import { suite } from '../lib/harness.js'
 import { rendererErrors, smokeHost } from '../lib/smoke.js'
+import { gatewayAccountSmoke } from '../lib/gateway-account-smoke.js'
 
 interface ModalDrag { bars: number, native: boolean, hit: boolean, controls: boolean }
 
@@ -125,6 +126,7 @@ await suite('smoke-host', async t => {
         await ev(`H.inZone(() => RD.injector.get(require('@ng-bootstrap/ng-bootstrap').NgbModal).dismissAll())`)
         await waitFor('return !document.querySelector(".modal")', 5)
     }
+    await gatewayAccountSmoke(t)
     await ev(`RD.help.open('keyboard')`)
     await waitFor('return !!document.querySelector(".trd-settings [data-list=hotkeys] .add")', 5)
     await ev(`document.querySelector('.trd-settings [data-list=hotkeys] .add').click()`)

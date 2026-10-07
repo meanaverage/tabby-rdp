@@ -1,4 +1,4 @@
-import { SavedAccount, signInName } from './accounts'
+import { ASK_GATEWAY_ACCOUNT, SavedAccount, signInName } from './accounts'
 import { newAccountOption, NewAccountInput } from './accountForm'
 import { CLIPBOARD_LABELS, ClipboardMode, ownClipboard } from './clipboard'
 import { configText, ExtraDesktopConfig, xrdpFromHost } from './desktops'
@@ -129,13 +129,14 @@ export function askDesktop (pane: HTMLElement, options: DesktopFormOptions): Pro
         account.hidden = account.options.length < 2
     }
     ownAccount()
-    // The gateway's own account: offered once there is a gateway and a saved account to choose.
+    // The gateway's own account, including a separate prompt when no saved account is chosen.
     const gateway = field('gateway')
     const gatewayAccount = field<HTMLSelectElement>('gatewayAccount')
     gateway.value = configText(initial.gateway)
-    gatewayAccount.append(new Option('Gateway account: the same as the desktop\'s', ''), ...accounts.map(a => new Option(`Gateway account: ${a.name} (${signInName(a)})`, a.id)))
+    gatewayAccount.append(new Option('Gateway account: the same as the desktop\'s', ''),
+        new Option('Gateway account: ask when connecting', ASK_GATEWAY_ACCOUNT), ...accounts.map(a => new Option(`Gateway account: ${a.name} (${signInName(a)})`, a.id)))
     const initialGatewayAccount = configText(initial.gatewayAccount)
-    if (initialGatewayAccount && !accounts.some(a => a.id === initialGatewayAccount)) {
+    if (initialGatewayAccount && initialGatewayAccount !== ASK_GATEWAY_ACCOUNT && !accounts.some(a => a.id === initialGatewayAccount)) {
         gatewayAccount.append(new Option('(a saved account that no longer exists)', initialGatewayAccount))
     }
     gatewayAccount.value = initialGatewayAccount

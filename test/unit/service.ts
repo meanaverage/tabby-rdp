@@ -66,7 +66,21 @@ function service (remoteDesktop: Record<string, unknown> = {}, deps: { targets?:
     }
     const notifications = { notice () { }, info () { }, error () { } }
     const zone = { run: (f: () => unknown) => f(), runOutsideAngular: (f: () => unknown) => f() }
-    const svc = new RemoteDesktopService(deps.app ?? {}, deps.targets ?? {}, notifications, config, zone, {}, {}, deps.selector ?? {}, {})
+    const profilesService = {
+        getConfigProxyForProfile (profile: any) {
+            const groups = (config.store as any).groups ?? []
+            const defaults: any[] = [(config.store as any).profileDefaults?.rdp?.options ?? {}]
+            const visited = new Set<string>()
+            let group = groups.find((g: any) => g.id === profile.group)
+            while (group && !visited.has(group.id)) {
+                visited.add(group.id)
+                defaults.splice(1, 0, group.defaults?.rdp?.options ?? {})
+                group = groups.find((g: any) => g.id === group.parentGroupId)
+            }
+            return { ...profile, options: Object.assign({}, ...defaults, profile.options) }
+        },
+    }
+    const svc = new RemoteDesktopService(deps.app ?? {}, deps.targets ?? {}, notifications, config, zone, profilesService, {}, deps.selector ?? {}, {})
     const revisions = new Map<string, string>()
     svc.accountRevisions = new (require('../../dist/accountRevisions.js').AccountRevisions)(() => ({
         getItem: (key: string) => revisions.get(key) ?? null, setItem: (key: string, value: string) => revisions.set(key, value),
@@ -1694,7 +1708,7 @@ test('a direct profile deleted, or moved behind an SSH profile, while a store of
     assert.match(notes[1], /^If a password was saved for "Lab", it couldn't be removed/)
 })
 
-test('removing a saved account: the profiles that used it ask, a group\'s default is none, desktops lose it, and its password goes', async () => {
+test('removing a saved account: desktops ask, gateways keep a separate sign-in, and its password goes', async () => {
     await signin.loadCredentials('nothing')
     keychain.clear()
     const profiles = [
@@ -1714,13 +1728,110 @@ test('removing a saved account: the profiles that used it ask, a group\'s defaul
     assert.deepEqual(store.accounts.map((a: any) => a.id), ['k2'])
     // Null, which Tabby's profile editor keeps and its config proxy takes as the profile's own: no account, so it asks,
     // rather than take the group's default ('' would).
-    assert.deepEqual(profiles.map(p => [p.options.account, p.options.gatewayAccount]), [[null, null], ['k2', ''], ['k1', undefined]])
+    assert.deepEqual(profiles.map(p => [p.options.account, p.options.gatewayAccount]), [[null, '@ask'], ['k2', ''], ['k1', undefined]])
     // A group's default: none.
     assert.deepEqual((config.store as any).groups.map((g: any) => g.defaults.rdp.options.account), ['', 'k2'])
-    // A desktop behind a host: neither key, so its own sign-in, for the gateway too.
-    assert.deepEqual(store.desktops, [{ via: 'h', host: '10.0.0.5', gateway: 'gw.example' }, { via: 'h', host: '10.0.0.6', account: 'k2' }])
+    // A desktop behind a host keeps a separate gateway prompt.
+    assert.deepEqual(store.desktops, [{ via: 'h', host: '10.0.0.5', gateway: 'gw.example', gatewayAccount: '@ask' }, { via: 'h', host: '10.0.0.6', account: 'k2' }])
     assert.deepEqual([keychain.has('account#k1'), keychain.has('account#k2')], [false, true])
     assert.ok(config.saves >= 1)
+})
+
+test('removing an inherited gateway account names every affected profile and preserves separate authentication on connection', async t => {
+    const profiles = [
+        { id: 'inherited', type: 'rdp', name: 'Inherited gateway', group: 'child', options: { host: 'pc.corp', account: 'desktop' } },
+        { id: 'global', type: 'rdp', name: 'Global gateway', options: { host: 'other.corp' } },
+        { id: 'override', type: 'rdp', name: 'Own gateway account', group: 'child', options: { host: 'own.corp', gatewayAccount: 'other' } },
+        { id: 'same', type: 'rdp', name: 'Explicit desktop sign-in', group: 'child', options: { host: 'same.corp', gatewayAccount: null } },
+    ]
+    const { svc, config, store } = service({ accounts: [{ id: 'gateway', name: 'Gateway only', username: 'gw-user' }] }, { profiles })
+    ;(config.store as any).groups = [
+        { id: 'parent', defaults: { rdp: { options: { gateway: 'gw.example', gatewayAccount: 'gateway' } } } },
+        { id: 'child', parentGroupId: 'parent', defaults: { rdp: { options: {} } } },
+    ]
+    ;(config.store as any).profileDefaults = { rdp: { options: { gateway: 'global.example', gatewayAccount: 'gateway' } } }
+    assert.deepEqual(svc.accountUses('gateway'), [
+        { name: 'Inherited gateway', profileId: 'inherited' }, { name: 'Global gateway', profileId: 'global' },
+    ])
+    let confirmation: any
+    svc.platform.showMessageBox = async (options: any) => { confirmation = options; return { response: 0 } }
+    assert.equal(await svc.confirmRemoveAccount('gateway'), true)
+    assert.match(confirmation.detail, /2 desktops use it.*Inherited gateway, Global gateway/)
+    assert.deepEqual(store.accounts, [])
+    assert.equal((config.store as any).groups[0].defaults.rdp.options.gatewayAccount, '@ask')
+    assert.equal((config.store as any).profileDefaults.rdp.options.gatewayAccount, '@ask')
+    assert.equal(profiles[2].options.gatewayAccount, 'other')
+    assert.equal(profiles[3].options.gatewayAccount, null)
+
+    const spec = specOf({ ...svc.profiles.getConfigProxyForProfile(profiles[0]).options, name: profiles[0].name })
+    assert.equal(spec.gatewayAccount, '@ask')
+    const pane = {}
+    const s = session(spec, 'rdp#pc.corp:3389')
+    svc.sessions.set(pane, s)
+    const desktopCredentials = { username: 'desktop-user', password: 'desktop-secret' }
+    const gatewayCredentials = { username: 'new-gateway-user', password: 'gateway-secret', remember: true }
+    const prompts: any[] = []
+    const previousAsk = signin.askCredentials
+    t.after(() => { signin.askCredentials = previousAsk; startProxy = null })
+    signin.askCredentials = async (_overlay: unknown, options: any) => { prompts.push(options); return gatewayCredentials }
+    svc.endpointFor = async () => ({ host: spec.host, port: spec.port, credentials: desktopCredentials, domain: 'DESKTOP' })
+    svc.loadIronRDP = async () => ({})
+    startProxy = async () => ({ close () { } })
+    let attempts = 0
+    svc.run = async (_pane: unknown, _target: unknown, _spec: unknown, _session: unknown, _rdp: unknown, endpoint: any) => {
+        attempts++
+        assert.deepEqual(endpoint.credentials, desktopCredentials)
+        assert.deepEqual(endpoint.gatewayAccount.credentials, gatewayCredentials)
+        assert.equal(endpoint.gatewayAccount.domain, undefined)
+        assert.equal(endpoint.gatewayAccount.remember, false)
+        assert.equal(endpoint.gatewayAccount.saveKey, undefined)
+        return {}
+    }
+    svc.afterEnd = () => { }
+    await svc.connect(pane, { key: 'rdp', label: 'PC' }, spec, s)
+    assert.equal(attempts, 1)
+    assert.match(prompts[0].title, /Sign in to the gateway gw.example/)
+    assert.equal(prompts[0].username, '')
+    assert.equal(prompts[0].canRemember, false)
+    // Cancelling the gateway's prompt stops before a connection attempt with any credentials.
+    signin.askCredentials = async () => null
+    await svc.connect(pane, { key: 'rdp', label: 'PC' }, spec, s)
+    assert.equal(attempts, 1)
+    assert.equal((s as any).state, 'ended')
+    assert.equal(s.shown.at(-1), 'Sign-in cancelled.')
+})
+
+test('a missing named gateway account asks separately; existing gateway accounts still load and retry their own credentials', async t => {
+    keychain.clear()
+    const { svc } = service({ accounts: [{ id: 'exists', name: 'Gateway', username: 'gw-user', domain: 'GATEWAY' }] })
+    await signin.saveCredentials('account#exists', { username: 'GATEWAY\\gw-user', password: 'gw-secret' })
+    const prompts: any[] = []
+    const previousAsk = signin.askCredentials
+    t.after(() => { signin.askCredentials = previousAsk })
+    signin.askCredentials = async (_overlay: unknown, options: any) => { prompts.push(options); return null }
+    const gateway = { host: 'gw.example', port: 443 }
+    const missing = specOf({ host: 'pc.corp', gateway: 'gw.example', gatewayAccount: 'missing' })
+    assert.equal(await svc.gatewayAccountFor(missing, session(missing, 'test'), gateway), null)
+    assert.match(prompts[0].error, /saved gateway account no longer exists/)
+    assert.equal(prompts[0].username, '')
+    assert.equal(prompts[0].canRemember, false)
+    const existing = { ...missing, gatewayAccount: 'exists' }
+    const loaded = await svc.gatewayAccountFor(existing, session(existing, 'test'), gateway)
+    assert.deepEqual(loaded.credentials, { username: 'GATEWAY\\gw-user', password: 'gw-secret' })
+    assert.equal(loaded.domain, 'GATEWAY')
+    assert.equal(prompts.length, 1)
+    assert.equal(await svc.gatewayAccountFor(existing, session(existing, 'test'), gateway, 'Gateway refused it'), null)
+    assert.equal(prompts[1].username, 'GATEWAY\\gw-user')
+    assert.match(prompts[1].error, /Gateway refused it/)
+})
+
+test('a gateway requiring its own account cannot receive desktop credentials when its separate sign-in is absent', async () => {
+    const { svc } = service()
+    const spec = specOf({ host: 'pc.corp', gateway: 'gw.example', gatewayAccount: '@ask' })
+    let opened = false
+    await assert.rejects(svc.throughGateway({ openTcp: () => { opened = true } }, spec, session(spec, 'test'),
+        { host: 'gw.example', port: 443 }, { credentials: { username: 'desktop-only', password: 'desktop-secret' } }), /separate gateway sign-in is required/)
+    assert.equal(opened, false)
 })
 
 test('reopening the desktop of a machine reached through a host goes there again, also when it ended before signing in', async t => {

@@ -359,6 +359,36 @@ test('the settings page lists a profile\'s clipboard as it connects with it: its
         ['only from the remote desktop to this computer', 'off', null])
 })
 
+test('the settings inventory uses one resolved profile for inherited routing, accounts, address and connection kind', () => {
+    const profiles = [
+        { id: 'ssh:jump', type: 'ssh', name: 'Jump <host>' },
+        { id: 'rdp:inherited', type: 'rdp', name: 'Inherited', group: 'g1', options: {} },
+        { id: 'rdp:override', type: 'rdp', name: 'Override', group: 'g1', options: { host: 'own.example', gateway: '', gatewayAccount: null, via: '', account: null, username: 'own-user', kind: 'windows' } },
+        { id: 'rdp:missing', type: 'rdp', name: 'Missing account', options: { host: 'missing.example', gateway: 'gw.example', gatewayAccount: 'missing' } },
+        { id: 'rdp:ask', type: 'rdp', name: 'Ask', options: { host: 'ask.example', gateway: 'gw.example', gatewayAccount: '@ask' } },
+    ]
+    const inherited = { host: 'inherited.example', port: 3390, gateway: 'gw<host>.example', gatewayAccount: 'gw', via: 'ssh:jump', account: 'desktop', username: 'inherited-user', kind: 'xrdp', clipboard: 'off' }
+    const resolved: string[] = []
+    const proxy = (p: any) => { resolved.push(p.id); return { ...p, options: { ...p.group ? inherited : { port: 3389 }, ...p.options } } }
+    let rows: FakeElement[] = []
+    const list = { replaceChildren: (...children: FakeElement[]) => { rows = children } }
+    const element = { nativeElement: { querySelector: (s: string) => s === '[data-list=desktops]' ? list : null } }
+    const desktop = { accounts: () => [{ id: 'gw', name: 'Gateway <account>' }, { id: 'desktop', name: 'Desktop' }], configuredDesktops: () => [] }
+    const settings = new RemoteDesktopSettingsComponent(element, desktop, {}, { store: { profiles } }, {},
+        { get: () => ({ getConfigProxyForProfile: proxy }) }, zone, {}, new HostCompatibility({}))
+    settings.renderDesktops()
+    assert.deepEqual(resolved, profiles.slice(1).map(p => p.id))
+    assert.match(rows[0].innerHTML, /inherited\.example:3390 via Jump &#60;host&#62;/)
+    assert.match(rows[0].innerHTML, /Signs in as Desktop/)
+    assert.match(rows[0].innerHTML, /xrdp/)
+    assert.match(rows[0].innerHTML, /Through the gateway gw&#60;host&#62;\.example, as Gateway &#60;account&#62;/)
+    assert.match(rows[0].innerHTML, /Clipboard: off/)
+    assert.match(rows[1].innerHTML, /Signs in as own-user/)
+    assert.doesNotMatch(rows[1].innerHTML, /Through the gateway|via Jump|Signs in as Desktop|xrdp/)
+    assert.match(rows[2].innerHTML, /saved gateway account missing \(asks when connecting\)/)
+    assert.match(rows[3].innerHTML, /asks for a gateway account/)
+})
+
 test('the settings page says which hosts a desktop added from an SSH tab is for: those without a profile, such as ssh run in a local terminal', () => {
     // The page as it is written (nothing after that is needed here).
     let html = ''

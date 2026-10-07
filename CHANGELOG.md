@@ -11,6 +11,11 @@ Local release candidate; not published on npm or as a GitHub release.
   with a browser smoke test and a live two-desktop isolation suite.
 
 **Fixed**
+- **Removing a saved gateway account keeps gateway credentials separate.** Inherited gateway uses are listed in
+  the removal confirmation; affected desktops and group defaults ask for a gateway account on the next connection.
+  Missing named gateway accounts also ask separately instead of silently using the destination credentials.
+- **The desktop inventory shows effective profile settings**, including inherited gateway routing, gateway accounts,
+  SSH profiles, sign-in names and connection kinds.
 - **Ended connections release their backend and browser resources**, including timers, global listeners, media,
   and the statistics indicator's canvas hook, while retaining the last picture for the disconnected pane.
 

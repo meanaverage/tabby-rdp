@@ -103,7 +103,7 @@ export interface ExtraDesktopConfig {
     wake?: { vm?: string, mac?: string, broadcast?: string, port?: number, hyperv?: string }
     hyperv?: string
     gateway?: string
-    /** A saved account's id for the gateway; null (an imported RDP profile's options), '' and its absence are none. */
+    /** A saved account's id or ASK_GATEWAY_ACCOUNT for a separate prompt; null, '' and absence use the desktop's. */
     gatewayAccount?: string | null
     /**
      * Saved from a VM the host found (see saveFoundDesktop): `kind` is what the host reported, not the user's choice

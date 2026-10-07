@@ -7,7 +7,7 @@ import { BaseTerminalTabComponent, TerminalDecorator } from 'tabby-terminal'
 import { RemoteDesktopService } from './desktop.service'
 import { formatAddress, parseAddress } from './desktopForm'
 import { RemoteDesktopHelp } from './help'
-import { signInName } from './accounts'
+import { ASK_GATEWAY_ACCOUNT, signInName } from './accounts'
 import { newAccountOption } from './accountForm'
 import { CLIPBOARD_LABELS, ClipboardMode, ownClipboard } from './clipboard'
 import { configText, desktopIdOf } from './desktops'
@@ -42,6 +42,7 @@ export interface RDPProfile extends ConnectableProfile {
         /**
          * A saved account's id to sign in to the gateway with, or '' for the desktop's own sign-in (or the group's or
          * the global default's), or null: the desktop's own whatever the defaults (an imported profile's).
+         * ASK_GATEWAY_ACCOUNT asks for a separate gateway sign-in when connecting.
          */
         gatewayAccount: string | null
         /** The ways the clipboard goes with this desktop ('both', 'fromRemote', 'off'), or '' for the setting's. */
@@ -264,12 +265,13 @@ export class RDPProfileSettingsComponent implements ProfileSettingsComponent<RDP
         field('username').addEventListener('input', () => { o.username = field('username').value.trim() })
         field('domain').addEventListener('input', () => { o.domain = field('domain').value.trim() })
 
-        // The gateway, and its account where that isn't the desktop's (offered once there is a gateway and a saved account).
+        // The gateway, and its separate account or sign-in prompt.
         const gateway = field('gateway')
         const gatewayAccount = field<HTMLSelectElement>('gatewayAccount')
         gateway.value = o.gateway ?? ''
-        gatewayAccount.append(new Option('The same as the desktop\'s', ''), ...accounts.map(a => new Option(label(a), a.id)))
-        if (o.gatewayAccount && !accounts.some(a => a.id === o.gatewayAccount)) {
+        gatewayAccount.append(new Option('The same as the desktop\'s', ''), new Option('Ask for a gateway account when connecting', ASK_GATEWAY_ACCOUNT),
+            ...accounts.map(a => new Option(label(a), a.id)))
+        if (o.gatewayAccount && o.gatewayAccount !== ASK_GATEWAY_ACCOUNT && !accounts.some(a => a.id === o.gatewayAccount)) {
             gatewayAccount.append(new Option('(a saved account that no longer exists)', o.gatewayAccount))
         }
         gatewayAccount.value = o.gatewayAccount ?? ''
