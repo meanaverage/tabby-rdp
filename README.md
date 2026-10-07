@@ -20,8 +20,8 @@ Linux and Windows, side by side, through the SSH connections you already have.
 ---
 
 tabby-rdp is a plugin for the [Tabby](https://tabby.sh) terminal. Press a key in an SSH tab and the machine's desktop
-appears in its place; press it again and you're back at the shell. Everything travels inside the SSH connection:
-nothing is opened on the network, and nothing has to be installed on the remote machine beforehand.
+appears in its place; press it again and you're back at the shell. SSH desktops use the connection you already have;
+remote desktop profiles can also connect directly or through an RD Gateway.
 
 - **Linux desktops without a monitor or a login.** The plugin starts a headless GNOME session for your SSH user with
   GNOME Remote Desktop, on the fly, without root. A server in a rack works as well as a workstation.
@@ -40,8 +40,8 @@ nothing is opened on the network, and nothing has to be installed on the remote 
 - **`desk`:** type `desk` in the console and the same shell, with its history and running programs, moves into a
   terminal on the desktop.
 
-Everything is in **Settings › Remote Desktop**, in tabs: getting started and the shortcuts, the settings, the name
-overlay, the desktops and certificates the plugin keeps, saved accounts, and troubleshooting.
+Everything is in **Settings › Remote Desktop**: Getting started, Settings, Overlay, Desktops, Accounts and Updates.
+The **Troubleshooting** link at the top opens the [troubleshooting guide](TROUBLESHOOTING.md).
 
 The remote desktop itself is [IronRDP](https://github.com/Devolutions/IronRDP)'s web client, running inside Tabby.
 Making it work with GNOME took fixes in IronRDP, which we contribute upstream ([below](#built-on-ironrdp)).
@@ -49,6 +49,7 @@ Making it work with GNOME took fixes in IronRDP, which we contribute upstream ([
 ## Contents
 
 - [Install](#install)
+- [Versions and recovery](#versions-and-recovery)
 - [Use](#use)
 - [Features](#features)
 - [Windows and other desktops behind a host](#windows-and-other-desktops-behind-a-host)
@@ -77,6 +78,24 @@ Or from a terminal, into Tabby's plugin folder (on macOS `~/Library/Application 
 ```sh
 npm install tabby-rdp
 ```
+
+## Versions and recovery
+
+Open **Settings › Remote Desktop › Updates** to manage the installed version:
+
+- **Stable** is the default. **Preview** also offers beta releases and release candidates when available.
+- Automatic checks look for updates once a day. **Check now** checks manually; installation is always your choice.
+- Choose an exact compatible version, **Return to stable**, or **Restore previous version** after an installation
+  from this page. Version changes currently support **0.5.1 or newer**.
+- **Uninstall plugin…** removes the package. **Manage in Tabby…** opens Tabby's plugin controls to disable it.
+  Saved connections, settings, passwords and remote setup are kept.
+
+The confirmation dialog stays open during installation or removal and shows progress, elapsed time and the verified
+result. After success, close remote desktops and restart Tabby. Until then, Updates shows the running version and
+the installed version waiting for restart. Preferences and version history stay on this computer.
+
+See [troubleshooting and recovery](TROUBLESHOOTING.md#recovery) if the plugin cannot load or you want to clean up saved
+data or remote helpers.
 
 ## Use
 
@@ -371,7 +390,7 @@ the open desktops that follow it, takes back the files offered to them, and stop
 several files that is under way before its next step. Narrowing applies in full only once they reconnect: reconnect a
 desktop you don't trust that far. **Paste to all desktops** leaves out the desktops that don't take this computer's
 clipboard and says which. Shared folders are a setting of their own, and screenshots and **Copy log** (Settings ›
-Remote Desktop › Troubleshooting) still go to your clipboard: they are your own actions.
+Remote Desktop › Desktops › Open desktops) still go to your clipboard: they are your own actions.
 
 ## Shared folders
 
@@ -495,7 +514,8 @@ desktop of a machine you don't trust with `desk` off, which also has Tabby forge
 ## Settings
 
 Open **Settings › Remote Desktop** in Tabby, right-click the desktop button in Tabby's header, or open **Settings** in the Remote Desktop section of a terminal's or tab's menu.
-They are stored in Tabby's config under `remoteDesktop`:
+Desktop settings are stored in Tabby's config under `remoteDesktop`; update preferences and installation history
+are local to this computer:
 
 | Setting | Default | |
 |---|---|---|
@@ -517,12 +537,12 @@ They are stored in Tabby's config under `remoteDesktop`:
 | Session backend (`sessionBackend`) | `native` | For `desk`: `native` (trd-pty) or `tmux`. Config file only. |
 | Find virtual machines on SSH hosts (`discoverVMs`) | On | Lists a host's libvirt VMs with a desktop in its menu ([VMs on a host](#vms-on-a-host)). |
 | Shut down VMs it started (`shutDownIdle`) | Never | 5, 15 or 60: minutes without a desktop open after which a VM the plugin started is shut down again ([VMs on a host](#vms-on-a-host)). |
-| Tell me about new versions (`checkUpdates`) | On | Once a day, asks npm for the latest tabby-rdp (nothing else is sent), and says so in a note, the menus and the settings page when there's a newer one: Tabby itself shows plugin upgrades only on its Plugins page. |
+| Check for updates automatically (Updates tab) | On, Stable | Checks npm once a day; choose Stable or Preview, check manually, and install a compatible version explicitly. [Versions and recovery](#versions-and-recovery). |
 | Desktop name overlay (`osd`) | When it helps | `show` (`auto`, `always`, `off`), `font`, `size`, `position`, `color` (empty: white; else a color name, `#hex`, or a color function of numbers such as `rgb()`) and `seconds`; the settings page previews it, at a resolution you pick. |
 
 ## Requirements
 
-- **Tabby 1.0.236 or newer**, on macOS, Windows or Linux (tested with 1.0.236 and 1.0.237). On a fresh Windows, Tabby
+- **Tabby 1.0.236 or newer**, on macOS, Windows or Linux. On a fresh Windows, Tabby
   itself needs the [Microsoft Visual C++ Redistributable](https://learn.microsoft.com/cpp/windows/latest-supported-vc-redist)
   for SSH.
 - **Linux desktops:** GNOME Shell and GNOME Remote Desktop 46 or newer (Ubuntu 24.04, for example), a systemd user
@@ -536,7 +556,13 @@ They are stored in Tabby's config under `remoteDesktop`:
   host or running OpenSSH Server itself.
 
 Tested with Ubuntu 24.04 (GNOME Remote Desktop 46.3) and Windows 11 (Pro and Enterprise), from Tabby on macOS,
-Windows 11 and Ubuntu 24.04 (arm64).
+Windows 11 and Ubuntu 24.04 (arm64). Recent host compatibility tests cover official Tabby **1.0.238** on macOS
+with xterm 5, and upstream xterm 6 builds on macOS and Linux. The new package installation dialog is tested on
+macOS with Tabby 1.0.238; Windows qualification of these changes remains pending. See the
+[host test matrix](test/README.md#host-qualification) for the exact builds and coverage.
+
+The plugin checks the host's available features through a shared compatibility layer. Connection logs include the
+host and runtime versions, declared xterm dependency and observed capabilities to help diagnose forks and nightlies.
 
 ## Built on IronRDP
 
@@ -573,8 +599,10 @@ it, not just this plugin.
 ## Development
 
 ```sh
-npm install
+npm ci --ignore-scripts
 npm run build                # TypeScript to dist/
+npm run typecheck            # plugin and test TypeScript
+npm run test:unit            # standard unit suite; no remote machine needed
 scripts/sandbox.sh           # a separate Tabby with this plugin linked in (macOS), DevTools on port 9334
 npm test                     # end-to-end suites against a test machine: see test/README.md
 npm run build:ironrdp        # rebuild vendor/ from IronRDP and ironrdp/patches: see ironrdp/README.md
@@ -626,7 +654,8 @@ npm run build:ironrdp        # rebuild vendor/ from IronRDP and ironrdp/patches:
 
 Questions ("how do I…", "is this expected?") go to [Discussions › Q&A](https://github.com/meanaverage/tabby-rdp/discussions/categories/q-a);
 bugs and feature requests to the [issues](https://github.com/meanaverage/tabby-rdp/issues). A bug report is most useful
-with the connection log: **Settings › Remote Desktop › Troubleshooting › Open desktops › Copy log**.
+with the connection log: **Settings › Remote Desktop › Desktops › Open desktops › Copy log**.
+Start with the [troubleshooting guide](TROUBLESHOOTING.md) for common connection and installation problems.
 
 ## License
 

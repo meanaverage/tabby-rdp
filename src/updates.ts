@@ -1,86 +1,73 @@
+import { readFileSync } from 'fs'
+import { join } from 'path'
 import { Injectable, NgZone } from '@angular/core'
-import { Subject } from 'rxjs'
+import { take } from 'rxjs'
 import { AppService, ConfigService, PlatformService } from 'tabby-core'
 import { RemoteDesktopHelp } from './help'
 import { desktopPaneOf } from './targets'
+import { HostCompatibility } from './hostCompat'
+import { PackageChangeDialog } from './packageChangeDialog'
 
-const REGISTRY = 'https://registry.npmjs.org/tabby-rdp/latest'
-const RELEASES = 'https://github.com/meanaverage/tabby-rdp/releases'
+import { publishedVersions, registryJSON, ReleaseManager, RELEASES, RELEASE_STATE_KEY, releaseVersion } from './releases'
+export { newer } from './releases'
+
 const DAY = 24 * 60 * 60 * 1000
+// Capture the running package before an installer replaces its files on disk.
+const PACKAGE = require('../package.json')
+const RUNNING = PACKAGE.version as string
+export function installedVersion (): string { return RUNNING }
 
-/**
- * The latest version's number, as npm says, from an answer read for `timeoutMs` and up to `maxBytes` at most (it is
- * that version's package.json, a few KB): whoever answers in npm's name (a proxy that inspects TLS, say) could
- * otherwise keep the request waiting for good, or fill Tabby's memory.
- */
-export async function latestVersion (url = REGISTRY, timeoutMs = 15000, maxBytes = 256 * 1024): Promise<string> {
-    const abort = new AbortController()
-    const timer = setTimeout(() => abort.abort(), timeoutMs)
-    try {
-        const response = await fetch(url, { cache: 'no-store', signal: abort.signal })
-        if (!response.body) {
-            throw new Error(`the registry answered ${response.status} with nothing`)
-        }
-        const reader = response.body.getReader()
-        const chunks: Uint8Array[] = []
-        let size = 0
-        for (;;) {
-            const { done, value } = await reader.read()
-            if (done) {
-                break
-            }
-            size += value.byteLength
-            if (size > maxBytes) {
-                throw new Error('the registry\'s answer is too large')
-            }
-            chunks.push(value)
-        }
-        return String(JSON.parse(Buffer.concat(chunks).toString('utf8'))?.version ?? '')
-    } finally {
-        clearTimeout(timer)
-        // Ends the request, if it is still going (an answer too large).
-        abort.abort()
-    }
+/** Kept for callers needing only npm's latest version, with the same response bounds. */
+export async function latestVersion (url = 'https://registry.npmjs.org/tabby-rdp/latest', timeoutMs = 15000, maxBytes = 256 * 1024): Promise<string> {
+    return String((await registryJSON(url, timeoutMs, maxBytes))?.version ?? '')
 }
 
-/** This package's version. */
-export function installedVersion (): string {
-    try {
-        return require('../package.json').version
-    } catch {
-        return '0.0.0'
-    }
+function localStore (): Storage | undefined {
+    try { return window.localStorage } catch { return undefined }
 }
 
-/** Whether `a` is a later release than `b` (x.y.z; a version with a pre-release part is never offered). */
-export function newer (a: string, b: string): boolean {
-    const parse = (v: string) => /^(\d+)\.(\d+)\.(\d+)$/.exec(v.trim())?.slice(1).map(Number)
-    const x = parse(a), y = parse(b)
-    if (!x || !y) {
-        return false
-    }
-    for (let i = 0; i < 3; i++) {
-        if (x[i] !== y[i]) {
-            return x[i] > y[i]
-        }
-    }
-    return false
+function hasPreferences (storage: Storage | undefined): boolean {
+    try { return typeof JSON.parse(storage?.getItem(RELEASE_STATE_KEY) ?? 'null')?.paused === 'boolean' }
+    catch { return false }
 }
 
-/**
- * Tells about a newer tabby-rdp: Tabby only shows plugin upgrades while its Plugins page is open, and never on its own.
- * Once a day (and a little after Tabby starts) it asks npm for the latest version, and nothing else: no identifier,
- * no usage. A newer one gets a note, once per version, over the active pane; an "Update available" item in the
- * menus and a line on the settings page until it's installed. `remoteDesktop.checkUpdates` turns it off.
- */
+/** Daily, opt-out update notes; explicit package changes are handled by ReleaseManager. */
 @Injectable({ providedIn: 'root' })
-export class UpdateCheck {
-    /** The newer version, once one is known. */
-    available: string | null = null
-    readonly changed$ = new Subject<void>()
+export class UpdateCheck extends ReleaseManager {
     private timer?: ReturnType<typeof setInterval>
 
-    constructor (private config: ConfigService, private app: AppService, private help: RemoteDesktopHelp, private platform: PlatformService, private zone: NgZone) { }
+    constructor (private config: ConfigService, private app: AppService, private help: RemoteDesktopHelp, private platform: PlatformService, private zone: NgZone, compat: HostCompatibility) {
+        const storage = localStore()
+        const migratePreferences = !hasPreferences(storage)
+        const dialog = new PackageChangeDialog()
+        super({ running: RUNNING, policy: PACKAGE.tabbyRdp, tabby: compat.info.version ?? '', node: process.versions.node,
+            os: process.platform, cpu: process.arch, storage, fetchCatalog: publishedVersions,
+            withLock: async run => {
+                if (!navigator.locks) { throw new Error('This Tabby cannot coordinate version changes between windows. Use Tabby Plugins.') }
+                await navigator.locks.request('tabby-rdp.package-change', run)
+            },
+            diskVersion: () => {
+                try { return JSON.parse(readFileSync(join(__dirname, '..', 'package.json'), 'utf8')).version }
+                catch (error) {
+                    if ((error as NodeJS.ErrnoException).code === 'ENOENT') { return null }
+                    throw error
+                }
+            },
+            install: (name, version) => platform.installPlugin(name, version), uninstall: name => platform.uninstallPlugin(name),
+            confirm: (message, detail, action) => dialog.confirm(message, detail, action),
+            progress: state => dialog.update(state),
+        }, !config.store || config.store.remoteDesktop?.checkUpdates === false)
+        // Tabby can construct providers before ConfigService has loaded its store.
+        // Keep checks paused until ready, and migrate the old switch only without a saved local preference.
+        if (migratePreferences) {
+            const migrate = () => { void this.setPaused(config.store?.remoteDesktop?.checkUpdates === false) }
+            if (config.store) { migrate() }
+            else { config.ready$.pipe(take(1)).subscribe(migrate) }
+        }
+        window.addEventListener('storage', event => {
+            if (event.key === RELEASE_STATE_KEY) { this.zone.run(() => this.syncFromStorage()) }
+        })
+    }
 
     start (): void {
         this.zone.runOutsideAngular(() => {
@@ -89,44 +76,20 @@ export class UpdateCheck {
         })
     }
 
-    private get enabled (): boolean {
-        return this.config.store.remoteDesktop?.checkUpdates !== false
-    }
-
-    /** Asks npm for the latest version (or takes `latest`, for tests), and tells about it if it's newer. */
-    async check (latest?: string): Promise<string | null> {
-        if (!this.enabled && latest === undefined) {
-            return null
-        }
-        const version = latest ?? await latestVersion()
+    async check (): Promise<string | null> {
+        if (this.state.paused) { return null }
+        await this.refreshCatalog()
         this.zone.run(() => {
-            this.available = newer(version, installedVersion()) ? version : null
-            this.changed$.next()
-            if (this.available) {
-                this.noteOnce(this.available)
-            }
+            if (this.available) { this.noteOnce(this.available) }
         })
         return this.available
     }
 
-    /**
-     * Asks again now, when a version is known already: the settings page is where it's shown, and a Tabby left open for
-     * days would otherwise offer the version it found first, not the latest (meanaverage/tabby-rdp#17).
-     */
-    refresh (): void {
-        if (this.available && this.enabled) {
-            this.check().catch(() => null)
-        }
-    }
-
-    /** Settings › Plugins, where Tabby's Upgrade button is. */
-    upgrade (): void {
-        this.help.openSettings('plugins')
-    }
-
-    /** The release notes of the newer version. */
-    whatsNew (): void {
-        this.platform.openExternal(`${RELEASES}/tag/v${this.available ?? ''}`)
+    /** Opening Updates loads published versions even when ordinary prompts are paused. */
+    refresh (): void { void this.refreshCatalog() }
+    upgrade (): void { this.help.open('updates') }
+    whatsNew (version = this.available ?? this.running): void {
+        if (releaseVersion(version)) { this.platform.openExternal(`${RELEASES}/tag/v${version}`) }
     }
 
     /** A note over the active pane, once per version (then the menus and the settings page keep saying it). */

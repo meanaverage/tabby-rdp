@@ -1,6 +1,6 @@
 {
   "name": "tabby-rdp",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "description": "Remote desktops in Tabby's SSH tabs: Linux (GNOME) and Windows, through the SSH connection, with clipboard, files and sound. Built on IronRDP.",
   "keywords": [
     "tabby-plugin",
@@ -30,7 +30,9 @@
     "vendor",
     "remote",
     "LICENSE",
-    "CHANGELOG.md"
+    "CHANGELOG.md",
+    "TROUBLESHOOTING.md",
+    "docs/desk.md"
   ],
   "engines": {
     "node": ">=18"
@@ -47,16 +49,22 @@
     "prepublishOnly": "npm run build"
   },
   "dependencies": {
+    "semver": "^7.8.5",
     "ws": "^8.21.1"
   },
   "devDependencies": {
     "@angular/core": "15.2.10",
     "@types/node": "^20.19.0",
+    "@types/semver": "^7.8.0",
     "rxjs": "7.8.2",
     "tabby-core": "1.0.231-nightly.0",
     "tabby-settings": "1.0.231-nightly.0",
     "tabby-terminal": "1.0.231-nightly.0",
     "tsx": "^4.23.15",
     "typescript": "~5.9.3"
+  },
+  "tabbyRdp": {
+    "minimumTabbyVersion": "1.0.236",
+    "rollbackFloor": "0.5.1"
   }
 }

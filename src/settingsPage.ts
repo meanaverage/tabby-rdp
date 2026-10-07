@@ -9,8 +9,9 @@ import { DesktopSettings, RemoteDesktopService } from './desktop.service'
 import { configText, DIRECT_KEY, entryText, isDesktopEntry, shownKey } from './desktops'
 import { driveName } from './drives'
 import { OSD_FONTS, OSD_POSITIONS, OSD_SIZES, OSD_STYLE, OsdSettings, renderOsd } from './osd'
-import { esc, HelpTopic, HOTKEYS, RemoteDesktopHelp, SETTINGS_TAB_ID, TROUBLESHOOTING } from './help'
+import { esc, HelpTopic, HOTKEYS, RemoteDesktopHelp, SETTINGS_TAB_ID, TROUBLESHOOTING_URL } from './help'
 import { installedVersion, UpdateCheck } from './updates'
+import { renderReleaseSettings } from './releaseSettings'
 import { RDP_PROFILE_TYPE } from './targets'
 import { showable } from './unshowable'
 import { HostCompatibility } from './hostCompat'
@@ -26,7 +27,7 @@ const TABS: { id: string, title: string, topics: HelpTopic[] }[] = [
     { id: 'osd', title: 'Overlay', topics: ['osd'] },
     { id: 'desktops', title: 'Desktops', topics: ['desktops', 'certificates'] },
     { id: 'accounts', title: 'Accounts', topics: ['accounts'] },
-    { id: 'troubleshooting', title: 'Troubleshooting', topics: ['troubleshooting'] },
+    { id: 'updates', title: 'Updates', topics: ['updates'] },
 ]
 /** The tab shown last, so that the page comes back to it. */
 let lastTab = 'start'
@@ -37,13 +38,22 @@ const STYLE = `
 .trd-settings { display: block; }
 .trd-settings h3 { margin-bottom: 4px; }
 .trd-settings .trd-lead { margin-bottom: 18px; opacity: 0.75; }
-.trd-settings .trd-links { white-space: nowrap; }
-.trd-settings .trd-lead a { margin-left: 10px; }
+.trd-settings .trd-links { display: inline-flex; flex-wrap: wrap; gap: 6px 10px; margin-left: 10px; }
+.trd-settings .trd-lead a { white-space: nowrap; }
 .trd-settings section .trd-lead a { margin-left: 0; cursor: pointer; text-decoration: underline; }
-.trd-settings .trd-update { display: flex; gap: 10px; align-items: center; margin-bottom: 18px; padding: 10px 12px; border-radius: 6px;
+.trd-settings .trd-update { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 18px; padding: 10px 12px; border-radius: 6px;
     border: 1px solid rgba(80, 150, 255, 0.45); background: rgba(80, 150, 255, 0.1); }
 .trd-settings .trd-update > div { flex: auto; }
 .trd-settings .trd-update:empty { display: none; }
+.trd-settings .trd-release-summary { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 18px; }
+.trd-settings .trd-release-summary h4 { margin: 3px 0; }
+.trd-settings .trd-release-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 10px 0; }
+.trd-settings .trd-release-actions select { width: auto; max-width: 100%; flex: 1 1 240px; }
+.trd-settings .trd-release-notice { padding: 12px; border: 1px solid rgba(80,150,255,.45); border-radius: 6px; margin-bottom: 18px; }
+.trd-settings .trd-release-error { color: var(--bs-danger, #e88); }
+.trd-settings [data-release-settings] .trd-sub { font-size: 12px; opacity: .75; }
+.trd-settings .trd-release-pause { display: flex; align-items: center; gap: 8px; margin-top: 14px; }
+@media (max-width: 700px) { .trd-settings [data-release-settings] .form-line { flex-wrap: wrap; gap: 8px; } }
 .trd-settings .nav-tabs { margin-bottom: 18px; }
 .trd-settings .nav-tabs .nav-link { cursor: pointer; }
 .trd-settings section { margin-bottom: 28px; scroll-margin-top: 12px; }
@@ -55,7 +65,7 @@ const STYLE = `
 .trd-settings .trd-card { display: flex; flex-direction: column; gap: 8px; padding: 12px; border-radius: 6px;
     border: 1px solid rgba(128, 128, 128, 0.25); }
 .trd-settings .trd-card .trd-card-title { font-weight: 600; display: flex; align-items: center; gap: 6px; }
-.trd-settings h4 .trd-info, .trd-settings .trd-lead .trd-info, .trd-settings .form-line .title .trd-info { margin-left: 4px; vertical-align: middle; font-size: 13px; }
+.trd-settings .trd-card-text .trd-info, .trd-settings .trd-lead .trd-info, .trd-settings .description .trd-info { margin-left: 4px; vertical-align: middle; font-size: 13px; }
 .trd-settings .trd-info { position: relative; display: inline-flex; opacity: 0.55; cursor: help; outline: none; font-weight: normal; }
 .trd-settings .trd-info:hover, .trd-settings .trd-info:focus { opacity: 1; }
 .trd-settings .trd-info::after { content: attr(data-tip); position: absolute; left: 0; top: calc(100% + 6px); z-index: 20; width: 260px;
@@ -143,7 +153,7 @@ type Toggle = Exclude<{ [K in keyof DesktopSettings]: DesktopSettings[K] extends
 
 /**
  * The plugin's settings page: getting started, the settings, keys, desktops and certificates it keeps, and
- * troubleshooting. Plain DOM like the rest of the plugin; the lists follow config changes made elsewhere.
+ * updates. Plain DOM like the rest of the plugin; the lists follow config changes made elsewhere.
  */
 @Component({
     selector: 'remote-desktop-settings',
@@ -174,8 +184,6 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
             document.head.appendChild(style)
         }
         this.render()
-        // A known newer version may be stale by now (the page is where it shows): ask npm again.
-        this.injector.get(UpdateCheck).refresh()
         // The preview is a desktop of the chosen resolution, scaled down to fit the page.
         const frame = this.root.querySelector<HTMLElement>('.trd-osd-preview')!
         const scale = new ResizeObserver(() => this.scalePreview())
@@ -204,37 +212,33 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
 
     private render (): void {
         const mac = process.platform === 'darwin'
-        const version = (() => {
-            try {
-                return require('../package.json').version as string
-            } catch {
-                return ''
-            }
-        })()
+        const version = installedVersion()
         this.root.innerHTML = `
             <h3>Remote Desktop</h3>
             <div class="trd-lead">Linux and Windows desktops in Tabby tabs, through SSH or directly.
                 ${version ? `<span>tabby-rdp ${esc(version)}</span>` : ''}
-                <span class="trd-links"><a href="#" data-link="${REPO}#readme">Guide</a><a href="#" data-link="${REPO}/issues">Report a problem</a><a href="#" data-link="${REPO}/discussions/categories/q-a">Ask a question</a></span></div>
-            <div class="trd-update" data-update></div>
+                <span class="trd-links"><a href="#" data-link="${REPO}#readme">Guide</a><a href="#" data-link="${REPO}/issues">Report a problem</a><a href="#" data-link="${REPO}/discussions/categories/q-a">Ask a question</a><a href="#" data-link="${TROUBLESHOOTING_URL}">Troubleshooting</a></span></div>
             <ul class="nav nav-tabs" data-nav></ul>
 
             <section data-topic="start">
                 <h4>Getting started</h4>
                 <div class="trd-cards">
                     <div class="trd-card">
-                        <div class="trd-card-title">Over SSH ${this.info('The host is set up on the first connection: GNOME, xrdp, or Windows with OpenSSH. Nothing to install here, no ports to open.')}</div>
-                        <div class="trd-card-text">In an SSH tab, press <span data-hotkey></span> or click <b>Desktop</b>.</div>
+                        <div class="trd-card-title">Over SSH</div>
+                        <div class="trd-card-text">In an SSH tab, press <span data-hotkey></span> or click <b>Desktop</b>.
+                            ${this.info('The host is set up on the first connection: GNOME, xrdp, or Windows with OpenSSH. Nothing to install here, no ports to open.')}</div>
                         <button class="btn btn-secondary btn-sm" data-action="ssh">Open a connection…</button>
                     </div>
                     <div class="trd-card">
-                        <div class="trd-card-title">On your network ${this.info('The desktop opens in a tab of its own. For a quick connection, type user@host in the profile selector.')}</div>
-                        <div class="trd-card-text">A profile that connects straight to an RDP server.</div>
+                        <div class="trd-card-title">On your network</div>
+                        <div class="trd-card-text">A profile that connects straight to an RDP server.
+                            ${this.info('The desktop opens in a tab of its own. For a quick connection, type user@host in the profile selector.')}</div>
                         <button class="btn btn-secondary btn-sm" data-action="profile">New profile…</button>
                     </div>
                     <div class="trd-card">
-                        <div class="trd-card-title">From an .rdp file ${this.info('A file from Remote Desktop Connection, or from your admin. Its address, user name and domain make the profile; the password is asked for.')}</div>
-                        <div class="trd-card-text">The file becomes a profile.</div>
+                        <div class="trd-card-title">From an .rdp file</div>
+                        <div class="trd-card-text">The file becomes a profile.
+                            ${this.info('A file from Remote Desktop Connection, or from your admin. Its address, user name and domain make the profile; the password is asked for.')}</div>
                         <button class="btn btn-secondary btn-sm" data-action="import">Import an .rdp file…</button>
                     </div>
                 </div>
@@ -246,8 +250,7 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
                 <div class="form-line">
                     <div class="header">
                         <div class="title">When the pane is resized</div>
-                        <div class="description">Resizing follows splits and the window; a kept resolution can be scaled or
-                            shown at actual size with scroll bars.</div>
+                        <div class="description">Fixed resolutions use scaling or scroll bars.</div>
                     </div>
                     <select class="form-control" data-setting="resize">
                         <option value="live">Resize to fit</option>
@@ -259,28 +262,27 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
                 <div class="form-line">
                     <div class="header">
                         <div class="title">Sharpness</div>
-                        <div class="description">Retina renders at your screen's pixels, with the remote's scale set to
-                            match. A desktop can have its own, in its tab's menu.</div>
+                        <div class="description">Retina uses your screen's pixel density and matching remote scaling.</div>
                     </div>
                     <select class="form-control" data-setting="sharpness">
                         <option value="standard">Standard</option>
                         <option value="retina">Retina</option>
                     </select>
                 </div>
-                ${this.toggleLine('h264', 'Video decoding (H.264)', 'Decodes what the remote sends as video, hardware-accelerated where available. Applies on the next connection.')}
-                ${this.toggleLine('connectionStatus', 'Show connection status', 'A small line in the desktop\'s corner: throughput, frames per second, round trip, and how it\'s connected.')}
+                ${this.toggleLine('h264', 'Video decoding (H.264)', 'Hardware acceleration where available. Applies on the next connection.')}
+                ${this.toggleLine('connectionStatus', 'Show connection status', 'Show throughput, frame rate, latency and connection details.')}
 
                 <h5>Sound</h5>
-                ${this.toggleLine('sound', 'Sound', 'Play the remote desktop\'s sound here. Applies on the next connection.')}
-                ${this.toggleLine('microphone', 'Microphone', 'Send your microphone to a remote desktop that asks for it, as one does while an app there records (a call, say). Meanwhile a red dot shows in the desktop\'s corner, and a red microphone in Tabby\'s header (in full screen, at the top of the window), also while the desktop is hidden. Its menu shows that desktop, or stops sending the microphone there until Send the microphone is turned back on in the desktop\'s menu, or Tabby quits. Turning the setting on applies on the next connection; off stops it at once.')}
+                ${this.toggleLine('sound', 'Sound', 'Play remote audio. Applies on the next connection.')}
+                ${this.toggleLine('microphone', 'Microphone', `Share your microphone when a remote app requests it. Applies on the next connection; turning it off stops sharing immediately. ${this.info('A red indicator remains visible while sharing, including from background desktops. Its menu can stop sharing with an individual desktop. That desktop stays muted through reconnects until re-enabled or Tabby closes.')}`)}
 
                 <h5>Clipboard</h5>
                 <div class="form-line">
                     <div class="header">
-                        <div class="title">Clipboard sharing ${this.info('A desktop that gets your clipboard sees what is on it whenever it has the keyboard: what you copy then, and what you copied elsewhere before clicking back into it, passwords included. One that sends its clipboard here can put anything on yours, such as a command for you to paste into a terminal. Off leaves the clipboard out of the connection altogether. Narrowed while a desktop is open, what you copy from then on stays here and the files offered there are taken back; the change applies in full once that desktop reconnects.')}</div>
-                        <div class="description">Which ways text, pictures and files copied on either side go. A desktop can have its
-                            own, in its profile or its edit form. Applies on the next connection; narrowing it also stops the
-                            sending from here at once to open desktops that follow the setting.</div>
+                        <div class="title">Clipboard sharing</div>
+                        <div class="description">Share text, images and files. Desktops can override this setting. Applies on reconnect;
+                            restricting sharing stops local sends immediately.
+                            ${this.info('Sharing can expose passwords and let the remote replace your local clipboard. Only the focused desktop receives your clipboard. Off disables text, images and clipboard file transfers. Restricting sharing also withdraws previously offered files.')}</div>
                     </div>
                     <select class="form-control" data-setting="clipboard">
                         ${Object.entries(CLIPBOARD_LABELS).map(([mode, label]) => `<option value="${mode}">${esc(label)}</option>`).join('')}
@@ -288,33 +290,30 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
                 </div>
 
                 <h5>Shared folders</h5>
-                <div class="trd-lead">Folders from this computer as drives on the remote desktop, under <code>\\\\tsclient</code> in
-                    Explorer. Applies on the next connection.
-                    ${this.info('Every remote desktop you connect to sees these folders, so share only what each of them may have. Read-only keeps the remote from changing anything in a folder. Windows mounts them (xrdp can, with FUSE); GNOME Remote Desktop doesn\'t serve drives.')}</div>
+                <div class="trd-lead">Available as remote drives (<code>\\\\tsclient</code> on Windows). Applies on the next connection.
+                    ${this.info('Shared with every remote desktop. Use read-only to prevent remote changes. Supported by Windows and xrdp with FUSE; unavailable on GNOME Remote Desktop.')}</div>
                 <div class="trd-list" data-list="folders"></div>
                 <div class="trd-add"><button class="btn btn-secondary btn-sm" data-action="folder">Share a folder…</button></div>
 
                 <h5>Keyboard</h5>
-                ${this.toggleLine('unicodeKeys', 'Send text as typed', 'Sends the characters your keyboard produces rather than key positions, so dead keys (´ then e) and a layout the remote doesn\'t have come out right. Shortcuts with Ctrl, Alt or ⌘ still go by position. On GNOME, characters the remote\'s own layout lacks still can\'t be typed; Windows takes any. Input methods (Chinese, Japanese, Korean) aren\'t supported yet.')}
-                ${mac ? this.toggleLine('macShortcuts', 'Mac-style shortcuts', 'Use ⌘ as Ctrl on the desktop, so ⌘C copies and ⌘V pastes. Tap ⌘ on its own for the Windows key. When off, ⌘ is always the Windows key.') : ''}
+                ${this.toggleLine('unicodeKeys', 'Send text as typed', `Send characters instead of physical keys. Modifier shortcuts still use key positions. ${this.info('Useful for dead keys or mismatched keyboard layouts. GNOME is limited to characters in its own layout. Chinese, Japanese and Korean input methods are not supported.')}`)}
+                ${mac ? this.toggleLine('macShortcuts', 'Mac-style shortcuts', '⌘C copies and ⌘V pastes. Tap ⌘ for the Windows key; when disabled, ⌘ always sends the Windows key.') : ''}
                 <div class="form-line">
                     <div class="header">
                         <div class="title">Shortcuts</div>
-                        <div class="description">Switching between the desktop and the console, view only, screenshots and more: on the
-                            <a data-action="shortcuts">Getting started</a> tab, and in Tabby's Hotkeys.</div>
+                        <div class="description">Manage in <a data-action="shortcuts">Getting started</a> or Tabby's Hotkeys.</div>
                     </div>
                     <div><span data-hotkey></span></div>
                 </div>
 
                 <h5>SSH hosts</h5>
-                ${this.toggleLine('desk', 'desk: bring the console along', `Type <code>desk</code> in an SSH console to show that same shell on the desktop. Installs a small helper and a login line on GNOME hosts the next time a desktop opens there; off removes them.`)}
-                ${this.toggleLine('discoverVMs', 'Find virtual machines on SSH hosts', 'Lists the host\'s VMs in its tab\'s menu, ready to open or start: libvirt VMs that have a desktop (RDP answering, or Windows and shut off), and on a Windows host, Hyper-V VMs (their consoles, through the host). Read-only: it runs virsh, or PowerShell\'s Get-VM, as you there, at most once a minute.')}
+                ${this.toggleLine('desk', 'desk integration', `Type <code>desk</code> to open your current SSH shell on the desktop. Installs a helper on GNOME hosts on the next desktop connection; disabling removes it.`)}
+                ${this.toggleLine('discoverVMs', 'Find virtual machines on SSH hosts', 'List libvirt and Hyper-V VMs in the SSH tab menu. Discovery is read-only and runs at most once a minute.')}
                 <div class="form-line">
                     <div class="header">
-                        <div class="title">Shut down VMs it started</div>
-                        <div class="description">A VM started to open its desktop goes back off after this long with no
-                            desktop open, also once Tabby is closed: a small watcher on the SSH host sees to it. VMs that
-                            were already running are left alone.</div>
+                        <div class="title">Shut down started VMs</div>
+                        <div class="description">Shut down VMs started by this plugin after the selected time with no desktop open.
+                            Continues after Tabby closes; previously running VMs are unaffected.</div>
                     </div>
                     <select class="form-control" data-setting="shutDownIdle">
                         <option value="0">Never</option>
@@ -324,16 +323,13 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
                     </select>
                 </div>
 
-                <h5>Updates</h5>
-                ${this.toggleLine('checkUpdates', 'Tell me about new versions', 'Once a day, asks npm (registry.npmjs.org) for the latest tabby-rdp, and says so here and in the menus when there is one. Nothing is sent but the request. Tabby itself shows plugin upgrades only on its Plugins page.')}
             </section>
 
             <section data-topic="osd">
                 <h4>Desktop name overlay</h4>
-                <div class="trd-lead">Names the desktop for a moment when it connects, when you switch to it, and when you click
-                    into its pane, like a TV naming its input.</div>
+                <div class="trd-lead">Show the desktop name when connecting, switching desktops or focusing a pane.</div>
                 <div class="trd-osd-preview"><div class="trd-osd-stage"><div class="trd-osd"></div></div>
-                    <select class="form-control form-control-sm trd-osd-resolution" data-preview-resolution title="The desktop resolution the preview stands for: the overlay's size on screen depends on it">
+                    <select class="form-control form-control-sm trd-osd-resolution" data-preview-resolution title="Preview resolution">
                         <option value="1280x720">1280 × 720</option>
                         <option value="1920x1080">1920 × 1080</option>
                         <option value="2560x1440">2560 × 1440</option>
@@ -341,10 +337,9 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
                     </select></div>
                 <div class="form-line">
                     <div class="header"><div class="title">Show</div>
-                        <div class="description">"When it helps": in split panes, and for a desktop other than the tab's own
-                            connection, where the tab's title doesn't say which it is.</div></div>
+                        <div class="description">Automatic shows names in split panes and when the tab title identifies a different connection.</div></div>
                     <select class="form-control" data-osd="show">
-                        <option value="auto">When it helps</option>
+                        <option value="auto">Automatic</option>
                         <option value="always">Every time</option>
                         <option value="off">Never</option>
                     </select>
@@ -354,7 +349,7 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
                     <select class="form-control" data-osd="font">${Object.entries(OSD_FONTS).map(([id, f]) => `<option value="${id}">${esc(f.label)}</option>`).join('')}</select>
                 </div>
                 <div class="form-line">
-                    <div class="header"><div class="title">Size</div><div class="description">Smaller in a narrow pane, so a name fits.</div></div>
+                    <div class="header"><div class="title">Size</div></div>
                     <select class="form-control" data-osd="size">${Object.keys(OSD_SIZES).map(id => `<option value="${id}">${id === 'huge' ? 'Extra large' : id[0].toUpperCase() + id.slice(1)}</option>`).join('')}</select>
                 </div>
                 <div class="form-line">
@@ -362,12 +357,11 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
                     <select class="form-control" data-osd="position">${OSD_POSITIONS.map(p => `<option value="${p}">${p === 'middle' ? 'Middle' : p.replace('-', ' ').replace(/^./, c => c.toUpperCase())}</option>`).join('')}</select>
                 </div>
                 <div class="form-line">
-                    <div class="header"><div class="title">Color</div><div class="description">White reads on any picture, with the soft
-                        shadow behind it. The line before the second row takes your theme's accent color.</div></div>
+                    <div class="header"><div class="title">Color</div></div>
                     <div class="trd-color"><input type="color" data-osd="color"><button class="btn btn-link btn-sm" data-action="osd-white">White</button></div>
                 </div>
                 <div class="form-line">
-                    <div class="header"><div class="title">How long</div></div>
+                    <div class="header"><div class="title">Duration</div></div>
                     <select class="form-control" data-osd="seconds">
                         <option value="1.5">1.5 seconds</option>
                         <option value="2.5">2.5 seconds</option>
@@ -375,12 +369,13 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
                         <option value="6">6 seconds</option>
                     </select>
                 </div>
-                <button class="btn btn-secondary btn-sm" data-action="osd-try">Show it on open desktops</button>
+                <button class="btn btn-secondary btn-sm" data-action="osd-try">Preview on open desktops</button>
             </section>
 
             <section data-topic="keyboard">
-                <h4>Shortcuts ${this.info('These work while the desktop has the keyboard. Tabby\'s other shortcuts go to the desktop then, except switching tabs and full screen.')}</h4>
-                <div class="trd-lead">Also listed in Tabby's <a data-action="hotkeys">Hotkeys</a>.</div>
+                <h4>Shortcuts</h4>
+                <div class="trd-lead">Also listed in Tabby's <a data-action="hotkeys">Hotkeys</a>.
+                    ${this.info('These work while the desktop has the keyboard. Tabby\'s other shortcuts go to the desktop then, except switching tabs and full screen.')}</div>
                 <div class="trd-hotkeys" data-list="hotkeys"></div>
                 <h4 style="margin-top: 24px">Keys and tips</h4>
                 <table class="trd-keys"><tbody>
@@ -400,13 +395,15 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
                 <div class="trd-lead">Remote desktop profiles, and desktops added from SSH tabs.
                     ${this.info('A desktop added from an SSH tab\'s menu belongs to that host. That is for hosts without a profile, such as ssh run in a local terminal.')}</div>
                 <div class="trd-list" data-list="desktops"></div>
-                <div class="trd-add"><button class="btn btn-secondary btn-sm" data-action="desktop">Add a desktop…</button></div>
+                <div class="trd-add"><button class="btn btn-secondary btn-sm" data-action="desktop">Add desktop…</button></div>
+                <h4 style="margin-top: 24px">Open desktops</h4>
+                <div class="trd-list" data-list="sessions"></div>
             </section>
 
             <section data-topic="accounts">
                 <h4>Accounts</h4>
-                <div class="trd-lead">One sign-in for several desktops: when its password changes, change it once here.
-                    ${this.info('A desktop picks its account in its profile\'s settings, or in the form that adds a desktop behind an SSH host. A profile group\'s defaults can pick one for all of its profiles.')}</div>
+                <div class="trd-lead">Reusable sign-in details for multiple desktops.
+                    ${this.info('Choose an account in a desktop\'s settings or a profile group\'s defaults.')}</div>
                 <div class="trd-list" data-list="accounts"></div>
                 <div class="trd-add">
                     <button class="btn btn-secondary btn-sm" data-action="account">Add an account…</button>
@@ -419,14 +416,7 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
                 <div class="trd-list" data-list="certificates"></div>
             </section>
 
-            <section data-topic="troubleshooting">
-                <h4>Troubleshooting</h4>
-                <div data-list="troubleshooting">${TROUBLESHOOTING.map(e => `
-                    <details data-entry="${esc(e.id)}"><summary>${esc(e.title)}</summary><div>${e.body}</div></details>`).join('')}
-                </div>
-                <h4 style="margin-top: 18px">Open desktops</h4>
-                <div class="trd-list" data-list="sessions"></div>
-            </section>`
+            <section data-topic="updates"><h4>Updates</h4><div class="trd-update" data-update></div><div data-release-settings></div></section>`
 
         // The sections go into the tabs' bodies; one tab shows at a time.
         const nav = this.root.querySelector('[data-nav]')!
@@ -488,7 +478,7 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
             'osd-white': () => this.changeOsd({ color: '' }),
             'osd-try': () => {
                 if (!this.desktop.showOsdEverywhere()) {
-                    this.injector.get(NotificationsService).info('No desktop is showing right now')
+                    this.injector.get(NotificationsService).info('No visible desktops.')
                 }
             },
         }
@@ -498,7 +488,7 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
         this.refresh()
     }
 
-    /** An ⓘ that shows `text` while hovered or focused: detail that the card itself needn't carry. */
+    /** An ⓘ placed after a description, showing `text` while hovered or focused. */
     private info (text: string): string {
         return `<span class="trd-info" tabindex="0" role="note" data-tip="${esc(text)}"><i class="fas fa-info-circle"></i></span>`
     }
@@ -553,7 +543,7 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
                 (el as HTMLSelectElement).value = String(settings[key])
             }
         })
-        // A newer version: say so at the top, with where to get it.
+        // Update notices and controls belong to the Updates page.
         const updates = this.injector.get(UpdateCheck)
         const banner = this.root.querySelector<HTMLElement>('[data-update]')
         if (banner) {
@@ -562,6 +552,10 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
             banner.querySelector('[data-upgrade]')?.addEventListener('click', () => updates.upgrade())
             banner.querySelector('[data-whatsnew]')?.addEventListener('click', () => updates.whatsNew())
         }
+        renderReleaseSettings(this.root.querySelector('[data-release-settings]')!, updates, {
+            notes: version => updates.whatsNew(version), plugins: () => this.help.openSettings('plugins'),
+            link: url => this.platform.openExternal(url),
+        })
         const osd = settings.osd
         this.root.querySelectorAll<HTMLInputElement | HTMLSelectElement>('[data-osd]').forEach(el => {
             const key = el.dataset.osd as keyof OsdSettings
@@ -659,9 +653,7 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
                 { label: 'Remove…', danger: true, run: () => { this.desktop.confirmRemoveDesktop(i) } },
             ])]
         })
-        list.replaceChildren(...profileRows, ...desktopRows, this.empty(profileRows.length + desktopRows.length
-            ? 'Profiles are also in Profiles &amp; connections; a desktop behind a host also in that host\'s SSH tab: right-click › Settings.'
-            : 'None yet. <b>Add a desktop…</b> makes a profile: an RDP server on your network, or one behind an SSH profile\'s host.'))
+        list.replaceChildren(...profileRows, ...desktopRows, ...(profileRows.length + desktopRows.length ? [] : [this.empty('No saved desktops.')]))
     }
 
     private renderFolders (): void {
@@ -684,7 +676,7 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
             }))
             row.insertBefore(check, row.querySelector('button'))
             return row
-        }), ...folders.length ? [] : [this.empty('None shared. The clipboard carries files too, the ways it goes: drop them on the desktop, or copy them there and save them here.')])
+        }), ...folders.length ? [] : [this.empty('No shared folders.')])
     }
 
     /** Asks for a folder and shares it under its own name (numbered when another share has it). */
@@ -695,7 +687,7 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
         }
         const folders = this.desktop.sharedFolders()
         if (folders.some(f => f.path === picked)) {
-            this.injector.get(NotificationsService).info('That folder is shared already')
+            this.injector.get(NotificationsService).info('This folder is already shared.')
             return
         }
         this.desktop.setSharedFolders([...folders, { path: picked, name: driveName(basename(picked) || picked, folders), readOnly: false }])
@@ -717,7 +709,7 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
             const used = uses.length
                 ? `Used by ${uses.map(u => u.profileId ? `<a data-profile="${esc(u.profileId)}">${esc(u.name)}</a>`
                     : u.desktopIndex !== undefined ? `<a data-desktop="${u.desktopIndex}">${esc(u.name)}</a>` : esc(u.name)).join(', ')}`
-                : 'Not used by a desktop yet'
+                : 'Not used'
             const row = this.row(esc(a.name), `<span>${esc(signInName(a))}</span><br><span>${used}</span><span data-password></span>`, [
                 { label: 'Edit…', run: () => this.editAccount(a) },
                 { label: 'Remove…', danger: true, run: () => { this.desktop.confirmRemoveAccount(a.id) } },
@@ -728,11 +720,11 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
             checks = checks.then(() => row.isConnected ? this.desktop.accountHasPassword(a.id) : 'unknown').then(has => {
                 const note = row.querySelector('[data-password]')
                 if (note && has === 'no') {
-                    note.innerHTML = '<br>No password saved: asked for on the next connection'
+                    note.innerHTML = '<br>No password saved'
                 }
             }, () => null)
             return row
-        }), ...accounts.length ? [] : [this.empty('None yet. Without one, each desktop asks for its account and can remember it for itself.')])
+        }), ...accounts.length ? [] : [this.empty('No saved accounts.')])
     }
 
     /** The form under the list, for a new account or `account`. */
@@ -760,7 +752,7 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
         field('name').value = account?.name ?? ''
         field('username').value = account?.username ?? ''
         field('domain').value = account?.domain ?? ''
-        field('password').placeholder = account ? 'Leave empty to keep the saved one' : 'Optional; asked on the first connection'
+        field('password').placeholder = account ? 'Leave empty to keep the saved password' : 'Optional; requested when connecting'
         form.querySelector('button[type=submit]')!.textContent = account ? 'Save' : 'Add'
         const close = () => {
             form.remove()
@@ -777,7 +769,7 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
             const username = field('username').value.trim()
             const name = field('name').value.trim()
             if (!username) {
-                error.textContent = 'Give it a user name.'
+                error.textContent = 'Enter a user name.'
                 field('username').focus()
                 return
             }
@@ -1017,7 +1009,7 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
             ])
         }), this.empty(entries.length
             ? 'A forgotten certificate is asked about again on the next connection, unless a certificate authority vouches for it; one behind an SSH host is remembered again without asking.'
-            : 'None yet. A desktop connected to directly, and a gateway, are asked about the first time unless a certificate authority vouches for them; a desktop behind an SSH host is remembered on first use. Each is checked every time after. GNOME desktops only accept the one the plugin made.'))
+            : 'No saved certificates.'))
     }
 
     private renderSessions (): void {
@@ -1028,17 +1020,11 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
         const sessions = this.desktop.sessionSummaries()
         list.replaceChildren(...sessions.map(s => this.row(esc(s.name), `${s.where ? `via ${esc(s.where)} · ` : ''}${esc(s.state)}`, [
             { label: 'Copy log', run: () => this.copyLog(s.name, s.log) },
-        ])), ...sessions.length ? [] : [this.empty('No desktop is open. Each open desktop\'s connection log can be copied from here, for a bug report.')])
+        ])), ...sessions.length ? [] : [this.empty('No desktops are open.')])
     }
 
     private copyLog (name: string, log: string[]): void {
-        const version = (() => {
-            try {
-                return require('../package.json').version
-            } catch {
-                return '?'
-            }
-        })()
+        const version = installedVersion()
         this.platform.setClipboard({ text: [`tabby-rdp ${version} on ${process.platform}: ${name}`, ...this.compat.diagnosticLines(), ...log].join('\n') })
     }
 
@@ -1046,6 +1032,9 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
         lastTab = TABS.some(t => t.id === id) ? id : TABS[0].id
         this.root.querySelectorAll<HTMLElement>('[data-tab]').forEach(el => el.classList.toggle('active', el.dataset.tab === lastTab))
         this.root.querySelectorAll<HTMLElement>('[data-body]').forEach(el => { el.hidden = el.dataset.body !== lastTab })
+        if (lastTab === 'updates') {
+            this.injector.get(UpdateCheck).refresh()
+        }
     }
 
     /** Shows the tab with a section (and opens a troubleshooting entry), with a short highlight. */

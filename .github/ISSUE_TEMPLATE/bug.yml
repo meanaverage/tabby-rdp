@@ -14,7 +14,7 @@ body:
     attributes:
       label: Versions
       description: tabby-rdp (Settings › Remote Desktop shows it) and Tabby (Settings › About).
-      placeholder: tabby-rdp 0.3.0, Tabby 1.0.237
+      placeholder: tabby-rdp 0.5.2, Tabby 1.0.238
     validations:
       required: true
   - type: dropdown
@@ -42,6 +42,6 @@ body:
     attributes:
       label: Connection log
       description: >-
-        Settings › Remote Desktop › Open desktops › Copy log, with the desktop still open (or right after it failed).
+        Settings › Remote Desktop › Desktops › Open desktops › Copy log, with the desktop still open (or right after it failed).
         Look it over first: it names your hosts and addresses, which you may want to replace.
       render: text

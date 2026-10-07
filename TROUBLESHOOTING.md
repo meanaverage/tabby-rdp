@@ -1,6 +1,6 @@
 # Troubleshooting
 
-For connection logs, open **Settings › Remote Desktop**, find **Open desktops**, then choose **Copy log**. The list is in **Desktops** on builds with an Updates tab; version 0.5.1 has it in **Troubleshooting**. Review logs before sharing them.
+For connection logs, open **Settings › Remote Desktop › Desktops › Open desktops**, then choose **Copy log**. In version 0.5.1, the list is in **Troubleshooting**. Review logs before sharing them.
 
 <a id="certificate"></a>
 
@@ -60,11 +60,11 @@ GNOME Remote Desktop's headless mode gives each connection a screen of its own: 
 
 ## Recover a version, disable the plugin, or remove it
 
-If the plugin still loads, manage its installation in **Tabby › Settings › Plugins**. Close remote desktops and restart Tabby after changing the installed package.
+In **0.5.2 or newer**, open **Settings › Remote Desktop › Updates**. **Stable** is the default; **Preview** includes beta releases and release candidates when available. Choose an exact published version and confirm installation. **Return to stable** can install an older version. **Restore previous version** uses the version saved after the last successful installation from this page. On older releases, manage the package in **Tabby › Settings › Plugins**.
 
-Builds with **Settings › Remote Desktop › Updates** also offer release controls there: **Stable** is the default; **Preview** includes beta releases and release candidates. There may be no preview available. Choose an exact published version and confirm the installation. **Return to stable** can install an older version. **Restore previous version** uses the version saved after the last successful installation from that page. Until you restart, the page shows both the running and next-start versions.
+The confirmation dialog stays open through progress and the verified result. If installation fails, the dialog shows the cause. After success, close remote desktops and restart Tabby; Updates shows the running version and the installed version waiting for restart until then.
 
-A package replacement does **not** restore your data. Use **0.5.1 or newer** when recovering current account and certificate settings, and respect any higher minimum documented by a later data migration. Earlier releases may not interpret those settings safely. Deleted credentials cannot be recovered by installing an older package. The plugin does not make plaintext backups of passwords.
+Use **0.5.1 or newer** with current account and certificate settings, and respect any higher minimum documented by a later data migration.
 
 If the plugin cannot load:
 

@@ -215,8 +215,6 @@ test('the settings page lists every entry and profile by what of each is text, a
         'After 10.0.0.2:3391 behind h',
         'Uses it 10.0.0.3:3389 behind h Signs in as Admin',
         '10.0.0.4:3389 10.0.0.4:3389',
-        // The note under the list.
-        'Profiles are also in Profiles &amp; connections; a desktop behind a host also in that host\'s SSH tab: right-click › Settings.',
     ])
     // The accounts list names the desktops that use an account the same way, and opens the right one's editor.
     page.renderAccounts()
