@@ -93,6 +93,9 @@ test('startup waits for configuration and migrates the old update switch without
         const updates = new UpdateCheck(config, {}, {}, { getAppVersion: () => assert.fail('host metadata comes from compatibility') }, {}, { info: { version: '1.0.238' } })
         await updates.ready
         assert.equal(updates.state.paused, savedPause ?? true)
+        // The shipped data boundary is saved even before imported/default/manual configuration has loaded.
+        assert.equal(updates.state.rollbackFloor, '0.5.3-rc.1')
+        assert.equal(JSON.parse(saved!).rollbackFloor, '0.5.3-rc.1')
         config.store = { remoteDesktop: { checkUpdates: legacyCheck } }
         config.ready$.next(true)
         await new Promise(resolve => setImmediate(resolve))

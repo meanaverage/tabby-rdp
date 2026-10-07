@@ -64,12 +64,17 @@ In **0.5.2 or newer**, open **Settings › Remote Desktop › Updates**. **Stabl
 
 The confirmation dialog stays open through progress and the verified result. If installation fails, the dialog shows the cause. After success, close remote desktops and restart Tabby; Updates shows the running version and the installed version waiting for restart until then.
 
-Use **0.5.1 or newer** with current account and certificate settings, and respect any higher minimum documented by a later data migration.
+After running **0.5.3-rc.1**, use **0.5.3-rc.1 or newer**, including after uninstalling and reinstalling. This version
+can save a separate gateway sign-in prompt (`@ask`) in desktops, profiles and defaults, including when a saved gateway
+account is removed. Versions **0.5.1 and 0.5.2** can silently use the desktop's credentials for that gateway instead.
+Updates records this minimum on startup even if update checks are paused, and retains the highest recorded minimum.
+The safeguard applies to this computer's Updates page; manual npm installation, Tabby's plugin controls and older
+installations on other computers can bypass it. Use the same minimum wherever this configuration is copied or synced.
 
 If the plugin cannot load:
 
 1. Open **Tabby › Settings › Plugins**. Disable **tabby-rdp** to stop it loading, or uninstall and reinstall it there. Restart Tabby after changing plugins. Tabby’s [configuration locations](https://github.com/Eugeny/tabby/wiki/Config-file) help locate your profile when the application cannot open.
-2. For a specific known compatible version, open a terminal in **Tabby's plugin folder** (the folder containing the plugin installation's `package.json`, with `node_modules/tabby-rdp` below it). Run `npm install tabby-rdp@0.5.1`, replacing `0.5.1` with your known compatible exact version. Do not run this in the tabby-rdp source checkout, the application bundle, or inside `node_modules/tabby-rdp` itself. Fully quit and reopen Tabby afterwards.
+2. For a specific known compatible version, open a terminal in **Tabby's plugin folder** (the folder containing the plugin installation's `package.json`, with `node_modules/tabby-rdp` below it). Run `npm install tabby-rdp@0.5.3-rc.1`, replacing `0.5.3-rc.1` with your known compatible exact version at or above the minimum above. Do not run this in the tabby-rdp source checkout, the application bundle, or inside `node_modules/tabby-rdp` itself. Fully quit and reopen Tabby afterwards.
 3. If a later version has migrated saved data, respect that version's documented minimum. Reinstall a compatible stable version or the last working preview; do not force an older version across a migration boundary.
 
 Disabling or uninstalling keeps desktops, profiles, settings, remembered certificates and saved credentials. It also leaves any remote helpers and remote applications in place. To remove saved entries, use **Remote Desktop › Desktops** and **Accounts**, and **Profiles & connections** for profiles, before uninstalling. Unlock the credential store first if required; check any reported failure rather than assuming a credential was deleted. Data synced to other computers may need attention there too.

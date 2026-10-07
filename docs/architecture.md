@@ -595,6 +595,11 @@ The manager accepts exact package versions, checks the published host/platform r
 highest recorded rollback floor. Preferences and history live in this computer's profile-local storage. A shared
 Web Lock serializes changes across windows; the package version is read directly from disk to reconcile changes
 made through Tabby's plugin controls. The running version is captured before installation can replace the package.
+The package policy for `0.5.3-rc.1` raises the floor to `0.5.3-rc.1`, the first release that understands the saved
+`@ask` gateway account value. Startup persists this floor without waiting for configuration or update checks, so it
+covers imported/manual settings and defaults as well as later account selections/removals. Successful installations
+also record the target package's floor before restart. The floor never decreases, including after removal; manual
+package replacement and other computers' installations remain outside this local Updates control.
 
 `PackageChangeDialog` (`src/packageChangeDialog.ts`) keeps one modal open from confirmation through progress and
 verification. Tabby's installer provides completion rather than byte counts, so progress is indeterminate with an

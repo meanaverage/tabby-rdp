@@ -20,6 +20,8 @@ Local release candidate; not published on npm or as a GitHub release.
   and the statistics indicator's canvas hook, while retaining the last picture for the disconnected pane.
 
 **Changed**
+- **The rollback minimum is 0.5.3-rc.1.** Updates persists this minimum to protect saved separate gateway prompts
+  from older versions that would reuse desktop credentials, and records a target release's minimum on installation.
 - **Preview publishing uses npm's beta tag** for both beta and release-candidate versions. GitHub release drafts
   remain unpublished until the staged npm package is approved and verified.
 
