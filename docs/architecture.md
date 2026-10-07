@@ -574,6 +574,34 @@ end (signed out) or a desktop that never connected only offers a button. The wai
 desktop has stayed up for 30 s: one that drops again sooner (a server that ends every connection at once) goes on to
 the next wait, and the reconnecting stops after the last.
 
+## Host compatibility
+
+`HostCompatibility` (`src/hostCompat.ts`) provides one host identity and capability snapshot per window. Optional
+host, Electron, Node and xterm metadata can be unknown independently. The xterm version is the host package's
+declared dependency, not a verified runtime version. Terminal input adapters and modal drag fallbacks probe the
+features they use, so forks and nightlies need not match the capabilities of an official version with the same
+number. Connection logs and the host smoke suites use the same diagnostics. Development tools expose the snapshot
+through `window.__remoteDesktop.compat.snapshot(paneElement?)`.
+
+## Release controls
+
+`ReleaseManager` (`src/releases.ts`) validates npm's published version catalog and owns channel selection,
+compatibility checks, installation history and package changes. `UpdateCheck` (`src/updates.ts`) supplies Tabby's
+installer and host identity; `renderReleaseSettings` (`src/releaseSettings.ts`) renders the Updates page. Stable is
+the default, and Preview includes supported beta and release candidate versions. Automatic checks run daily;
+installations and removal require explicit confirmation.
+
+The manager accepts exact package versions, checks the published host/platform requirements and enforces the
+highest recorded rollback floor. Preferences and history live in this computer's profile-local storage. A shared
+Web Lock serializes changes across windows; the package version is read directly from disk to reconcile changes
+made through Tabby's plugin controls. The running version is captured before installation can replace the package.
+
+`PackageChangeDialog` (`src/packageChangeDialog.ts`) keeps one modal open from confirmation through progress and
+verification. Tabby's installer provides completion rather than byte counts, so progress is indeterminate with an
+elapsed timer. Success is reported only after checking the requested version on disk, or package absence after
+uninstall. The user restarts Tabby to load the replacement. Uninstall removes the package and retains saved data and
+remote setup; cleanup is documented in [the troubleshooting guide](../TROUBLESHOOTING.md#recovery).
+
 ## Security notes
 
 - **grd listens on all interfaces:** it has no bind-address setting, so port 3389 is reachable from the network

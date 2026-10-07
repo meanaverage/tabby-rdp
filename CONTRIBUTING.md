@@ -27,7 +27,7 @@ pull request, so they can't be required checks, but a release runs them whatever
 `main` only changes by merging a pull request that CI passed. Releases are tags on `main` (below).
 
 The pull request template has a short checklist, and the issue forms ask for what helps most with a connection
-problem: versions, what kind of desktop, and the connection log (Settings › Remote Desktop › Open desktops › Copy log).
+problem: versions, what kind of desktop, and the connection log (Settings › Remote Desktop › Desktops › Open desktops › Copy log).
 
 ## Working on the plugin
 
@@ -55,6 +55,10 @@ This checks a locally packed plugin in an isolated host profile, with dummy cred
 to require the live desktop checks. See [the host smoke instructions](test/README.md#host-upgrade-smoke-tests) for
 coverage and the release/nightly test matrix.
 
+For release controls, run `npm test -- --packed --hidden --tabby <binary> smoke-updates`.
+It exercises cancellation, progress and failures, then installs a real published package in the runner's disposable
+profile and verifies its version. See [test/README.md](test/README.md#package-change-smoke-tests).
+
 ## Host compatibility
 
 [`src/hostCompat.ts`](src/hostCompat.ts) owns host identity, optional metadata reads, and host capability probes.
@@ -80,6 +84,14 @@ GitHub release from that section once it is titled with the version). A release 
 be worth a user's update — a feature set, or a batch of fixes — not per change. Patch releases between those are for
 security fixes and for bugs that make the plugin unusable; everything else waits. Features gather under the next
 minor version (see the milestones).
+
+**Version metadata.** Keep `package.json` and the root entries in `package-lock.json` on the same version. The
+`tabbyRdp.minimumTabbyVersion` and `tabbyRdp.rollbackFloor` fields let release controls check compatibility and data
+migration limits; raise the floor only for a migration that prevents older packages from safely using the saved
+data. Version 0.5.1 is the explicitly supported baseline for packages that predate these fields.
+Preview versions use `<version>-beta.<number>` or `<version>-rc.<number>`, with the corresponding npm `beta` or `rc`
+tag. The standard release workflow publishes stable versions; preview publication needs an explicit prerelease
+and dist-tag path before use.
 
 **How.** Pushing a tag `v<version>` (matching `version` in package.json) runs [`publish.yml`](.github/workflows/publish.yml),
 which builds the package and **stages** it on npm, with provenance. It goes live once a maintainer approves it: on
@@ -122,7 +134,7 @@ set to require two-factor authentication and disallow tokens.
 
 ## Actions
 
-The workflows pin each action to a commit, with its version in a comment (`actions/checkout@<commit> # v4.4.0`): a
+The workflows pin each action to a commit, with its version in a comment (`actions/checkout@<commit> # v7.0.1`): a
 tag can be moved to other code, a commit can't. Dependabot ([`.github/dependabot.yml`](.github/dependabot.yml))
 proposes newer versions as pull requests that change both; review them as any other change. To move by hand, look up
 the commit the tag names (`git ls-remote https://github.com/actions/checkout refs/tags/v4.4.1 'refs/tags/v4.4.1^{}'`;

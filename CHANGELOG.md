@@ -1,19 +1,25 @@
 # Changelog
 
-## Unreleased
+## 0.5.2
 
 **Added**
 - **Updates settings** include stable and preview channels (beta releases and release candidates), automatic and
   manual checks, compatible version selection, rollback and uninstall controls. Changes require confirmation and
   take effect after restarting Tabby. Update preferences and installation history stay on this computer.
+- **Installation progress stays in the confirmation dialog**, with elapsed time and a verified success or failure
+  result. The dialog remains visible if Settings closes. The installed version is checked before reporting success.
 
 **Fixed**
 - **Commands through the system SSH report SSH's own failure** when it exits before reading their input,
   instead of letting a broken-pipe error escape unhandled. Commands that ignore their input still return their output.
+- **Plugin startup waits for Tabby's configuration** before migrating update preferences, avoiding an error that
+  could disable third-party plugins for the session.
 
 **Changed**
 - **Troubleshooting opens the Markdown guide** from the links at the top of Remote Desktop settings. The former
   Troubleshooting tab is now Updates; connection logs are under Desktops. Empty lists use concise status messages.
+- **Settings descriptions are shorter**, and help icons appear consistently after their descriptions.
+- **Troubleshooting and desk cleanup guides are included in the npm package.**
 - **Host compatibility checks share one layer**, with host and runtime versions, the host's declared xterm dependency,
   and observed capabilities included in copied connection logs. Modal drag fallbacks and terminal input handling use
   shared adapters that check the host's actual features, including on forks and nightly builds.

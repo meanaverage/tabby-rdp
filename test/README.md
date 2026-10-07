@@ -72,6 +72,23 @@ Without `TRD_TEST_HOST`, `smoke-rdp` explicitly reports `SKIP`; `--require-rdp` 
 before launching Tabby. The host suite still runs without a remote. Smoke tests require the runner's credential
 guard, so `--port` only works with a test profile already prepared by this runner (`--keep`).
 
+### Host qualification
+
+The compatibility changes merged in [PR #60](https://github.com/meanaverage/tabby-rdp/pull/60) passed this matrix.
+All live RDP checks used Ubuntu 24.04 GNOME Remote Desktop as the server.
+
+| Host | Client platform | Declared xterm | Host checks | Live RDP checks |
+|---|---|---|---|---|
+| Official Tabby 1.0.238 | macOS arm64 | `^5` | 35/35 | 24/24 |
+| Upstream source build at `467ce8e` | macOS arm64 | `^6.0.0` | 35/35 | 24/24 |
+| Upstream 1.0.239-nightly.0 artifact at `467ce8e` | Linux amd64 | `^6.0.0` | 35/35 | 24/24 |
+| Windows client / Windows RDP server | Windows | — | Pending for these changes | Pending for these changes |
+
+Tabby 1.0.238 ships xterm 5; xterm 6 was tested separately. These results record the tested builds, rather than
+qualifying every later host release. Rerun the relevant suites when the plugin or host changes.
+
+## Package-change smoke tests
+
 Test the package-change dialog with `npm test -- --packed --hidden --tabby /path/to/Tabby smoke-updates`.
 This suite checks confirmation, cancellation, progress, elapsed time, errors, and a real install of 0.5.1 from npm.
 Installation occurs only in the runner's disposable profile; its credential guard remains installed through the downgrade.
