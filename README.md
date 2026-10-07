@@ -86,7 +86,8 @@ Open **Settings › Remote Desktop › Updates** to manage the installed version
 - **Stable** is the default. **Preview** also offers beta releases and release candidates when available.
 - Automatic checks look for updates once a day. **Check now** checks manually; installation is always your choice.
 - Choose an exact compatible version, **Return to stable**, or **Restore previous version** after an installation
-  from this page. Version changes currently support **0.5.1 or newer**.
+  from this page. After running **0.5.3-rc.1**, version changes require **0.5.3-rc.1 or newer** to preserve separate
+  gateway sign-in prompts; returning to an older stable release is blocked.
 - **Uninstall plugin…** removes the package. **Manage in Tabby…** opens Tabby's plugin controls to disable it.
   Saved connections, settings, passwords and remote setup are kept.
 

@@ -65,6 +65,6 @@
   },
   "tabbyRdp": {
     "minimumTabbyVersion": "1.0.236",
-    "rollbackFloor": "0.5.1"
+    "rollbackFloor": "0.5.3-rc.1"
   }
 }

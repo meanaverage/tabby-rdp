@@ -63,6 +63,8 @@ upgrade. The suites accept host-provided modal drag regions and the plugin's fal
 Alt+arrow word-jump sequences, output through session middleware, resize, font changes, scroll position, background
 output, tab closing, plugin settings, dummy-account revision saves, RDP profile editing, and modal/plugin drag bars.
 It also checks the compatibility snapshot against the real terminal inputs and modal behavior.
+Gateway-account checks use dummy credentials without a remote connection: real group-default resolution in the
+inventory and removal confirmation, then separate gateway prompts after removal, including cancellation.
 `smoke-rdp` covers a real decoded RDP frame, repeated console/RDP switching, keyboard focus and covered-console
 input isolation, live display resize, host-tab switching, and disconnect cleanup. Renderer exceptions, console
 errors, and caught xterm resize failures fail either suite. Neither suite recreates a complete terminal-renderer
@@ -90,8 +92,11 @@ qualifying every later host release. Rerun the relevant suites when the plugin o
 ## Package-change smoke tests
 
 Test the package-change dialog with `npm test -- --packed --hidden --tabby /path/to/Tabby smoke-updates`.
-This suite checks confirmation, cancellation, progress, elapsed time, errors, and a real install of 0.5.1 from npm.
-Installation occurs only in the runner's disposable profile; its credential guard remains installed through the downgrade.
+This suite checks the persisted gateway-prompt minimum and refusal of 0.5.1/0.5.2 before installation, then checks
+confirmation, cancellation, progress, elapsed time, errors and success using a simulated compatible release and disk
+result. It also checks persistence of the target release's minimum before restart. It does not install from npm;
+the current RC cannot safely use the former real downgrade to 0.5.1 as an installer test.
+The runner uses a disposable profile and keeps the actual packed plugin and credential guard installed throughout.
 No remote desktop is required. The confirmation, progress and verified result must remain in the same modal, including
 when Settings closes. Set `TRD_TEST_DUMP` to retain screenshots of progress, failure and success.
 
@@ -143,7 +148,7 @@ system keychain doesn't answer (Linux without an unlocked keyring), the keychain
 |---|---|
 | [smoke-host](suites/smoke-host.ts) | Host upgrades without a remote: both terminal frontends, keyboard, resize/font/scroll, tab lifecycle, settings, account revision saves, profile editor, modal dragging. |
 | [smoke-rdp](suites/smoke-rdp.ts) | Host upgrades with real RDP: connection/frame, console switching and input isolation, display resize, tab focus, disconnect. |
-| [smoke-updates](suites/smoke-updates.ts) | Persistent package-change dialog, cancellation, progress, errors and a verified real 0.5.1 install in a disposable profile. |
+| [smoke-updates](suites/smoke-updates.ts) | Persistent rollback floor, refused unsafe downgrades, and package-change dialog cancellation/progress/errors/simulated success. |
 | [e2e](suites/e2e.ts) | Every entry point (toolbar button, hotkey, menus, header), focus and typing, one desktop per account across tabs, a local terminal running `ssh`, Disconnect. |
 | [desk](suites/desk.ts) | Logins in the shared session, `desk`, requests without its key ignored, typing in the desktop terminal, RDP and SSH disconnects keeping the session, turning `desk` off and on. |
 | [resize](suites/resize.ts) | Resize to fit, reconnect at the new size, keep the resolution, Retina with GNOME's scale. |

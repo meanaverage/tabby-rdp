@@ -16,7 +16,7 @@ import { ConnectionStatus, STYLE as STATS_STYLE } from './connectionStatus'
 import { Microphone } from './microphone'
 import { SharedDrives, SharedFolder, sharedFolders } from './drives'
 import { askDesktop, formatAddress } from './desktopForm'
-import { accountKey, accountsOf, newAccountId, SavedAccount, signInName } from './accounts'
+import { accountKey, accountsOf, ASK_GATEWAY_ACCOUNT, newAccountId, SavedAccount, signInName } from './accounts'
 import { ACCOUNT_REMEMBER_UNAVAILABLE, AccountRevisions } from './accountRevisions'
 import { NewAccountInput, STYLE as ACCOUNT_FORM_STYLE } from './accountForm'
 import { FileTransfer, STYLE as FILES_STYLE, uniquePath } from './fileTransfer'
@@ -142,15 +142,15 @@ interface Endpoint {
     gatewayAccount?: GatewaySignIn
 }
 
-/** A saved account's sign-in to an RD Gateway, where that isn't the desktop's own. */
+/** A separate sign-in to an RD Gateway, optionally backed by a saved account. */
 interface GatewaySignIn {
     credentials: Credentials
     domain?: string
     /** Entered just now, to be kept as the account's password once the gateway takes it. */
     remember: boolean
-    saveKey: string
-    saveLabel: string
-    saveFor: string
+    saveKey?: string
+    saveLabel?: string
+    saveFor?: string
     accountRevision?: string
 }
 
@@ -1071,10 +1071,12 @@ export class RemoteDesktopService {
         // Names as text whatever the config holds (see entryText): the accounts list and the question before removing
         // one show them all.
         const desktops = this.configuredDesktops().flatMap((d, i) => isDesktopEntry(d) && (d.account === id || d.gatewayAccount === id) ? [{ name: entryText(d).name, desktopIndex: i }] : [])
-        const groups: any[] = this.config.store.groups ?? []
-        const inherited = (p: any) => p.options?.account === undefined && groups.find(g => g.id === p.group)?.defaults?.[RDP_PROFILE_TYPE]?.options?.account === id
         const profiles = (this.config.store.profiles ?? [])
-            .filter((p: any) => p?.type === RDP_PROFILE_TYPE && (p.options?.account === id || p.options?.gatewayAccount === id || inherited(p)))
+            .filter((p: any) => {
+                if (p?.type !== RDP_PROFILE_TYPE) { return false }
+                const options = this.profiles.getConfigProxyForProfile(p).options
+                return options?.account === id || options?.gatewayAccount === id
+            })
             .map((p: any) => ({ name: configText(p.name) || configText(p.options?.host), profileId: configText(p.id) || undefined }))
         return [...desktops, ...profiles]
     }
@@ -1190,9 +1192,9 @@ export class RemoteDesktopService {
                 if (rest.account === id) {
                     delete rest.account
                 }
-                // A gateway that signed in with it takes the desktop's sign-in from now on.
+                // Keep the gateway's credentials separate after its saved account is removed.
                 if (rest.gatewayAccount === id) {
-                    delete rest.gatewayAccount
+                    rest.gatewayAccount = ASK_GATEWAY_ACCOUNT
                 }
                 return rest
             })
@@ -1203,14 +1205,18 @@ export class RemoteDesktopService {
                 profile.options.account = null
             }
             if (profile?.type === RDP_PROFILE_TYPE && profile.options?.gatewayAccount === id) {
-                profile.options.gatewayAccount = null
+                profile.options.gatewayAccount = ASK_GATEWAY_ACCOUNT
             }
         }
-        // A profile group's default for remote desktop profiles, too.
-        for (const group of this.config.store.groups ?? []) {
-            const options = group?.defaults?.[RDP_PROFILE_TYPE]?.options
+        // Group and global defaults keep separate gateway authentication for their inheriting profiles, too.
+        const defaults = [this.config.store.profileDefaults, ...(this.config.store.groups ?? []).map((group: any) => group?.defaults)]
+        for (const entry of defaults) {
+            const options = entry?.[RDP_PROFILE_TYPE]?.options
             if (options?.account === id) {
                 options.account = ''
+            }
+            if (options?.gatewayAccount === id) {
+                options.gatewayAccount = ASK_GATEWAY_ACCOUNT
             }
         }
         await this.config.save()
@@ -3230,35 +3236,35 @@ export class RemoteDesktopService {
 
     /**
      * The sign-in to a desktop's RD Gateway with the saved account it names: the account's password from the keychain,
-     * or asked for (when none is saved, or `retryError`: the gateway just refused it). Undefined when that account no
-     * longer exists (the desktop's own sign-in is then tried); null when the form was cancelled.
+     * or asked for (when none is saved, or `retryError`: the gateway just refused it). A removed or missing account
+     * always asks for separate credentials; null when the form was cancelled.
      */
-    private async gatewayAccountFor (spec: DesktopSpec, session: DesktopSession, gateway: Gateway, retryError?: string): Promise<GatewaySignIn | undefined | null> {
+    private async gatewayAccountFor (spec: DesktopSpec, session: DesktopSession, gateway: Gateway, retryError?: string): Promise<GatewaySignIn | null> {
         const account = this.accounts().find(a => a.id === spec.gatewayAccount)
         if (!account) {
-            session.log.push('gateway: its saved account no longer exists; signing in with the desktop\'s')
-            return undefined
+            session.log.push('gateway: asking for a separate account')
         }
-        const signIn = { domain: account.domain, saveKey: accountKey(account.id), saveLabel: `saved account ${account.name}`, saveFor: signInName(account), accountRevision: this.accountRevisions.capture(account) }
-        const saved = retryError ? null : await loadCredentials(signIn.saveKey)
-        if (saved && saved.username === signInName(account)) {
+        const signIn = account ? { domain: account.domain, saveKey: accountKey(account.id), saveLabel: `saved account ${account.name}`, saveFor: signInName(account), accountRevision: this.accountRevisions.capture(account) } : undefined
+        const saved = !retryError && signIn ? await loadCredentials(signIn.saveKey) : null
+        if (saved && account && saved.username === signInName(account)) {
             session.log.push(`gateway: the saved account "${account.name}"`)
             return { ...signIn, credentials: { username: signInName(account), password: saved.password }, remember: false }
         }
         session.status('')
         const asked = askCredentials(session.overlay, {
             title: `Sign in to the gateway ${gateway.host}, to reach ${spec.name}`,
-            username: signInName(account),
-            error: [retryError, signIn.accountRevision === undefined ? ACCOUNT_REMEMBER_UNAVAILABLE : ''].filter(Boolean).join(' '),
-            canRemember: signIn.accountRevision !== undefined,
-            account: account.name,
+            username: account ? signInName(account) : '',
+            error: [retryError, !account && spec.gatewayAccount !== ASK_GATEWAY_ACCOUNT ? 'The saved gateway account no longer exists. Enter a separate account for the gateway.' : '',
+                account && signIn?.accountRevision === undefined ? ACCOUNT_REMEMBER_UNAVAILABLE : ''].filter(Boolean).join(' '),
+            canRemember: !!signIn && signIn.accountRevision !== undefined,
+            account: account?.name,
         }, session.disposed)
         // Only in the pane in front (see endpointFor).
         if (session.visible && this.showsInFront(session)) {
             setTimeout(() => session.visible && this.showsInFront(session) && session.focusDesktop())
         }
         const entered = await asked
-        return entered && { ...signIn, credentials: entered, remember: entered.remember }
+        return entered && { ...signIn, credentials: entered, remember: !!signIn && entered.remember }
     }
 
     /**
@@ -3268,8 +3274,11 @@ export class RemoteDesktopService {
     private async throughGateway (target: RemoteTarget, spec: DesktopSpec, session: DesktopSession, gateway: Gateway, endpoint: Endpoint, signal?: AbortSignal): Promise<Duplex> {
         session.gatewayRefused = null
         const own = endpoint.gatewayAccount
+        if (spec.gatewayAccount && !own) {
+            throw new Error('A separate gateway sign-in is required before connecting.')
+        }
         const credentials = own?.credentials ?? endpoint.credentials
-        session.log.push(`gateway: ${gateway.host}:${gateway.port}, signing in with ${own ? 'its saved account' : 'the desktop\'s sign-in'}`)
+        session.log.push(`gateway: ${gateway.host}:${gateway.port}, signing in with ${own ? 'its separate account' : 'the desktop\'s sign-in'}`)
         try {
             const stream = await openThroughGateway(
                 () => target.openTcp(gateway.host, gateway.port), gateway,
@@ -3278,10 +3287,11 @@ export class RemoteDesktopService {
                 (fingerprint, valid, reason, details) => this.checkGatewayCertificate(session, gateway, fingerprint, valid, reason, details),
                 { log: m => session.log.push(m), clientName: os.hostname(), signal })
             // Entered a moment ago and taken by the gateway: kept, while the account is still what it was signed in as.
-            if (own?.remember) {
+            if (own?.remember && own.saveKey) {
                 own.remember = false
-                saveCredentialsIf(own.saveKey, own.credentials,
-                    () => this.accountCurrent(own.saveKey, own.saveFor, own.accountRevision), own.saveLabel).then(
+                const saveKey = own.saveKey
+                saveCredentialsIf(saveKey, own.credentials,
+                    () => this.accountCurrent(saveKey, own.saveFor, own.accountRevision), own.saveLabel).then(
                     saved => session.log.push(saved ? `gateway: saved as the account's password in ${storeName()}` : 'gateway: not saved: the account changed meanwhile'),
                     e => session.log.push(`gateway: ${storeName()}: ${e?.message ?? e}`))
             }

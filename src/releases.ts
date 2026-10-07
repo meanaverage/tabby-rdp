@@ -295,6 +295,7 @@ export class ReleaseManager {
                 if (this.catalogError) { throw new Error('Check published versions successfully before installing.') }
                 const reason = this.reason(version)
                 if (reason) { throw new Error(reason) }
+                const targetFloor = this.catalog!.versions.find(p => p.version === version)!.policy!.rollbackFloor
                 if (version === this.running) {
                     progress('success', `tabby-rdp ${version} is already running.`)
                     return
@@ -321,6 +322,8 @@ export class ReleaseManager {
                 this.state.previous = this.running
                 this.state.pending = version
                 this.state.removed = false
+                // Record the target's data boundary before restart, while older windows may still be running.
+                this.state.rollbackFloor = greatest(this.state.rollbackFloor, targetFloor)
                 if (returnToStable) { this.state.channel = 'stable' }
                 this.persist()
                 progress('success')

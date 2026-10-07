@@ -3,7 +3,7 @@ import { basename } from 'path'
 import { Subscription } from 'rxjs'
 import { AppService, ConfigService, HotkeyDescription, HotkeysService, NotificationsService, PlatformService, ProfilesService } from 'tabby-core'
 import { SettingsTabComponent, SettingsTabProvider } from 'tabby-settings'
-import { SavedAccount, signInName } from './accounts'
+import { ASK_GATEWAY_ACCOUNT, SavedAccount, signInName } from './accounts'
 import { CLIPBOARD_LABELS, ownClipboard } from './clipboard'
 import { DesktopSettings, RemoteDesktopService } from './desktop.service'
 import { configText, DIRECT_KEY, entryText, isDesktopEntry, shownKey } from './desktops'
@@ -607,29 +607,32 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
         const accounts = this.desktop.accounts()
         const accountOf = (id: string | null | undefined) => id ? accounts.find(a => a.id === id) : undefined
         // Remote desktop profiles first (Tabby's editor), then the desktops added from SSH tabs (the plugin's form).
-        const profiles: any[] = (this.config.store.profiles ?? []).filter((p: any) => p?.type === RDP_PROFILE_TYPE && p.options?.host)
-        const groups: any[] = this.config.store.groups ?? []
+        const profiles: any[] = (this.config.store.profiles ?? []).filter((p: any) => p?.type === RDP_PROFILE_TYPE)
+        const gatewaySignIn = (id: string | null | undefined) => {
+            const account = accountOf(id)
+            return account ? `, as ${esc(account.name)}` : id === ASK_GATEWAY_ACCOUNT ? ', asks for a gateway account'
+                : id ? ', saved gateway account missing (asks when connecting)' : ''
+        }
         // Every field as text whatever the config holds (see configText): one that can't be shown would leave this list,
         // and the lists after it on the page, unbuilt.
-        const profileRows = profiles.map(p => {
-            const o = p.options
+        const profileRows = profiles.flatMap(p => {
+            const o = this.injector.get(ProfilesService).getConfigProxyForProfile(p).options
+            if (!o?.host) { return [] }
             const address = `${configText(o.host)}:${configText(o.port || 3389)}`
             const via = o.via ? configText((this.config.store.profiles ?? []).find((x: any) => x.id === o.via)?.name) || 'an SSH profile' : null
-            const inherited = o.account === undefined ? groups.find(g => g.id === p.group)?.defaults?.[RDP_PROFILE_TYPE]?.options?.account : undefined
-            const account = accountOf(o.account || inherited)
-            // Its own clipboard, or its group's or the type's default: what it connects with, as Tabby resolves the profile.
-            const clipboard = ownClipboard(this.injector.get(ProfilesService).getConfigProxyForProfile(p).options?.clipboard)
+            const account = accountOf(o.account)
+            const clipboard = ownClipboard(o.clipboard)
             const [username, kind, gateway] = [configText(o.username), configText(o.kind), configText(o.gateway)]
             const details = [
                 account ? `Signs in as ${esc(account.name)}` : username ? `Signs in as ${esc(username)}` : '',
                 kind && kind !== 'windows' ? esc(kind) : '',
-                gateway ? `Through the gateway ${esc(gateway)}${accountOf(o.gatewayAccount) ? `, as ${esc(accountOf(o.gatewayAccount)!.name)}` : ''}` : '',
+                gateway ? `Through the gateway ${esc(gateway)}${gatewaySignIn(o.gatewayAccount)}` : '',
                 clipboard ? `Clipboard: ${esc(CLIPBOARD_LABELS[clipboard].toLowerCase())}` : '',
             ].filter(Boolean).join('<br>')
-            return this.row(esc(configText(p.name) || address), `${esc(address)}${via ? ` via ${esc(via)}` : ''}${details ? `<br>${details}` : ''}`, [
+            return [this.row(esc(configText(p.name) || address), `${esc(address)}${via ? ` via ${esc(via)}` : ''}${details ? `<br>${details}` : ''}`, [
                 { label: 'Edit…', run: () => { this.editProfile(p.id) } },
                 { label: 'Remove…', danger: true, run: () => { this.removeProfile(p.id) } },
-            ])
+            ])]
         })
         const desktops = this.desktop.configuredDesktops()
         // An item that is no entry describes no desktop, and isn't listed (see isDesktopEntry).
@@ -644,7 +647,7 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
             const details = [
                 account ? `Signs in as ${esc(account.name)}` : username ? `Signs in as ${esc(username)}` : '',
                 kind && kind !== 'windows' ? esc(kind) : '',
-                gateway && !hyperv ? `Through the gateway ${esc(gateway)}${accountOf(d.gatewayAccount) ? `, as ${esc(accountOf(d.gatewayAccount)!.name)}` : ''}` : '',
+                gateway && !hyperv ? `Through the gateway ${esc(gateway)}${gatewaySignIn(d.gatewayAccount)}` : '',
                 vm ? `Starts VM ${esc(vm)} when off` : mac ? `Wakes ${esc(mac)} when off` : '',
                 ownClipboard(d.clipboard) ? `Clipboard: ${esc(CLIPBOARD_LABELS[ownClipboard(d.clipboard)!].toLowerCase())}` : '',
             ].filter(Boolean).join('<br>')

@@ -19,6 +19,9 @@ export interface SavedAccount {
     credentialRevision?: string
 }
 
+/** A separate gateway sign-in prompt. The '@' cannot occur in a saved account's id. */
+export const ASK_GATEWAY_ACCOUNT = '@ask'
+
 /** The usable entries of `remoteDesktop.accounts` (hand-written ones may lack fields). */
 export function accountsOf (store: any): SavedAccount[] {
     const list = Array.isArray(store?.accounts) ? store.accounts : []
