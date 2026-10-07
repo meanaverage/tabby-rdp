@@ -232,7 +232,7 @@ const PAGE_HELPERS = (config: TestEnv): string => `(() => {
             return lines.join('\\n')
         },
         overlay (p) { return p.element.nativeElement.querySelector('.trd-overlay:not(.trd-form-overlay)') },
-        canvasElement (p) { return this.overlay(p)?.querySelector('iron-remote-desktop')?.shadowRoot?.querySelector('canvas') ?? this.overlay(p)?.querySelector('.trd-last-frame') ?? null },
+        canvasElement (p) { return this.overlay(p)?.querySelector('iron-remote-desktop')?.shadowRoot?.querySelector('canvas') ?? null },
         /** The remote display: size, size of the pane, and how many colors a sample of it has (0: nothing drawn). */
         canvas (p) {
             const cv = this.canvasElement(p)

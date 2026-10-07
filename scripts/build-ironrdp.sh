@@ -1,5 +1,5 @@
 #!/bin/sh
-# Rebuilds vendor/iron-remote-desktop*.js, the backend factory and vendor/ironrdp_web_bg.wasm: IronRDP at ironrdp/BASE_COMMIT with
+# Rebuilds vendor/iron-remote-desktop*.js and vendor/ironrdp_web_bg.wasm: IronRDP at ironrdp/BASE_COMMIT with
 # ironrdp/patches/*.patch applied in order (see ironrdp/README.md). vendor/SHA256SUMS records what they were built
 # from and their hashes; the unit tests check vendor/ against it, and CI rebuilds vendor/ and compares
 # (.github/workflows/ironrdp.yml, with scripts/check-vendor.mjs).
@@ -164,7 +164,6 @@ if (out.includes(';base64,')) throw new Error(`${bundle}: another inlined asset 
 fs.writeFileSync(path.join(vendor, 'iron-remote-desktop-rdp.js'), out)
 fs.writeFileSync(path.join(vendor, 'ironrdp_web_bg.wasm'), bytes)
 EOF
-TRD_TYPESCRIPT_PATH="$SRC/web-client/iron-remote-desktop-rdp/node_modules/typescript" node "$ROOT/scripts/make-ironrdp-factory.mjs"
 {
     echo "vendor/iron-remote-desktop*.js and vendor/ironrdp_web_bg.wasm are built from IronRDP"
     echo "(https://github.com/Devolutions/IronRDP) at commit $COMMIT with the patches in"
@@ -187,6 +186,6 @@ sha256 () {
     echo "# Node.js $(node --version), on $HOST. Check from the repository's root: sha256sum -c vendor/SHA256SUMS"
     echo "# (or shasum -a 256 -c vendor/SHA256SUMS)."
     sha256 ironrdp/BASE_COMMIT ironrdp/patches/*.patch
-    sha256 vendor/IRONRDP-LICENSE vendor/iron-remote-desktop-rdp.js vendor/iron-remote-desktop.js vendor/ironrdp_web_bg.wasm vendor/ironrdp-factory.js
+    sha256 vendor/IRONRDP-LICENSE vendor/iron-remote-desktop-rdp.js vendor/iron-remote-desktop.js vendor/ironrdp_web_bg.wasm
 } > vendor/SHA256SUMS
 echo "vendor/ updated from IronRDP $COMMIT + $(ls ironrdp/patches/*.patch | wc -l | tr -d ' ') patches (vendor/SHA256SUMS)"

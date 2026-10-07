@@ -385,9 +385,9 @@ test('Stop sends no more to that desktop; turning the setting off stops all of t
 })
 
 /**
- * The connection setup for a stand-in desktop in `pane`, up to connecting (which fails here), without run()'s final
- * teardown: the tests exercise the wired microphone afterward. Returns the callback wired to IronRDP's audioInput
- * extension (null: the connection has no microphone). `rdp`: more of IronRDP's module.
+ * run() for a stand-in desktop in `pane`, with stand-ins for IronRDP's component and module, up to connecting (which
+ * fails here): what reached IronRDP's audioInput extension, the callback the remote's requests for the microphone go
+ * to (null: the connection has no microphone). `rdp`: more of IronRDP's module.
  */
 async function connecting (service: any, pane: any, session: any, rdp: Record<string, unknown> = {}) {
     let ready: (event: unknown) => void = () => { }
@@ -411,7 +411,7 @@ async function connecting (service: any, pane: any, session: any, rdp: Record<st
         status () { },
         files: null,
     })
-    const outcome = await service.runConnection(pane, { key: 'rdp', label: 'Win', direct: session.spec }, session.spec, session, {
+    const outcome = await service.run(pane, { key: 'rdp', label: 'Win', direct: session.spec }, session.spec, session, {
         Backend: {},
         RdpFileTransferProvider: class { handleFileContentsRequest () { } on () { } dispose () { } },
         displayControl: () => 'display control',
@@ -419,7 +419,7 @@ async function connecting (service: any, pane: any, session: any, rdp: Record<st
         audioInput: (callback: (message: unknown) => void) => { microphone = callback; return 'microphone' },
         audioInputData: () => 'audio',
         ...rdp,
-    }, { host: '10.0.0.5', port: 3389, credentials: { username: 'u', password: 'p' } }, new AbortController().signal, () => { })
+    }, { host: '10.0.0.5', port: 3389, credentials: { username: 'u', password: 'p' } })
     assert.equal(outcome.error, 'not connected here')
     return microphone as ((message: unknown) => void) | null
 }
