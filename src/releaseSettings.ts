@@ -52,10 +52,9 @@ export function renderReleaseSettings (
             <button class="btn btn-secondary btn-sm" data-restore ${disable(blocked || !!releases.error || !previous || !!releases.reason(previous) || previous === releases.running)}>Restore previous version${previous ? ` (${esc(previous)})` : ''}…</button>
         </div>
         <p class="trd-sub">${previous ? releases.reason(previous) ? `Previous version: ${esc(releases.reason(previous))} ` : '' : 'A previous version is saved after a successful installation from this page. '}Returning to stable can be a downgrade. Only versions compatible with this Tabby and your saved data are offered. Replacing the package does not restore changed settings or deleted credentials.</p>
-        <h5>Disable or remove</h5>
-        <p>To stop loading the plugin temporarily, disable it in Tabby's Plugins page. Uninstall removes the package. Both keep saved desktops, profiles, settings and credentials; remote helpers stay on their hosts.</p>
-        <div class="trd-release-actions"><button class="btn btn-secondary btn-sm" data-plugins>Open Tabby Plugins…</button><button class="btn btn-outline-danger btn-sm" data-uninstall ${disable(blocked)}>Uninstall tabby-rdp…</button></div>
-        <p class="trd-sub">Remove individual desktops and accounts in their tabs before uninstalling if needed. Locked credential stores may need to be unlocked first. <a href="#" data-recovery>Recovery and cleanup instructions</a> also work when this plugin cannot load.</p>`
+        <h5>Disable or uninstall</h5>
+        <p class="trd-sub">Uninstall removes this plugin. Saved connections, settings, passwords and remote setup are kept.</p>
+        <div class="trd-release-actions"><button class="btn btn-secondary btn-sm" data-plugins>Manage in Tabby…</button><button class="btn btn-outline-danger btn-sm" data-uninstall ${disable(blocked)}>Uninstall plugin…</button><a href="#" data-recovery>Cleanup instructions</a></div>`
     root.querySelector<HTMLSelectElement>('[data-channel]')!.addEventListener('change', e => {
         void releases.setChannel((e.target as HTMLSelectElement).value)
     })
