@@ -1740,3 +1740,91 @@ test('reopening the desktop of a machine reached through a host goes there again
     assert.deepEqual(opened, [there.key, there.key])
     svc.disconnect(pane)
 })
+
+test('ending a backend releases its browser resources and references, even when WASM shutdown throws', t => {
+    const page = installDocument()
+    t.after(page.restore)
+    const desktop = new DesktopSession(new FakeElement(), 'test', specOf({ host: 'host' }))
+    const closed: string[] = []
+    desktop.host.appendChild(new FakeElement('iron-remote-desktop'))
+    desktop.ui = { shutdown () { closed.push('ui'); throw new WebAssembly.RuntimeError('synthetic trap') } }
+    desktop.stopSending = () => { }
+    desktop.indicator = { setActive (active: boolean) { assert.equal(active, false); closed.push('stats') } }
+    for (const name of ['audio', 'h264', 'mic', 'files', 'drives']) {
+        desktop[name] = { close: () => closed.push(name), dispose: () => closed.push(name) }
+    }
+    desktop.onConnectionEnd(() => closed.push('observer'))
+    desktop.endConnection()
+    assert.deepEqual(closed, ['observer', 'stats', 'ui', 'audio', 'h264', 'mic', 'files', 'drives'])
+    assert.equal(desktop.host.children.length, 0)
+    for (const name of ['ui', 'stopSending', 'audio', 'h264', 'mic', 'files', 'drives']) assert.equal(desktop[name], null)
+    desktop.endConnection()
+    assert.deepEqual(closed.slice(8), ['stats'])
+    desktop.dispose()
+})
+
+test('an asynchronous trap ends only its desktop even when Rust run never settles', async t => {
+    const page = installDocument()
+    t.after(page.restore)
+    const { svc } = service()
+    const spec = specOf({ host: 'host' })
+    const pane = {}
+    const otherPane = {}
+    const desktop = new DesktopSession(new FakeElement(), 'first', spec)
+    const other = new DesktopSession(new FakeElement(), 'second', spec)
+    t.after(() => { desktop.dispose(); other.dispose() })
+    desktop.state = other.state = 'connected'
+    let closed = 0
+    let otherClosed = 0
+    desktop.proxy = { close: () => closed++ }
+    other.proxy = { close: () => otherClosed++ }
+    svc.sessions.set(pane, desktop)
+    svc.sessions.set(otherPane, other)
+    // Stand in for a Rust session whose async run hangs after an event callback traps.
+    svc.runConnection = async () => new Promise(() => { })
+    let fault: (error: Error) => void = () => { }
+    let unwatched = false
+    const backend = { runtime: { onTrap: (callback: (error: Error) => void) => { fault = callback; return () => { unwatched = true } } } }
+    const running = svc.run(pane, {}, spec, desktop, backend, {})
+    fault(new WebAssembly.RuntimeError('synthetic trap'))
+    assert.deepEqual(await running, { connected: true, error: 'WebAssembly instance failed: synthetic trap' })
+    assert.equal(unwatched, true)
+    assert.equal(desktop.proxy, null)
+    assert.equal(closed, 1)
+    assert.equal(otherClosed, 0)
+    assert.equal(svc.sessions.get(otherPane), other)
+    // Existing reconnect policy is bounded and scoped to the failed pane.
+    svc.scheduleReconnect(pane, { isOpen: () => true }, spec, desktop, 'failed')
+    assert.equal(svc.reconnects.has(pane), true)
+    assert.equal(svc.reconnects.has(otherPane), false)
+    svc.cancelReconnect(pane)
+})
+
+test('ending a connection keeps only a pixel copy of its picture, and disposal removes that too', t => {
+    const page = installDocument()
+    t.after(page.restore)
+    const desktop = new DesktopSession(new FakeElement(), 'picture', specOf({ host: 'host' }))
+    const source = { width: 1280, height: 720, getBoundingClientRect: () => ({ width: 640, height: 360 }) }
+    const copied: unknown[] = []
+    const create = document.createElement.bind(document)
+    document.createElement = ((tag: string) => {
+        if (tag !== 'canvas') return create(tag)
+        return Object.assign(new FakeElement('canvas'), { getContext: () => ({ drawImage: (...args: unknown[]) => copied.push(args) }) })
+    }) as typeof document.createElement
+    desktop.canvas = () => source as HTMLCanvasElement
+    desktop.host.appendChild(new FakeElement('iron-remote-desktop'))
+    desktop.ui = { shutdown () { } }
+    desktop.endConnection()
+    const picture = desktop.host.querySelector('.trd-last-frame') as any
+    assert.deepEqual(copied, [[source, 0, 0]])
+    assert.deepEqual([picture.width, picture.height, picture.style.width, picture.style.height], [1280, 720, '640px', '360px'])
+    assert.equal(desktop.host.querySelector('iron-remote-desktop'), null)
+    assert.equal(desktop.ui, null)
+    // A hidden pane has no CSS rectangle; its saved picture must still be visible when brought forward.
+    source.getBoundingClientRect = () => ({ width: 0, height: 0 })
+    desktop.endConnection()
+    const hidden = desktop.host.querySelector('.trd-last-frame') as any
+    assert.deepEqual([hidden.style.width, hidden.style.height], ['1280px', '720px'])
+    desktop.dispose()
+    assert.equal(desktop.host.children.length, 0)
+})

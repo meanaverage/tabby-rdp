@@ -45,7 +45,11 @@ export class ConnectionStatus {
     private ticks = 0
     private last: { at: number, bytesIn: number, bytesOut: number, frames: number } | null = null
     private frames = 0
-    private hooked: CanvasRenderingContext2D | null = null
+    private frameHook: {
+        context: CanvasRenderingContext2D
+        original: CanvasRenderingContext2D['putImageData']
+        wrapped: CanvasRenderingContext2D['putImageData']
+    } | null = null
     private latency: number | null = null
     private pinging = false
     private active = false
@@ -62,6 +66,8 @@ export class ConnectionStatus {
     setActive (active: boolean, canvas?: HTMLCanvasElement | null): void {
         if (active && canvas) {
             this.countFrames(canvas)
+        } else if (!active) {
+            this.releaseCanvas()
         }
         if (active === this.active) {
             return
@@ -98,13 +104,16 @@ export class ConnectionStatus {
      */
     private countFrames (canvas: HTMLCanvasElement): void {
         const ctx = canvas.getContext('2d')
-        if (!ctx || ctx === this.hooked) {
+        if (ctx === this.frameHook?.context) {
             return
         }
-        this.hooked = ctx
+        this.releaseCanvas()
+        if (!ctx) {
+            return
+        }
         const original = ctx.putImageData
         let batch = false
-        ctx.putImageData = ((...args: any[]) => {
+        const wrapped = ((...args: any[]) => {
             if (!batch) {
                 batch = true
                 this.frames++
@@ -112,6 +121,18 @@ export class ConnectionStatus {
             }
             return (original as any).apply(ctx, args)
         }) as any
+        ctx.putImageData = wrapped
+        this.frameHook = { context: ctx, original, wrapped }
+    }
+
+    /** A detached canvas's handlers retain its backend, even after its component has been removed. */
+    private releaseCanvas (): void {
+        const hook = this.frameHook
+        this.frameHook = null
+        // Leave a later owner's replacement alone.
+        if (hook && hook.context.putImageData === hook.wrapped) {
+            hook.context.putImageData = hook.original
+        }
     }
 
     private tick (): void {

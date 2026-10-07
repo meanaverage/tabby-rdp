@@ -2,11 +2,23 @@
 
 ## 0.5.3-rc.1
 
-Release candidate preparation; features are integrated through PRs into `release/0.5.3-rc.1`.
+Local release candidate; not published on npm or as a GitHub release.
+
+**Added**
+- **Each desktop connection has its own WebAssembly instance**, while sharing compiled IronRDP code. Reconnecting
+  or recovering from an instance fault creates a fresh backend for that desktop without replacing other desktops.
+- **Instance lifecycle checks** cover independent memories, cleanup, reconnects and collection after disposal,
+  with a browser smoke test and a live two-desktop isolation suite.
+
+**Fixed**
+- **Ended connections release their backend and browser resources**, including timers, global listeners, media,
+  and the statistics indicator's canvas hook, while retaining the last picture for the disconnected pane.
 
 **Changed**
-- **Preview publishing uses npm’s beta tag** for both beta and release-candidate versions. GitHub release drafts
+- **Preview publishing uses npm's beta tag** for both beta and release-candidate versions. GitHub release drafts
   remain unpublished until the staged npm package is approved and verified.
+
+Qualification and remaining stable-release checks are tracked in [#49](https://github.com/meanaverage/tabby-rdp/issues/49).
 
 ## 0.5.2
 

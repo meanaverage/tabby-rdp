@@ -17,6 +17,7 @@ on:
       - 'ironrdp/**'
       - 'vendor/**'
       - 'scripts/build-ironrdp.sh'
+      - 'scripts/make-ironrdp-factory.mjs'
       - 'scripts/check-vendor.mjs'
       - '.github/workflows/ironrdp.yml'
   push:
@@ -25,6 +26,7 @@ on:
       - 'ironrdp/**'
       - 'vendor/**'
       - 'scripts/build-ironrdp.sh'
+      - 'scripts/make-ironrdp-factory.mjs'
       - 'scripts/check-vendor.mjs'
       - '.github/workflows/ironrdp.yml'
   workflow_call:
