@@ -134,6 +134,10 @@ set to require two-factor authentication and disallow tokens.
 
 ## Actions
 
+Linux jobs use `ubuntu-24.04` so changes to GitHub's `ubuntu-latest` alias do not silently move CI or publication
+to a new Ubuntu release. Upgrade the runner version deliberately and validate the workflows before merging. The
+IronRDP rebuild remains on an Apple Silicon Mac to match the committed build.
+
 The workflows pin each action to a commit, with its version in a comment (`actions/checkout@<commit> # v7.0.1`): a
 tag can be moved to other code, a commit can't. Dependabot ([`.github/dependabot.yml`](.github/dependabot.yml))
 proposes newer versions as pull requests that change both; review them as any other change. To move by hand, look up

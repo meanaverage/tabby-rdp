@@ -31,7 +31,7 @@ jobs:
 
   package:
     name: Package
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       sha256: ${{ steps.pack.outputs.sha256 }}
     steps:
@@ -61,7 +61,7 @@ jobs:
   publish:
     name: Publish to npm
     needs: [ironrdp, package]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       id-token: write   # the OIDC token for trusted publishing and provenance, in this job only
@@ -108,7 +108,7 @@ jobs:
     name: GitHub release from the changelog
     # Once the package is staged: the release's notes tell users to install it.
     needs: publish
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: write   # creates the release for the tag
     steps:
