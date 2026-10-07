@@ -51,7 +51,7 @@ export function renderReleaseSettings (
             ${stable && stable !== releases.running ? `<button class="btn btn-secondary btn-sm" data-stable ${disable(blocked || !!releases.error || !!releases.reason(stable))}>Return to stable ${esc(stable)}…</button>` : ''}
             <button class="btn btn-secondary btn-sm" data-restore ${disable(blocked || !!releases.error || !previous || !!releases.reason(previous) || previous === releases.running)}>Restore previous version${previous ? ` (${esc(previous)})` : ''}…</button>
         </div>
-        <p class="trd-sub">${previous ? releases.reason(previous) ? `Previous version: ${esc(releases.reason(previous))} ` : '' : 'A previous version is saved after a successful installation from this page. '}Returning to stable can be a downgrade. Only versions compatible with this Tabby and your saved data are offered. Replacing the package does not restore changed settings or deleted credentials.</p>
+        ${!previous ? '<p class="trd-sub">Restore becomes available after installing a version here.</p>' : releases.reason(previous) ? `<p class="trd-sub">Previous version unavailable: ${esc(releases.reason(previous))}</p>` : ''}
         <h5>Disable or uninstall</h5>
         <p class="trd-sub">Uninstall removes this plugin. Saved connections, settings, passwords and remote setup are kept.</p>
         <div class="trd-release-actions"><button class="btn btn-secondary btn-sm" data-plugins>Manage in Tabby…</button><button class="btn btn-outline-danger btn-sm" data-uninstall ${disable(blocked)}>Uninstall plugin…</button><a href="#" data-recovery>Cleanup instructions</a></div>`

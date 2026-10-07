@@ -287,7 +287,7 @@ export class ReleaseManager {
                 if (returnToStable && version !== this.catalog?.stable) { throw new Error('Check the current stable version again.') }
                 const downgrade = semver.lt(version, this.running)
                 if (!await this.env.confirm(`Install tabby-rdp ${version}?`,
-                    `Currently running ${this.running}. ${downgrade ? 'This is a downgrade. ' : ''}Restart Tabby yourself after installation. Close remote desktops first. Saved desktops and settings stay; replacing the package does not restore changed settings or deleted credentials.`, 'Install')) { return }
+                    `Currently running ${this.running}. ${downgrade ? 'This is a downgrade. ' : ''}Close remote desktops and restart Tabby after installation.`, 'Install')) { return }
                 await this.env.install('tabby-rdp', version)
                 // History is committed only after the supported installer succeeds.
                 this.state.previous = this.running
