@@ -19,7 +19,7 @@ import { waitForPort } from './lib/cdp.js'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const LINUX_SUITES = ['e2e', 'desk', 'resize', 'keyboard', 'actions', 'clipboard', 'files', 'audio', 'microphone', 'graphics', 'reconnect', 'desktops', 'profiles', 'certificates', 'status', 'wake', 'help', 'nested', 'vms', 'headless', 'takeover']
-const ALL_SUITES = [...LINUX_SUITES, 'windows', 'winhost', 'hyperv', 'gateway', 'xrdp', 'trd-pty', 'screenshots', 'demo', 'smoke-host', 'smoke-rdp']
+const ALL_SUITES = [...LINUX_SUITES, 'windows', 'winhost', 'hyperv', 'gateway', 'xrdp', 'trd-pty', 'screenshots', 'demo', 'smoke-host', 'smoke-rdp', 'smoke-updates']
 
 const args = process.argv.slice(2)
 const flag = (name: string) => args.includes(name)
@@ -112,6 +112,14 @@ function makeSandbox (): string {
             main: 'index.js', keywords: ['tabby-plugin'],
         }))
         fs.copyFileSync(path.join(ROOT, 'test', 'fixtures', 'smoke-credentials.cjs'), path.join(guard, 'index.js'))
+        // Real plugin changes must retain the guard, including after a restart in the isolated profile.
+        const fixture = path.join(dir, 'smoke-credentials')
+        fs.mkdirSync(fixture)
+        fs.copyFileSync(path.join(guard, 'package.json'), path.join(fixture, 'package.json'))
+        fs.copyFileSync(path.join(guard, 'index.js'), path.join(fixture, 'index.js'))
+        const manifest = JSON.parse(fs.readFileSync(path.join(plugins, 'package.json'), 'utf8'))
+        manifest.dependencies = { ...manifest.dependencies, 'tabby-aaa-smoke-credentials': 'file:../smoke-credentials' }
+        fs.writeFileSync(path.join(plugins, 'package.json'), JSON.stringify(manifest))
     }
     return dir
 }

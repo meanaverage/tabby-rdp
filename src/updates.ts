@@ -6,6 +6,7 @@ import { AppService, ConfigService, PlatformService } from 'tabby-core'
 import { RemoteDesktopHelp } from './help'
 import { desktopPaneOf } from './targets'
 import { HostCompatibility } from './hostCompat'
+import { PackageChangeDialog } from './packageChangeDialog'
 
 import { publishedVersions, registryJSON, ReleaseManager, RELEASES, RELEASE_STATE_KEY, releaseVersion } from './releases'
 export { newer } from './releases'
@@ -38,6 +39,7 @@ export class UpdateCheck extends ReleaseManager {
     constructor (private config: ConfigService, private app: AppService, private help: RemoteDesktopHelp, private platform: PlatformService, private zone: NgZone, compat: HostCompatibility) {
         const storage = localStore()
         const migratePreferences = !hasPreferences(storage)
+        const dialog = new PackageChangeDialog()
         super({ running: RUNNING, policy: PACKAGE.tabbyRdp, tabby: compat.info.version ?? '', node: process.versions.node,
             os: process.platform, cpu: process.arch, storage, fetchCatalog: publishedVersions,
             withLock: async run => {
@@ -52,8 +54,8 @@ export class UpdateCheck extends ReleaseManager {
                 }
             },
             install: (name, version) => platform.installPlugin(name, version), uninstall: name => platform.uninstallPlugin(name),
-            confirm: async (message, detail, action) => (await platform.showMessageBox({ type: 'warning', message, detail,
-                buttons: ['Cancel', action], defaultId: 0, cancelId: 0 })).response === 1,
+            confirm: (message, detail, action) => dialog.confirm(message, detail, action),
+            progress: state => dialog.update(state),
         }, !config.store || config.store.remoteDesktop?.checkUpdates === false)
         // Tabby can construct providers before ConfigService has loaded its store.
         // Keep checks paused until ready, and migrate the old switch only without a saved local preference.

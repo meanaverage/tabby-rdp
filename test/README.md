@@ -72,6 +72,12 @@ Without `TRD_TEST_HOST`, `smoke-rdp` explicitly reports `SKIP`; `--require-rdp` 
 before launching Tabby. The host suite still runs without a remote. Smoke tests require the runner's credential
 guard, so `--port` only works with a test profile already prepared by this runner (`--keep`).
 
+Test the package-change dialog with `npm test -- --packed --hidden --tabby /path/to/Tabby smoke-updates`.
+This suite checks confirmation, cancellation, progress, elapsed time, errors, and a real install of 0.5.1 from npm.
+Installation occurs only in the runner's disposable profile; its credential guard remains installed through the downgrade.
+No remote desktop is required. The confirmation, progress and verified result must remain in the same modal, including
+when Settings closes. Set `TRD_TEST_DUMP` to retain screenshots of progress, failure and success.
+
 ## Settings
 
 | Variable | For | |
@@ -120,6 +126,7 @@ system keychain doesn't answer (Linux without an unlocked keyring), the keychain
 |---|---|
 | [smoke-host](suites/smoke-host.ts) | Host upgrades without a remote: both terminal frontends, keyboard, resize/font/scroll, tab lifecycle, settings, account revision saves, profile editor, modal dragging. |
 | [smoke-rdp](suites/smoke-rdp.ts) | Host upgrades with real RDP: connection/frame, console switching and input isolation, display resize, tab focus, disconnect. |
+| [smoke-updates](suites/smoke-updates.ts) | Persistent package-change dialog, cancellation, progress, errors and a verified real 0.5.1 install in a disposable profile. |
 | [e2e](suites/e2e.ts) | Every entry point (toolbar button, hotkey, menus, header), focus and typing, one desktop per account across tabs, a local terminal running `ssh`, Disconnect. |
 | [desk](suites/desk.ts) | Logins in the shared session, `desk`, requests without its key ignored, typing in the desktop terminal, RDP and SSH disconnects keeping the session, turning `desk` off and on. |
 | [resize](suites/resize.ts) | Resize to fit, reconnect at the new size, keep the resolution, Retina with GNOME's scale. |

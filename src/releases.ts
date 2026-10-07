@@ -27,6 +27,12 @@ export interface LocalReleaseState {
     removed?: boolean
     rollbackFloor: string
 }
+export interface PackageChangeProgress {
+    action: 'install' | 'uninstall'
+    phase: 'preparing' | 'installing' | 'uninstalling' | 'verifying' | 'success' | 'error' | 'cancelled'
+    version?: string
+    message?: string
+}
 export interface ReleaseEnvironment {
     running: string
     policy: ReleasePolicy
@@ -39,6 +45,7 @@ export interface ReleaseEnvironment {
     install: (name: string, version: string) => Promise<void>
     uninstall: (name: string) => Promise<void>
     confirm: (message: string, detail: string, action: string) => Promise<boolean>
+    progress?: (state: PackageChangeProgress) => void
     now?: () => number
     /** Serializes all state writes and package mutations across this profile's windows. */
     withLock?: (run: () => Promise<void>) => Promise<void>
@@ -270,34 +277,57 @@ export class ReleaseManager {
         this.busy = true
         this.error = ''
         this.changed$.next()
+        const progress = (phase: PackageChangeProgress['phase'], message?: string) => this.env.progress?.({ action: 'install', phase, version, message })
         try {
+            progress('preparing')
             await this.ready
             await this.lock(async () => {
                 this.syncFromStorage()
                 this.reconcileDisk()
                 this.persist()
                 if (this.storageWarning) { throw new Error('Version history cannot be saved. Use Tabby Plugins to install.') }
-                if (this.pending || this.removed) { return }
+                if (this.pending) {
+                    progress('success', `tabby-rdp ${this.pending} is already installed. Restart Tabby to use it.`)
+                    return
+                }
+                if (this.removed) { throw new Error('The plugin has been uninstalled. Restart Tabby before changing versions.') }
                 await this.refreshCatalog()
                 if (this.catalogError) { throw new Error('Check published versions successfully before installing.') }
                 const reason = this.reason(version)
                 if (reason) { throw new Error(reason) }
-                if (version === this.running) { return }
+                if (version === this.running) {
+                    progress('success', `tabby-rdp ${version} is already running.`)
+                    return
+                }
                 if (semver.prerelease(version) && this.state.channel !== 'preview') { throw new Error('Choose Preview before installing a preview version.') }
                 if (returnToStable && version !== this.catalog?.stable) { throw new Error('Check the current stable version again.') }
                 const downgrade = semver.lt(version, this.running)
                 if (!await this.env.confirm(`Install tabby-rdp ${version}?`,
-                    `Currently running ${this.running}. ${downgrade ? 'This is a downgrade. ' : ''}Close remote desktops and restart Tabby after installation.`, 'Install')) { return }
+                    `Currently running ${this.running}. ${downgrade ? 'This is a downgrade. ' : ''}Close remote desktops and restart Tabby after installation.`, 'Install')) {
+                    progress('cancelled')
+                    return
+                }
+                progress('installing')
                 await this.env.install('tabby-rdp', version)
+                progress('verifying')
+                if (this.env.diskVersion) {
+                    const installed = this.env.diskVersion()
+                    if (installed !== version) {
+                        throw new Error(installed === null ? 'The installed plugin package is missing.' :
+                            `The installed version is ${installed}; expected ${version}.`)
+                    }
+                }
                 // History is committed only after the supported installer succeeds.
                 this.state.previous = this.running
                 this.state.pending = version
                 this.state.removed = false
                 if (returnToStable) { this.state.channel = 'stable' }
                 this.persist()
+                progress('success')
             })
         } catch (e) {
             this.error = `Installation did not complete. ${this.message(e)}`
+            progress('error', this.error)
         } finally {
             this.busy = false
             this.changed$.next()
@@ -309,22 +339,38 @@ export class ReleaseManager {
         this.busy = true
         this.error = ''
         this.changed$.next()
+        const progress = (phase: PackageChangeProgress['phase'], message?: string) => this.env.progress?.({ action: 'uninstall', phase, message })
         try {
+            progress('preparing')
             await this.ready
             await this.lock(async () => {
                 this.syncFromStorage()
                 this.reconcileDisk()
                 this.persist()
                 if (this.storageWarning) { throw new Error('Version history cannot be saved. Use Tabby Plugins to uninstall.') }
-                if (this.pending || this.removed) { return }
+                if (this.pending) { throw new Error('A version change is pending. Restart Tabby before uninstalling.') }
+                if (this.removed) {
+                    progress('success', 'tabby-rdp is already uninstalled. Restart Tabby to finish.')
+                    return
+                }
                 if (!await this.env.confirm('Uninstall tabby-rdp?',
-                    'Close remote desktops before uninstalling, then restart Tabby. Saved connections, settings, passwords and remote setup are kept.', 'Uninstall')) { return }
+                    'Close remote desktops before uninstalling, then restart Tabby. Saved connections, settings, passwords and remote setup are kept.', 'Uninstall')) {
+                    progress('cancelled')
+                    return
+                }
+                progress('uninstalling')
                 await this.env.uninstall('tabby-rdp')
+                progress('verifying')
+                if (this.env.diskVersion && this.env.diskVersion() !== null) {
+                    throw new Error('The plugin package is still installed.')
+                }
                 this.state.removed = true
                 this.persist()
+                progress('success')
             })
         } catch (e) {
             this.error = `Uninstall did not complete. ${this.message(e)}`
+            progress('error', this.error)
         } finally {
             this.busy = false
             this.changed$.next()

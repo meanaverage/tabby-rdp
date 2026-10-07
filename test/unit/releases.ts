@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createRequire } from 'node:module'
-import type { Catalog, ReleaseEnvironment } from '../../src/releases.js'
+import type { Catalog, PackageChangeProgress, ReleaseEnvironment } from '../../src/releases.js'
 const require = createRequire(import.meta.url)
 const { ReleaseManager, parseCatalog, releaseVersion, newer, RELEASE_STATE_KEY } = require('../../dist/releases.js') as typeof import('../../src/releases.js')
 const policy = { minimumTabbyVersion: '1.0.236', rollbackFloor: '0.5.1' }
@@ -328,4 +328,60 @@ test('disk reconciliation catches an external version change before an old windo
     assert.equal(s.calls.length, 0)
     assert.equal(s.manager.pending, '0.6.0-beta.1')
     assert.match(s.manager.notice, /changed outside this page/)
+})
+
+test('a downgrade reports progress and completes only after verifying the installed package', async () => {
+    let disk = '0.5.2'
+    let finish!: () => void
+    const progress: PackageChangeProgress[] = []
+    const s = setup({ running: disk, diskVersion: () => disk, progress: state => progress.push(state),
+        install: async () => { await new Promise<void>(resolve => { finish = resolve }); disk = '0.5.1' } })
+    const install = s.manager.install('0.5.1')
+    while (!finish) { await new Promise(resolve => setImmediate(resolve)) }
+    assert.equal(progress.at(-1)?.phase, 'installing')
+    assert.equal(s.saved().previous, undefined)
+    finish()
+    await install
+    assert.deepEqual(progress.map(state => state.phase), ['preparing', 'installing', 'verifying', 'success'])
+    assert.ok(progress.every(state => state.version === '0.5.1' && state.action === 'install'))
+    assert.equal(s.manager.pending, '0.5.1')
+    assert.equal(s.saved().previous, '0.5.2')
+})
+
+test('an installer that resolves without installing the requested version reports failure without successful history', async () => {
+    for (const disk of ['0.5.2', null]) {
+        let installed: string | null = '0.5.2'
+        const progress: PackageChangeProgress[] = []
+        const s = setup({ running: '0.5.2', diskVersion: () => installed, progress: state => progress.push(state),
+            install: async () => { installed = disk } })
+        await s.manager.install('0.5.1')
+        assert.deepEqual(progress.map(state => state.phase), ['preparing', 'installing', 'verifying', 'error'])
+        assert.match(progress.at(-1)!.message!, /expected 0.5.1|package is missing/)
+        assert.equal(s.saved().previous, undefined)
+        assert.equal(s.manager.pending, null)
+    }
+})
+
+test('cancellation and installer rejection produce distinct dialog results', async () => {
+    const progress: PackageChangeProgress[] = []
+    const s = setup({ running: '0.5.2', progress: state => progress.push(state), confirm: async () => false })
+    await s.manager.install('0.5.1')
+    assert.deepEqual(progress.map(state => state.phase), ['preparing', 'cancelled'])
+    assert.equal(s.calls.length, 0)
+    progress.length = 0
+    s.env.confirm = async () => true
+    s.env.install = async () => { throw new Error('Installer unavailable') }
+    await s.manager.install('0.5.1')
+    assert.deepEqual(progress.map(state => state.phase), ['preparing', 'installing', 'error'])
+    assert.match(progress.at(-1)!.message!, /Installer unavailable/)
+    assert.equal(s.manager.pending, null)
+})
+
+test('uninstall verifies package removal before reporting success', async () => {
+    const progress: PackageChangeProgress[] = []
+    const s = setup({ diskVersion: () => '0.5.1', progress: state => progress.push(state) })
+    await s.manager.uninstall()
+    assert.deepEqual(progress.map(state => state.phase), ['preparing', 'uninstalling', 'verifying', 'error'])
+    assert.match(progress.at(-1)!.message!, /still installed/)
+    assert.equal(s.manager.removed, false)
 })

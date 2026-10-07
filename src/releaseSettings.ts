@@ -17,7 +17,7 @@ export function renderReleaseSettings (
     const status = releases.checking ? 'Checking…' : releases.checkedAt !== null ? `Last checked ${new Date(releases.checkedAt).toLocaleString()}.` : 'Not checked'
     root.innerHTML = `
         <div class="trd-release-summary">
-            <div><span class="trd-sub">Installed version</span><h4>tabby-rdp ${esc(releases.running)}</h4></div>
+            <div><span class="trd-sub">Running version</span><h4>tabby-rdp ${esc(releases.running)}</h4></div>
             <button class="btn btn-link btn-sm" data-release-notes="${esc(releases.running)}">Release notes</button>
         </div>
         ${releases.pending ? `<div class="trd-release-notice" role="status"><b>Restart required to use ${esc(releases.pending)}.</b> Close remote desktops and restart Tabby.</div>` : ''}
