@@ -62,6 +62,9 @@ upgrade. The suites accept host-provided modal drag regions and the plugin's fal
 `smoke-host` exercises both terminal frontend choices (`xterm` and `xterm-webgl`), actual local PTY input,
 Alt+arrow word-jump sequences, output through session middleware, resize, font changes, scroll position, background
 output, tab closing, plugin settings, dummy-account revision saves, RDP profile editing, and modal/plugin drag bars.
+Profile validation checks call the real host Save method with invalid address and gateway drafts, verify that the
+modal stays open and the stored profile stays unchanged, then correct the fields and save through the host button.
+Blank group defaults are also checked. These checks need no remote connection.
 It also checks the compatibility snapshot against the real terminal inputs and modal behavior.
 `smoke-rdp` covers a real decoded RDP frame, repeated console/RDP switching, keyboard focus and covered-console
 input isolation, live display resize, host-tab switching, and disconnect cleanup. Renderer exceptions, console
