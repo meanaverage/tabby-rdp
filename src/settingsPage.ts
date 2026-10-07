@@ -65,7 +65,7 @@ const STYLE = `
 .trd-settings .trd-card { display: flex; flex-direction: column; gap: 8px; padding: 12px; border-radius: 6px;
     border: 1px solid rgba(128, 128, 128, 0.25); }
 .trd-settings .trd-card .trd-card-title { font-weight: 600; display: flex; align-items: center; gap: 6px; }
-.trd-settings h4 .trd-info, .trd-settings .trd-lead .trd-info, .trd-settings .form-line .title .trd-info { margin-left: 4px; vertical-align: middle; font-size: 13px; }
+.trd-settings .trd-card-text .trd-info, .trd-settings .trd-lead .trd-info, .trd-settings .description .trd-info { margin-left: 4px; vertical-align: middle; font-size: 13px; }
 .trd-settings .trd-info { position: relative; display: inline-flex; opacity: 0.55; cursor: help; outline: none; font-weight: normal; }
 .trd-settings .trd-info:hover, .trd-settings .trd-info:focus { opacity: 1; }
 .trd-settings .trd-info::after { content: attr(data-tip); position: absolute; left: 0; top: calc(100% + 6px); z-index: 20; width: 260px;
@@ -224,18 +224,21 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
                 <h4>Getting started</h4>
                 <div class="trd-cards">
                     <div class="trd-card">
-                        <div class="trd-card-title">Over SSH ${this.info('The host is set up on the first connection: GNOME, xrdp, or Windows with OpenSSH. Nothing to install here, no ports to open.')}</div>
-                        <div class="trd-card-text">In an SSH tab, press <span data-hotkey></span> or click <b>Desktop</b>.</div>
+                        <div class="trd-card-title">Over SSH</div>
+                        <div class="trd-card-text">In an SSH tab, press <span data-hotkey></span> or click <b>Desktop</b>.
+                            ${this.info('The host is set up on the first connection: GNOME, xrdp, or Windows with OpenSSH. Nothing to install here, no ports to open.')}</div>
                         <button class="btn btn-secondary btn-sm" data-action="ssh">Open a connection…</button>
                     </div>
                     <div class="trd-card">
-                        <div class="trd-card-title">On your network ${this.info('The desktop opens in a tab of its own. For a quick connection, type user@host in the profile selector.')}</div>
-                        <div class="trd-card-text">A profile that connects straight to an RDP server.</div>
+                        <div class="trd-card-title">On your network</div>
+                        <div class="trd-card-text">A profile that connects straight to an RDP server.
+                            ${this.info('The desktop opens in a tab of its own. For a quick connection, type user@host in the profile selector.')}</div>
                         <button class="btn btn-secondary btn-sm" data-action="profile">New profile…</button>
                     </div>
                     <div class="trd-card">
-                        <div class="trd-card-title">From an .rdp file ${this.info('A file from Remote Desktop Connection, or from your admin. Its address, user name and domain make the profile; the password is asked for.')}</div>
-                        <div class="trd-card-text">The file becomes a profile.</div>
+                        <div class="trd-card-title">From an .rdp file</div>
+                        <div class="trd-card-text">The file becomes a profile.
+                            ${this.info('A file from Remote Desktop Connection, or from your admin. Its address, user name and domain make the profile; the password is asked for.')}</div>
                         <button class="btn btn-secondary btn-sm" data-action="import">Import an .rdp file…</button>
                     </div>
                 </div>
@@ -276,9 +279,10 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
                 <h5>Clipboard</h5>
                 <div class="form-line">
                     <div class="header">
-                        <div class="title">Clipboard sharing ${this.info('Sharing can expose passwords and let the remote replace your local clipboard. Only the focused desktop receives your clipboard. Off disables text, images and clipboard file transfers. Restricting sharing also withdraws previously offered files.')}</div>
+                        <div class="title">Clipboard sharing</div>
                         <div class="description">Share text, images and files. Desktops can override this setting. Applies on reconnect;
-                            restricting sharing stops local sends immediately.</div>
+                            restricting sharing stops local sends immediately.
+                            ${this.info('Sharing can expose passwords and let the remote replace your local clipboard. Only the focused desktop receives your clipboard. Off disables text, images and clipboard file transfers. Restricting sharing also withdraws previously offered files.')}</div>
                     </div>
                     <select class="form-control" data-setting="clipboard">
                         ${Object.entries(CLIPBOARD_LABELS).map(([mode, label]) => `<option value="${mode}">${esc(label)}</option>`).join('')}
@@ -369,8 +373,9 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
             </section>
 
             <section data-topic="keyboard">
-                <h4>Shortcuts ${this.info('These work while the desktop has the keyboard. Tabby\'s other shortcuts go to the desktop then, except switching tabs and full screen.')}</h4>
-                <div class="trd-lead">Also listed in Tabby's <a data-action="hotkeys">Hotkeys</a>.</div>
+                <h4>Shortcuts</h4>
+                <div class="trd-lead">Also listed in Tabby's <a data-action="hotkeys">Hotkeys</a>.
+                    ${this.info('These work while the desktop has the keyboard. Tabby\'s other shortcuts go to the desktop then, except switching tabs and full screen.')}</div>
                 <div class="trd-hotkeys" data-list="hotkeys"></div>
                 <h4 style="margin-top: 24px">Keys and tips</h4>
                 <table class="trd-keys"><tbody>
@@ -483,7 +488,7 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
         this.refresh()
     }
 
-    /** An ⓘ that shows `text` while hovered or focused: detail that the card itself needn't carry. */
+    /** An ⓘ placed after a description, showing `text` while hovered or focused. */
     private info (text: string): string {
         return `<span class="trd-info" tabindex="0" role="note" data-tip="${esc(text)}"><i class="fas fa-info-circle"></i></span>`
     }
