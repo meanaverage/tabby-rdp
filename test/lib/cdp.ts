@@ -37,6 +37,7 @@ export interface KeyEventParams {
  */
 export interface CdpMethods {
     'Runtime.enable': { params: Record<string, never>, result: unknown }
+    'Inspector.enable': { params: Record<string, never>, result: unknown }
     'Runtime.evaluate': {
         params: { expression: string, awaitPromise: boolean, returnByValue: boolean }
         result: { result: { value: any }, exceptionDetails?: { exception?: { description?: string } } }
@@ -82,6 +83,17 @@ export async function connect (port = Number(process.env.TRD_CDP_PORT)): Promise
     let id = 0
     const pending = new Map<number, { resolve: (value: any) => void, reject: (reason: Error) => void }>()
     const listeners = new Map<string, Set<CdpListener>>()
+    // Tabby's window gone (its renderer crashed, or the window closed): every call waiting for it fails, as every later
+    // one does, rather than wait for an answer that never comes.
+    let gone: Error | null = null
+    const lose = (why: string) => {
+        gone ??= new Error(why)
+        for (const waiting of pending.values()) {
+            waiting.reject(gone)
+        }
+        pending.clear()
+    }
+    ws.onclose = () => lose('the DevTools connection to Tabby\'s window closed (the window crashed or was closed)')
     ws.onmessage = event => {
         const message: { id?: number, method?: string, params?: any, error?: unknown, result?: any } = JSON.parse(event.data)
         if (message.id !== undefined) {
@@ -89,6 +101,8 @@ export async function connect (port = Number(process.env.TRD_CDP_PORT)): Promise
             if (!waiting) return
             pending.delete(message.id)
             message.error ? waiting.reject(new Error(JSON.stringify(message.error))) : waiting.resolve(message.result)
+        } else if (message.method === 'Inspector.targetCrashed') {
+            lose('Tabby\'s window crashed (its renderer process is gone)')
         } else if (message.method) {
             listeners.get(message.method)?.forEach(f => f(message.params))
         }
@@ -101,6 +115,9 @@ export async function connect (port = Number(process.env.TRD_CDP_PORT)): Promise
     }
     const send = <M extends keyof CdpMethods>(method: M, params?: CdpMethods[M]['params']): Promise<CdpMethods[M]['result']> =>
         new Promise((resolve, reject) => {
+            if (gone) {
+                return reject(gone)
+            }
             const n = ++id
             pending.set(n, { resolve, reject })
             ws.send(JSON.stringify({ id: n, method, params: params ?? {} }))
@@ -112,6 +129,8 @@ export async function connect (port = Number(process.env.TRD_CDP_PORT)): Promise
         }
         return result.result.value
     }
+    // Reports a crash of the window (Inspector.targetCrashed), for the calls above.
+    await send('Inspector.enable')
     return { send, evaluate, on, close: () => ws.close() }
 }
 
