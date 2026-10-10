@@ -43,6 +43,19 @@ export interface XrdpEnv {
     port: number
 }
 
+/**
+ * A desktop reached directly, not through SSH (`TRD_TEST_DIRECT_*`): any RDP server this machine can reach. Without
+ * an address, the direct suite uses the test host's GNOME Remote Desktop.
+ */
+export interface DirectEnv {
+    /** host[:port] (default port 3389); empty: the test host's GNOME desktop. */
+    address: string
+    user: string
+    password: string
+    /** What the server is (the plugin's desktop kind): gnome, xrdp or windows. */
+    kind: string
+}
+
 /** Test hosts and accounts, from the environment (see test/README.md). */
 export interface TestEnv {
     /** The Linux test host; empty skips the suites that need one. */
@@ -55,6 +68,7 @@ export interface TestEnv {
     sshDestination: string
     windows: WindowsEnv
     xrdp: XrdpEnv
+    direct: DirectEnv
 }
 
 /** Test hosts and accounts, from the environment (see test/README.md). */
@@ -82,6 +96,12 @@ export function env (): TestEnv {
             user: e.TRD_TEST_XRDP_USER || 'tabbyxrdp',
             password: e.TRD_TEST_XRDP_PASSWORD || '',
             port: Number(e.TRD_TEST_XRDP_PORT || 3390),
+        },
+        direct: {
+            address: e.TRD_TEST_DIRECT || '',
+            user: e.TRD_TEST_DIRECT_USER || '',
+            password: e.TRD_TEST_DIRECT_PASSWORD || '',
+            kind: e.TRD_TEST_DIRECT_KIND || 'gnome',
         },
     }
 }

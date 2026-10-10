@@ -14,6 +14,7 @@ npm test -- winhost               # SSH to Windows itself (TRD_TEST_WIN_OPENSSH)
 npm test -- hyperv                # Hyper-V VMs on a Windows host (TRD_TEST_HYPERV)
 npm test -- gateway               # desktops behind an RD Gateway (TRD_TEST_GATEWAY)
 npm test -- xrdp                  # the xrdp suite (TRD_TEST_XRDP_*)
+npm test -- direct                # a desktop reached directly, not through SSH (TRD_TEST_DIRECT_*, else the test host)
 npm test -- --packed e2e          # with the plugin installed as npm would install it (npm pack)
 npm test -- --keep e2e            # leave the test Tabby open afterwards
 npm test -- --port 9334 e2e       # use a Tabby already running with --remote-debugging-port=9334
@@ -75,6 +76,10 @@ input isolation, live display resize, host-tab switching, and disconnect cleanup
 errors, and caught xterm resize failures fail either suite. Neither suite recreates a complete terminal-renderer
 or protocol conformance test.
 
+`npm run test:smoke` also runs `direct`: the smoke suites reach the desktop through SSH, where TLS runs over the SSH
+channel, and a desktop reached directly takes another path in Tabby's window (a native socket under TLS). A crash on
+that path alone, in Tabby on Linux, once shipped with every smoke check passing.
+
 Without `TRD_TEST_HOST`, `smoke-rdp` explicitly reports `SKIP`; `--require-rdp` makes missing configuration a failure
 before launching Tabby. The host suite still runs without a remote. Smoke tests require the runner's credential
 guard, so `--port` only works with a test profile already prepared by this runner (`--keep`).
@@ -125,6 +130,7 @@ when Settings closes. Set `TRD_TEST_DUMP` to retain screenshots of progress, fai
 | `TRD_TEST_WIN_OPENSSH` | winhost | `user@host[:port]` of a Windows machine running OpenSSH Server, accepting the test key (`TRD_TEST_SSH_KEY` or the agent). Signs in with `TRD_TEST_WIN_USER` / `TRD_TEST_WIN_PASSWORD`. |
 | `TRD_TEST_XRDP_USER`, `TRD_TEST_XRDP_PASSWORD` | xrdp | The account on the test host that signs in to xrdp (default user `tabbyxrdp`; see `testbed/linux/xrdp.sh`). The suite is skipped without the password. |
 | `TRD_TEST_XRDP_PORT` | xrdp | xrdp's port on the test host (default 3390). |
+| `TRD_TEST_DIRECT` | direct | A desktop this machine reaches directly, as `host[:port]` (default port 3389): any RDP server. `TRD_TEST_DIRECT_USER` and `TRD_TEST_DIRECT_PASSWORD`: an account it signs in. `TRD_TEST_DIRECT_KIND`: `gnome` (default), `xrdp` or `windows`. Without it, the test host's GNOME Remote Desktop on 3389 with the plugin's account; skipped when that can't be reached from here. |
 | `TRD_TEST_NESTED` | nested | An ssh destination the test host logs in to without a password, with a GNOME desktop of its own (see `testbed/linux/nested.sh`). The suite is skipped without it. |
 | `TRD_TEST_VM_HOST`, `TRD_TEST_VM_NAME` | vms | A libvirt host (`user@host`, as this computer sees it) and a VM on it with a desktop (RDP on, or Windows). The suite is skipped without them. |
 | `TRD_TEST_VM_GNOME` | vms | Optionally, a running VM on that host with GNOME Remote Desktop, which must not be offered (the test Linux VM is one). |
@@ -167,6 +173,7 @@ system keychain doesn't answer (Linux without an unlocked keyring), the keychain
 | [reconnect](suites/reconnect.ts) | A dropped SSH connection: "Reconnect SSH", automatic reconnect (also while hidden), Stop, Try again. |
 | [desktops](suites/desktops.ts) | "Add a desktop behind…", its sign-in and keychain entry, "Edit a desktop" (keychain entry, sharpness and remembered certificate following a new address), "Remove a desktop" (using the host's own GNOME desktop as the extra one). |
 | [profiles](suites/profiles.ts) | "Remote desktop (RDP)" profiles: quick connect; a direct one in its own tab (sign-in, its self-signed certificate asked about first and then remembered, picture, no console, desktop actions, one tab per server, Disconnect and Connect, recovery); one through a saved SSH profile, opening its SSH tab with the desktop over it; .rdp files: the parser, "Import an .rdp file…" (the test host's GNOME as the RDP server). |
+| [direct](suites/direct.ts) | A desktop reached directly (a remote desktop tab), through every way its connection ends once TLS is up, Tabby's window coming through each: the first connection's certificate question, Cancel, Trust, reconnecting as remembered, a changed certificate (Cancel, then trusted), the tab closed at the question and while connecting; then it connects and draws. Any RDP server (`TRD_TEST_DIRECT`), or the test host's GNOME. |
 | [certificates](suites/certificates.ts) | The own desktop's certificate checked against the setup's; a desktop behind the host remembered on first use, a changed certificate stopped before sign-in (Cancel, "Trust the new certificate", also on an automatic reconnect), forgotten on removal. |
 | [windows](suites/windows.ts) | A Windows desktop behind an SSH host: sign-in, keychain, picture, resize, reconnect, its certificate remembered and a changed one stopped; with WinRM, typing, clipboard, sound, files, and shared folders as drives (read, written, listed, a 3 MB file hashed and copied, a read-only one refusing a write), each checked inside Windows, and H.264 with a window flipping between two colors. |
 | [winhost](suites/winhost.ts) | An SSH host that is itself Windows: detected on the first open, its own desktop signed in to with the Windows account, its certificate remembered, no setup the second time. |

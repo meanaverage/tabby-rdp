@@ -11,6 +11,11 @@ Local release candidate; not published on npm or as a GitHub release.
   with a browser smoke test and a live two-desktop isolation suite.
 
 **Fixed**
+- **Tabby's window no longer crashes when a desktop reached directly is refused after TLS** (#69): on Linux, the
+  first connection to any desktop in a remote desktop tab (a profile, quick connect, an .rdp file), whose certificate
+  is asked about before anything of the sign-in goes to it, closed the window and left Tabby running in the
+  background. A changed certificate did the same. The plugin now closes TLS before the socket under it. Desktops
+  behind an SSH host were not affected.
 - **Removing a saved gateway account keeps gateway credentials separate.** Inherited gateway uses are listed in
   the removal confirmation; affected desktops and group defaults ask for a gateway account on the next connection.
   Missing named gateway accounts also ask separately instead of silently using the destination credentials.

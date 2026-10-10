@@ -45,10 +45,12 @@ The suites run against real machines; set up a Linux test host as described in [
 then `npm test` ([test/README.md](test/README.md)). Please run the suites your change touches, and add checks for new
 behavior. `npm test -- --packed` checks the plugin as npm would install it. The suites and their harness are
 TypeScript; `npm run typecheck` checks the plugin and them (CI runs the build and `npm run typecheck:test`).
-`npm run test:unit` runs the unit tests, which need no test machine. Two of them run the plugin's proxy in Electron,
-whose TLS library is the one Tabby has (the fallback for Windows' own certificate, and why the certificate question
-says a certificate isn't valid), when `TRD_ELECTRON` names an Electron binary that may run as Node (an app's with that
-fuse on, such as Visual Studio Code's `Contents/MacOS/Code`); without it, they are skipped.
+`npm run test:unit` runs the unit tests, which need no test machine. Three of them run the plugin's proxy in Electron,
+whose TLS library is the one Tabby has (the fallback for Windows' own certificate, why the certificate question says a
+certificate isn't valid, and ending a direct connection with TLS over its socket), when `TRD_ELECTRON` names an
+Electron binary that may run as Node (an app's with that fuse on, such as Visual Studio Code's `Contents/MacOS/Code`,
+or the `electron` npm package's: `node -p "require('electron')"` in a folder where it is installed); without it, they
+are skipped. CI runs them on Linux in the Electron of the Tabby release the plugin is qualified on.
 
 For a Tabby host upgrade, run `npm run build` and then `npm run test:smoke -- --tabby <binary> --expect-xterm <major>`.
 This checks a locally packed plugin in an isolated host profile, with dummy credential storage. Add `--require-rdp`

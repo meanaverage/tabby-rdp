@@ -650,6 +650,8 @@ async function handshake (
     }
     const raw = await openUpstream(destination, signal)
     track(raw)
+    // What this handshake opened, in order, for destroyAll if it fails.
+    const opened: Duplex[] = [raw]
     try {
         if (gone()) {
             throw new Error('the client left')
@@ -679,6 +681,7 @@ async function handshake (
             ...name ? { host: name, ca: certificateAuthorities(), ...isIP(name) ? {} : { servername: name } } : {},
             ...legacyTls ? KEY_ENCIPHERMENT_ONLY_TLS : {}, ...options.tls,
         })
+        opened.push(upstream)
         track(upstream)
         // An error after the one the handshake below waits for (the stream under it failing as the socket is destroyed,
         // which a TLS socket over a stream passes on as its own) would have no listener until the relay is up, and an
@@ -693,8 +696,21 @@ async function handshake (
         })
         return { raw, upstream, x224 }
     } catch (e) {
-        raw.destroy()
+        destroyAll(opened)
         throw e
+    }
+}
+
+/**
+ * Destroys streams opened one over the other (the stream to the server, then TLS over it), the last opened first. TLS
+ * over a socket works inside the socket's own handle (Node's TLSWrap), and a socket destroyed under TLS still using it
+ * frees what TLS then reads: right after the handshake, where a certificate refused at once ends the connection, that
+ * crashed Tabby's window (a segmentation fault, in Node as in Electron). TLS destroyed first is done with the socket
+ * before the socket goes. (Over a stream of JavaScript, an SSH channel or a gateway's tunnel, the order did no harm.)
+ */
+function destroyAll (streams: Iterable<Duplex>): void {
+    for (const stream of [...streams].reverse()) {
+        stream.destroy()
     }
 }
 
@@ -793,9 +809,7 @@ export async function startRDCleanPathProxy (openUpstream: UpstreamFactory, chec
             closed = true
             leaving.abort()
             clearTimeout(deadline)
-            for (const stream of streams) {
-                stream.destroy()
-            }
+            destroyAll(streams)
             // What was handed to this connection went with it: the next starts with all the room.
             if (flowClient === ws) {
                 flowClient = null

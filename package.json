@@ -43,7 +43,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit && npm run typecheck:test",
     "typecheck:test": "tsc -p tsconfig.test.json",
     "test": "tsx test/run.ts",
-    "test:smoke": "tsx test/run.ts --packed --hidden smoke-host smoke-rdp",
+    "test:smoke": "tsx test/run.ts --packed --hidden smoke-host smoke-rdp direct",
     "test:unit": "tsx --test test/unit/*.ts",
     "build:ironrdp": "scripts/build-ironrdp.sh",
     "prepublishOnly": "npm run build"
