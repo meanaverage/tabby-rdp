@@ -39,7 +39,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
       - name: Validate release version and compatibility policy
@@ -77,14 +77,14 @@ jobs:
       # (trusted publishing 11.5.1), and Node 22's is npm 10. This npm publishes with the job's identity, so it comes
       # inside Node.js's own download, which runs everything here anyway, not as a second download from the registry;
       # and a newer one comes in by a change here, not by its release.
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 26.8.2
           registry-url: https://registry.npmjs.org
       - run: node -e "const [a, b] = process.argv[1].split('.').map(Number); if (a < 11 || (a === 11 && b < 15)) { console.error('npm ' + process.argv[1] + ' cannot stage a publish'); process.exit(1) }" "$(npm --version)"
       - name: Validate release version and compatibility policy
         run: node scripts/release-plan.mjs check
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: package
           path: ${{ runner.temp }}/package
