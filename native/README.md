@@ -60,11 +60,8 @@ each intended platform/architecture and explicitly include the reviewed native o
 (`git add -f native/bin/<platform>-<arch>`). The existing package checks require distributed files to match the
 release commit. A build on one computer supplies only that computer's platform/architecture.
 
-The PR's **Build and package** CI job uploads **tabby-rdp-test-package**, a ZIP containing the plugin's npm tarball.
-This is a plugin build for an existing Tabby installation. It does not create a release or publish to npm. The
-current PR includes macOS ARM64, Windows ARM64/x64 and Linux ARM64/x64 helpers. Intel Mac FreeRDP builds remain
-pending; IronRDP remains available there. The package version is prepared as `0.6.0-rc.1`; tagging and publication wait
-for further analysis and manual testing.
+Release packages include macOS ARM64, Windows ARM64/x64 and Linux ARM64/x64 helpers. FreeRDP helpers for Intel Macs
+are not yet available; IronRDP remains available there.
 
 ## Licensing
 
@@ -96,7 +93,7 @@ certificate/name/NLA rejection before credentials, the same CredSSP minimum vers
 
 | Client | Live Windows Server 2025 coverage |
 |---|---|
-| macOS ARM64 | Earlier packed-plugin lifecycle passed; latest helper passes protocol/security checks. Final maintainer testing remains pending. |
+| macOS ARM64 | Earlier packed-plugin lifecycle coverage; current native protocol/security checks passed. |
 | Linux ARM64, Ubuntu 24.04 | Packed plugin: pixels, input routing, larger/smaller live resize without reconnecting, fixed-resolution fitting, view only, cleanup, reconnect, switching to IronRDP, input-burst recovery and Automatic header/reconnect stability with both clients. |
 | Windows ARM64, Windows 11 | Same packed-plugin lifecycle coverage as Linux ARM64. |
 | Linux x64 / Windows x64 | Native protocol/security checks in hosted CI; live RDP qualification remains pending. |

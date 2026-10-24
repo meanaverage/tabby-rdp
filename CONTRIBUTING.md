@@ -17,8 +17,10 @@ Issues and pull requests are welcome. For anything larger than a fix, please ope
 
 ## How changes land
 
-Everything goes through a pull request against `main`, including the maintainers' own work: push a branch (or fork),
-open a pull request, and CI builds and packages the plugin, checks `vendor/` against the list its build wrote and the
+Everything goes through a pull request, including the maintainers' own work. During preview development, branch
+from the active version branch named in [AGENTS.md](AGENTS.md) and target follow-up PRs there. The version branch
+goes into `main` through a release-integration PR after maintainer approval. Push a branch (or fork), open a pull
+request, and CI builds and packages the plugin, checks `vendor/` against the list its build wrote and the
 package against the commit, runs trd-pty's tests, applies the IronRDP patch series and runs its web tests. When the
 series, the IronRDP build or `vendor/` change, CI also rebuilds `vendor/` and compares it byte for byte, and runs the
 patched crates' Rust tests ([ironrdp/README.md](ironrdp/README.md#reproducing-vendor)); those jobs don't run for every
@@ -26,13 +28,20 @@ pull request, so they can't be required checks, but a release runs them whatever
 (below). The end-to-end suites need test machines, so they aren't in CI; say in the pull request which ones you ran.
 `main` only changes by merging a pull request that CI passed. Releases are tags on `main` (below).
 
-Prepare an isolated test package from the PR before release. Keep the PR as a draft while analysis and the
-maintainer's hands-on testing remain; merge only after approval and passing checks. A version such as
+Prepare an isolated test package from the PR before release. Keep the release-integration PR as a draft while
+analysis and the maintainer's hands-on testing remain; merge into `main` only after approval and passing checks. A version such as
 `0.6.0-rc.1` can be prepared on the PR without creating a release. Do not tag or publish until the maintainer
 explicitly approves the release after testing. [AGENTS.md](AGENTS.md) records this procedure for coding agents.
+After a preview is published, advance to the next preview branch and package version before making further changes,
+including documentation-only changes. Published tags and packages remain immutable.
 
 The pull request template has a short checklist, and the issue forms ask for what helps most with a connection
 problem: versions, what kind of desktop, and the connection log (Settings › Remote Desktop › Desktops › Open desktops › Copy log).
+
+Write public descriptions for reviewers and users who have not seen the development conversation. Explain the
+problem, resulting behavior, relevant limitations and validation. Keep personal test setup, progress reports,
+approval history and agent handoffs in the development conversation. Public installation instructions must work for
+any reader. Read back saved GitHub descriptions and release notes before considering a copy update complete.
 
 ## Working on the plugin
 
@@ -149,8 +158,9 @@ node scripts/check-vendor.mjs package tabby-rdp-<version>-<stage-id>.tgz --same-
 ```
 
 The workflow creates a GitHub draft; preview versions also carry the prerelease flag and cannot become latest.
-After npm approval, verify the published version and its dist-tag, replace the draft's pending-approval paragraph
-with installation instructions, and publish the draft. Mark only a stable release as GitHub's latest release.
+After npm approval, verify the published version and its dist-tag, remove the draft's unpublished notice, check
+the installation instructions and release notes for their public audience, and publish the draft. Mark only a
+stable release as GitHub's latest release.
 
 It finds the tag by the package's version and reads the list and the files from git, never from the package; any file
 the tag doesn't have, or has otherwise (apart from the declared runtime metadata projection), or a `vendor/` file

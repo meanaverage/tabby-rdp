@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.0-rc.2 (unreleased)
+
+**Changed**
+- Clarify Preview-channel installation and client test coverage in the documentation.
+- Keep pull request descriptions and generated release notes focused on behavior, limitations and validation.
+
 ## 0.6.0-rc.1
 
 **Added**
