@@ -38,3 +38,22 @@ Read [CONTRIBUTING.md](CONTRIBUTING.md) for implementation, validation and relea
   certificate, migration and protocol rules in linked guides, retaining the behavior that matters to users.
 - Keep guides in this repository so they stay versioned and reviewed with the implementation. Update links when
   moving material. Experimental client capabilities must be distinguished from the default IronRDP client.
+
+## Public copy and audience
+
+- Write PR and issue descriptions, release notes, README text and user guides for readers who have not seen the
+  chat. Describe the problem, resulting behavior, relevant limitations and concise validation evidence.
+- Keep communications to the maintainer in chat: progress reports, approval requests or history, personal test
+  instructions, installed-build status, local VM/profile names, machine-specific paths, agent handoffs and model
+  review transcripts. Do not copy those updates into public descriptions or documentation.
+- Report validation by client OS/architecture, server/version, checks and outcome. Include genuine coverage gaps;
+  omit private setup details, agent/model names and a chronology of work or approvals.
+- Public installation instructions must work for any reader. Link to a release or downloadable artifact rather
+  than describing a build installed on the maintainer's computer. User-facing instructions such as choosing a
+  setting are appropriate; maintainer-specific instructions are not.
+- Keep release procedures in CONTRIBUTING.md and agent instructions here. Generated release drafts may state
+  that they are unpublished, but must not instruct the maintainer inside their release-note text. Remove the
+  unpublished notice before publication after verifying npm availability.
+- Before saving or publishing public copy, check the exact outgoing text for its audience. After updating a
+  GitHub description or release, fetch and read back the saved text. Rewrite stale descriptions around the final
+  change instead of appending conversational updates. Follow the same rules when creating a PR for copy changes.

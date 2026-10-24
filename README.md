@@ -138,7 +138,7 @@ In an RDP profile tab's **…** menu, choose **RDP client** to switch that profi
 | FreeRDP (experimental) | macOS ARM64; Windows and Linux ARM64/x64 native helpers | In-tab display, keyboard/mouse, scaling, resize, view only, screenshots and reconnect. Clipboard, files, audio, shared folders, Hyper-V and H.264 are pending. |
 
 Windows Server performance has **not been benchmarked**. See [FreeRDP builds, licensing and capability notes](native/README.md).
-The proposed `0.6.0-rc.1` remains a PR test build until further analysis and hands-on testing are complete.
+To try the preview, open **Settings › Remote Desktop › Updates**, choose **Preview**, and install the offered version.
 
 <a id="settings"></a>
 <a id="saved-accounts"></a>

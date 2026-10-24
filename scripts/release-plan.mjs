@@ -40,8 +40,8 @@ export function releaseNotes (plan, changelog) {
     const next = lines.findIndex((line, i) => i > start && /^## /.test(line))
     const changes = lines.slice(start + 1, next < 0 ? undefined : next).join('\n').trim()
     if (!changes) { throw new Error('The release changelog is empty.') }
-    return `**Draft: awaiting npm approval.** This version is not available until a maintainer approves the staged package and verifies it on npm. Publish this GitHub draft only after that check, replacing this paragraph with the installation instructions below.\n\n` +
-        `**After approval:** In Tabby, open Settings › Remote Desktop › Updates${plan.prerelease ? ', choose Preview,' : ''} and select ${plan.version}. For recovery, run \`npm install tabby-rdp@${plan.version}\` in Tabby's plugin folder. Restart Tabby afterwards.\n\n${changes}\n`
+    return `**Unpublished draft.** This version is not available until npm approval is complete.\n\n` +
+        `In Tabby, open Settings › Remote Desktop › Updates${plan.prerelease ? ', choose Preview,' : ''} and select ${plan.version}. For recovery, run \`npm install tabby-rdp@${plan.version}\` in Tabby's plugin folder. Restart Tabby afterwards.\n\n${changes}\n`
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

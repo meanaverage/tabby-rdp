@@ -34,6 +34,11 @@ explicitly approves the release after testing. [AGENTS.md](AGENTS.md) records th
 The pull request template has a short checklist, and the issue forms ask for what helps most with a connection
 problem: versions, what kind of desktop, and the connection log (Settings › Remote Desktop › Desktops › Open desktops › Copy log).
 
+Write public descriptions for reviewers and users who have not seen the development conversation. Explain the
+problem, resulting behavior, relevant limitations and validation. Keep personal test setup, progress reports,
+approval history and agent handoffs in the development conversation. Public installation instructions must work for
+any reader. Read back saved GitHub descriptions and release notes before considering a copy update complete.
+
 ## Working on the plugin
 
 ```sh
@@ -149,8 +154,9 @@ node scripts/check-vendor.mjs package tabby-rdp-<version>-<stage-id>.tgz --same-
 ```
 
 The workflow creates a GitHub draft; preview versions also carry the prerelease flag and cannot become latest.
-After npm approval, verify the published version and its dist-tag, replace the draft's pending-approval paragraph
-with installation instructions, and publish the draft. Mark only a stable release as GitHub's latest release.
+After npm approval, verify the published version and its dist-tag, remove the draft's unpublished notice, check
+the installation instructions and release notes for their public audience, and publish the draft. Mark only a
+stable release as GitHub's latest release.
 
 It finds the tag by the package's version and reads the list and the files from git, never from the package; any file
 the tag doesn't have, or has otherwise (apart from the declared runtime metadata projection), or a `vendor/` file
