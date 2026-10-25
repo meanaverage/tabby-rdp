@@ -37,28 +37,39 @@ jobs:
       - name: Package contents
         run: |
           node scripts/pack.mjs --dry-run 2>&1 | tee pack.txt
-          grep -q 'dist/index.js' pack.txt
-          grep -q 'vendor/iron-remote-desktop-rdp.js' pack.txt
-          grep -q 'vendor/ironrdp_web_bg.wasm' pack.txt
-          grep -q 'remote/trd-pty.py' pack.txt
+          # The plugin's package, apart from the platforms' FreeRDP packages after it ("# <name>@<version>" each).
+          awk '/^# / { plugin = ($2 ~ /^tabby-rdp@/) } plugin' pack.txt > plugin.txt
+          grep -q 'dist/index.js' plugin.txt
+          grep -q 'vendor/iron-remote-desktop-rdp.js' plugin.txt
+          grep -q 'vendor/ironrdp_web_bg.wasm' plugin.txt
+          grep -q 'remote/trd-pty.py' plugin.txt
           # No shrinkwrap: package.json pins the runtime dependencies exactly (scripts/package-metadata.mjs).
-          if grep -qE ' (npm-shrinkwrap|package-lock)\.json' pack.txt; then exit 1; fi
-          if grep -qE ' (src|test|testbed|ironrdp)/' pack.txt; then exit 1; fi
+          if grep -qE ' (npm-shrinkwrap|package-lock)\.json' plugin.txt; then exit 1; fi
+          if grep -qE ' (src|test|testbed|ironrdp)/' plugin.txt; then exit 1; fi
           # The troubleshooting page links this one packaged guide; other documentation stays out.
-          awk '/ docs\// && !/ docs\/desk\.md[[:space:]]*$/ { bad = 1 } END { exit bad }' pack.txt
-      - name: The package holds the commit's files
+          awk '/ docs\// && !/ docs\/desk\.md[[:space:]]*$/ { bad = 1 } END { exit bad }' plugin.txt
+          # No native code in the plugin's package: the FreeRDP helper is in a package per platform.
+          if grep -q ' native/bin/' plugin.txt; then exit 1; fi
+          for platform in $(node -p "require('./package.json').tabbyRdp.freerdpPlatforms.join(' ')"); do
+            awk -v name="@tabby-rdp/freerdp-$platform@" '/^# / { this = (index($2, name) == 1) } this' pack.txt | grep -qE '^ tabby-freerdp(\.exe)?$'
+          done
+      - name: The packages hold the commit's files
         # The check publish.yml makes before it stages a release, here on every change, so that nothing trips it
-        # first at a release: vendor/ as the commit's vendor/SHA256SUMS lists it, and every file outside dist/ as
-        # committed (scripts/check-vendor.mjs).
+        # first at a release: in the plugin's, vendor/ as the commit's vendor/SHA256SUMS lists it and every file outside
+        # dist/ as committed; in each FreeRDP package, native/bin/<platform> as committed (scripts/check-vendor.mjs).
         run: |
           mkdir -p "$RUNNER_TEMP/package"
           node scripts/pack.mjs --pack-destination "$RUNNER_TEMP/package"
-          node scripts/check-vendor.mjs package "$RUNNER_TEMP"/package/tabby-rdp-*.tgz HEAD
+          for package in "$RUNNER_TEMP"/package/*.tgz; do
+            node scripts/check-vendor.mjs package "$package" HEAD
+          done
       - name: Plugin build for PR testing
+        # The plugin's package and every platform's FreeRDP package: install the plugin's together with the one for
+        # the computer (CONTRIBUTING.md, "Releasing").
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: tabby-rdp-test-package
-          path: ${{ runner.temp }}/package/tabby-rdp-*.tgz
+          path: ${{ runner.temp }}/package/*.tgz
           if-no-files-found: error
           retention-days: 14
       - name: No inlined assets in vendor/

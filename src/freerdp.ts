@@ -2,7 +2,7 @@ import { spawn, ChildProcessWithoutNullStreams } from 'child_process'
 import { randomBytes, timingSafeEqual, X509Certificate } from 'crypto'
 import { existsSync } from 'fs'
 import { createServer, Socket } from 'net'
-import { dirname, join } from 'path'
+import { basename, dirname, join } from 'path'
 import { Duplex } from 'stream'
 import { rootCertificates } from 'tls'
 import { ByteQueue } from './byteQueue'
@@ -25,13 +25,37 @@ export function helperEnvironment (): NodeJS.ProcessEnv {
         OPENSSL_MODULES: dirname(nativeHelperPath()) }
 }
 
+/** The npm package with the FreeRDP helper for a platform (scripts/package-metadata.mjs names it the same). */
+export function freeRDPPackage (platform = `${process.platform}-${process.arch}`): string {
+    return `@tabby-rdp/freerdp-${platform}`
+}
+
+/**
+ * Where the helper is: `own`, a build of one's own in native/bin (npm run build:freerdp, in a checkout), or else in the
+ * platform's package, which npm installs beside the published plugin as one of its optional dependencies (a checkout
+ * has none). `resolve` finds a package's file as require.resolve does. `own` when neither has it.
+ */
+export function helperPath (platform: string, own: string, resolve: (id: string) => string): string {
+    if (existsSync(own)) { return own }
+    try {
+        return join(dirname(resolve(`${freeRDPPackage(platform)}/package.json`)), basename(own))
+    } catch {
+        return own
+    }
+}
+
 export function nativeHelperPath (): string {
-    return join(__dirname, '..', 'native', 'bin', `${process.platform}-${process.arch}`, `tabby-freerdp${process.platform === 'win32' ? '.exe' : ''}`)
+    const platform = `${process.platform}-${process.arch}`
+    return helperPath(platform, join(__dirname, '..', 'native', 'bin', platform, `tabby-freerdp${process.platform === 'win32' ? '.exe' : ''}`), require.resolve)
 }
 
 export function requireFreeRDP (): void {
     if (!hasFreeRDP()) {
-        throw new Error(`FreeRDP is not installed for ${process.platform}-${process.arch}. Build the native helper as described in native/README.md, or choose IronRDP in this desktop's settings.`)
+        const platform = `${process.platform}-${process.arch}`
+        const platforms: unknown = require('../package.json').tabbyRdp?.freerdpPlatforms
+        throw new Error(Array.isArray(platforms) && platforms.includes(platform)
+            ? `FreeRDP's helper for ${platform} is not installed. npm installs it with the plugin, as ${freeRDPPackage(platform)}: reinstall tabby-rdp, or choose IronRDP in this desktop's settings.`
+            : `FreeRDP is not available for ${platform}. Choose IronRDP in this desktop's settings.`)
     }
 }
 

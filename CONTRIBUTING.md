@@ -123,6 +123,16 @@ plugin installations. CI audits the complete development tree too; excluding too
 keeping those tools patched. Upgrade dependencies through
 a reviewed change, run `npm ci --ignore-scripts`, build, and check the packed package before releasing.
 
+**FreeRDP packages.** The plugin's package holds no native code. The FreeRDP helper is published in a package per
+platform, `@tabby-rdp/freerdp-<platform>` (`linux-x64`, say), made from the committed `native/bin/<platform>` for each
+platform in `tabbyRdp.freerdpPlatforms`. The published `package.json` names each one as an optional dependency at the
+plugin's own version, so npm installs only the one for the computer, along with the plugin. The committed `package.json`
+names none, so the lock never has to resolve packages that are published with the release (package format 4,
+`scripts/package-metadata.mjs`). `pack:release` makes all of them: the plugin's package first, then one per platform. To
+try an unreleased build, install the plugin's package together with the one for the computer, in Tabby's plugin folder:
+`npm install ./tabby-rdp-<version>.tgz ./tabby-rdp-freerdp-<platform>-<version>.tgz`. On its own, the plugin's package
+installs without the helper, since npm finds no such version on the registry; FreeRDP then reports the helper missing.
+
 **Version metadata.** Keep `package.json` and the root entries in `package-lock.json` on the same version. The
 `tabbyRdp.minimumTabbyVersion` and `tabbyRdp.rollbackFloor` fields let release controls check compatibility and data
 migration limits; raise the floor only for a migration that prevents older packages from safely using the saved
@@ -143,7 +153,10 @@ own, which reports the package's SHA-256; the job that stages it takes the packa
 can replace an artifact, the IronRDP jobs with their many builds and tests included), and checks it against the tagged
 commit: `vendor/` as the commit's `vendor/SHA256SUMS` lists it, the two runtime metadata files as deterministically
 derived from the committed sources, every other file but `dist/` as committed, and nothing more. `dist/` is as the
-package job built it: nothing in the workflow checks it against another build.
+package job built it: nothing in the workflow checks it against another build. The FreeRDP packages go the same way,
+each taken by its hash and checked against the tag (`native/bin/<platform>` as committed, the README and license, and
+`package.json` as derived from the committed one). They are staged before the plugin, and a failure leaves the plugin
+unstaged. Approve them before the plugin: until they are live, an installation of the plugin goes without its helper.
 
 That check runs in the job that publishes, which can't vouch for itself (its Node.js and npm are whatever their download
 served for 26.8.2), and a package's own `vendor/SHA256SUMS` can't vouch for the package. So before approving, check the
@@ -156,6 +169,10 @@ git worktree add /tmp/tabby-rdp-v<version> v<version>     # the tag, built here:
 (cd /tmp/tabby-rdp-v<version> && npm ci --ignore-scripts && npm run build && npm run pack:release)
 node scripts/check-vendor.mjs package tabby-rdp-<version>-<stage-id>.tgz --same-as /tmp/tabby-rdp-v<version>/tabby-rdp-<version>.tgz
 ```
+
+Check each staged FreeRDP package the same way, against the one your build of the tag made
+(`/tmp/tabby-rdp-v<version>/tabby-rdp-freerdp-<platform>-<version>.tgz`). Nothing in those is built, so the check
+against the tag alone covers every file; `--same-as` adds nothing but costs nothing either.
 
 The workflow creates a GitHub draft; preview versions also carry the prerelease flag and cannot become latest.
 After npm approval, verify the published version and its dist-tag, remove the draft's unpublished notice, check
@@ -175,6 +192,20 @@ the package on npmjs.com: the package's **Settings › Trusted publishing**, cho
 owner/user `meanaverage`, repository `tabby-rdp`, workflow filename `publish.yml` (no environment). Leave "publish
 directly" unchecked: the workflow only stages. After a first release that way, **Settings › Publishing access** can be
 set to require two-factor authentication and disallow tokens.
+
+Trusted publishing can only be set up for a package that exists, so a new FreeRDP package (a new platform, or all of
+them the first time) has its first version published by hand, before the tag is pushed. The packages belong to the npm
+organization `tabby-rdp`, which a maintainer creates once (npmjs.com, **Add Organization**, free for public packages).
+From your build of the release commit, check each new package against the commit, then publish it with two-factor
+authentication; its `package.json` makes it public. Then set up its trusted publishing as above:
+
+```sh
+node scripts/check-vendor.mjs package tabby-rdp-freerdp-<platform>-<version>.tgz HEAD
+npm publish tabby-rdp-freerdp-<platform>-<version>.tgz --tag beta    # latest for a stable version
+```
+
+A version published by hand has no provenance. When the workflow finds a FreeRDP package's version already on npm, it
+downloads it and checks it against the tag instead of staging it; if that check fails, nothing is staged.
 
 ## Actions
 

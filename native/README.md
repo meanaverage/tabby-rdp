@@ -51,23 +51,30 @@ system ABI; Windows requires the applicable Microsoft C runtime. Builds for othe
 Windows helpers require the matching Microsoft Visual C++ Redistributable, as described in the
 [requirements](../docs/compatibility.md#requirements). The plugin does not install it automatically.
 
-No native executable is downloaded or compiled when Tabby loads the plugin. An explicit FreeRDP choice without the matching
+The plugin's npm package contains no native code. Each platform's helper is published in a package of its own,
+`@tabby-rdp/freerdp-<platform>-<arch>`, which the plugin names as an optional dependency. When Tabby installs or updates
+the plugin, npm installs the package for that computer alongside it and skips the others. No native executable is
+downloaded or compiled when Tabby loads the plugin. A helper built in a checkout's `native/bin` is used ahead of an
+installed package. An explicit FreeRDP choice without the matching
 helper produces an installation message before asking for credentials. A global default can be shared across computers:
 when only that default requests an unavailable helper, the connection uses IronRDP and records the fallback in its log.
 
-`native/bin` is generated and ignored by Git, but included by `npm run pack:release` when present. For a public release, qualify
-each intended platform/architecture and explicitly include the reviewed native outputs in the release commit
-(`git add -f native/bin/<platform>-<arch>`). The existing package checks require distributed files to match the
-release commit. A build on one computer supplies only that computer's platform/architecture.
+`native/bin` is generated and ignored by Git. For a public release, qualify each intended platform/architecture,
+explicitly include the reviewed native outputs in the release commit (`git add -f native/bin/<platform>-<arch>`), and
+list the platform in `package.json`'s `tabbyRdp.freerdpPlatforms`. `npm run pack:release` then makes its package from
+that folder, and the package checks require the published files to match the release commit. A build on one computer
+supplies only that computer's platform/architecture. Publishing a new platform's package for the first time is a
+manual step; see [CONTRIBUTING.md](../CONTRIBUTING.md#releasing).
 
-Release packages include macOS ARM64, Windows ARM64/x64 and Linux ARM64/x64 helpers. FreeRDP helpers for Intel Macs
+Helper packages exist for macOS ARM64, Windows ARM64/x64 and Linux ARM64/x64. FreeRDP helpers for Intel Macs
 are not yet available; IronRDP remains available there.
 
 ## Licensing
 
 The Tabby helper is MIT licensed. FreeRDP and WinPR are Apache-2.0; OpenSSL 3 is Apache-2.0. Their full licenses and
 FreeRDP's bundled attribution notice accompany the generated binaries. WinPR's built-in Unicode converter also
-carries its own full `Unicode-NOTICE`. Keep all these notices in the published package.
+carries its own full `Unicode-NOTICE`. Keep all these notices in each platform's package, whose `package.json` declares
+`MIT AND Apache-2.0`.
 The source/build identity is recorded in `BUILD.json`. New codecs, channels or native dependencies require reviewing
 their own licensing and updating the packaging inventory; changing FreeRDP's top-level license file is insufficient.
 
@@ -79,7 +86,8 @@ npm run test:unit
 npm test -- --hidden visual-smoke
 # With TRD_TEST_DIRECT, TRD_TEST_DIRECT_USER and TRD_TEST_DIRECT_PASSWORD for a dedicated server:
 npm test -- --hidden freerdp
-# Verify the installed tarball as well, including executable permissions and relocated native libraries:
+# Verify the installed packages as well (the plugin's, with this computer's helper package), including executable
+# permissions and relocated native libraries:
 npm test -- --packed --hidden freerdp
 ```
 

@@ -62,6 +62,24 @@ test('publishing workflow keeps every staging gate, explicit tags and draft avai
 })
 
 
+test("a release stages each platform's FreeRDP package before the plugin, which names them, each from its pack", async () => {
+    const { releasePackages } = await script
+    const format4 = { ...pkg('0.6.0-rc.2'), tabbyRdp: { ...pkg('0.6.0-rc.2').tabbyRdp, packageFormat: 4, freerdpPlatforms: ['linux-x64', 'win32-arm64'] } }
+    assert.deepEqual(releasePackages(format4), [
+        { name: '@tabby-rdp/freerdp-linux-x64', file: 'tabby-rdp-freerdp-linux-x64-0.6.0-rc.2.tgz' },
+        { name: '@tabby-rdp/freerdp-win32-arm64', file: 'tabby-rdp-freerdp-win32-arm64-0.6.0-rc.2.tgz' },
+        { name: 'tabby-rdp', file: 'tabby-rdp-0.6.0-rc.2.tgz' },
+    ])
+    // Before format 4, the plugin alone.
+    assert.deepEqual(releasePackages(pkg('0.5.7')), [{ name: 'tabby-rdp', file: 'tabby-rdp-0.5.7.tgz' }])
+    const committed = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8'))
+    assert.equal(releasePackages(committed).length, committed.tabbyRdp.freerdpPlatforms.length + 1)
+    // The workflow takes exactly these by hash, checks each, and stages them in this order.
+    const workflow = readFileSync(new URL('../../.github/workflows/publish.yml', import.meta.url), 'utf8')
+    assert.equal(workflow.match(/node scripts\/release-plan\.mjs packages/g)?.length, 3)
+    assert.match(workflow, /diff "\$RUNNER_TEMP\/expected" "\$RUNNER_TEMP\/listed"/)
+})
+
 test('preview migrations may set preview floors, but no floor may exceed its package', async () => {
     const { releasePlan } = await script
     const withFloor = (version: string, floor: string) => ({ ...pkg(version), tabbyRdp: { ...pkg(version).tabbyRdp, rollbackFloor: floor } })

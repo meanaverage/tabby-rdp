@@ -1,6 +1,14 @@
 // Node built-ins only: also runs in the trusted publishing job, without installing dependencies.
 import { readFileSync } from 'node:fs'
 import { pathToFileURL } from 'node:url'
+import { freeRDPPackage, freeRDPPlatforms } from './package-metadata.mjs'
+
+/** The packages a release publishes, in the order to stage and approve them: each platform's FreeRDP package (package
+ * format 4), then the plugin, which names them. Each with the file scripts/pack.mjs packs it to (npm pack's name). */
+export function releasePackages (pkg) {
+    const names = [...pkg.tabbyRdp?.packageFormat >= 4 ? freeRDPPlatforms(pkg).map(freeRDPPackage) : [], pkg.name]
+    return names.map(name => ({ name, file: `${name.replace(/^@/, '').replace('/', '-')}-${pkg.version}.tgz` }))
+}
 
 export function releasePlan (tag, pkg) {
     const stable = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/
@@ -51,6 +59,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
         case 'github-flags': console.log(plan.githubFlags.join(' ')); break
         case 'notes': process.stdout.write(releaseNotes(plan, readFileSync('CHANGELOG.md', 'utf8'))); break
         case 'check': console.log(`${plan.version}: npm ${plan.npmTag}, GitHub draft${plan.prerelease ? ' prerelease' : ''}`); break
-        default: throw new Error('Expected check, npm-tag, github-flags, or notes')
+        case 'packages': for (const { name, file } of releasePackages(JSON.parse(readFileSync('package.json', 'utf8')))) console.log(`${name}\t${file}`); break
+        default: throw new Error('Expected check, npm-tag, github-flags, notes, or packages')
     }
 }
