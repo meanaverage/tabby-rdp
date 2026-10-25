@@ -5,6 +5,8 @@
 **Changed**
 - Clarify Preview-channel installation and client test coverage in the documentation.
 - Keep pull request descriptions and generated release notes focused on behavior, limitations and validation.
+- Build the settings page, the profile editor, the desktop form and the auto-hide header styles from shorter strings,
+  which package scanners such as Socket no longer report as possibly packed code. Nothing visible changes.
 - Publish the FreeRDP helper in a package per platform (`@tabby-rdp/freerdp-<platform>-<arch>`), which npm installs
   with the plugin for the computer it runs on. The plugin's own package no longer contains native code, and an
   installation downloads one platform's helper rather than all five (about 2 MB for the plugin, 4–6 MB for the helper,
