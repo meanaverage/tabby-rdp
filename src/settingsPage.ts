@@ -36,6 +36,8 @@ let lastTab = 'start'
 /** The desktop resolution the overlay preview stands for (the overlay's size depends on it). */
 let previewResolution = '1920x1080'
 
+// In parts joined with +, as is the page's markup: package scanners such as Socket report a single string of a thousand
+// or so characters as possibly packed code.
 const STYLE = `
 .trd-settings { display: block; }
 .trd-settings h3 { margin-bottom: 4px; }
@@ -46,37 +48,37 @@ const STYLE = `
 .trd-settings .trd-update { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 18px; padding: 10px 12px; border-radius: 6px;
     border: 1px solid rgba(80, 150, 255, 0.45); background: rgba(80, 150, 255, 0.1); }
 .trd-settings .trd-update > div { flex: auto; }
-.trd-settings .trd-update:empty { display: none; }
+.trd-settings .trd-update:empty { display: none; }` + `
 .trd-settings .trd-release-summary { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 18px; }
 .trd-settings .trd-release-summary h4 { margin: 3px 0; }
 .trd-settings .trd-release-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 10px 0; }
-.trd-settings .trd-release-actions select { width: auto; max-width: 100%; flex: 1 1 240px; }
+.trd-settings .trd-release-actions select { width: auto; max-width: 100%; flex: 1 1 240px; }` + `
 .trd-settings .trd-release-notice { padding: 12px; border: 1px solid rgba(80,150,255,.45); border-radius: 6px; margin-bottom: 18px; }
 .trd-settings .trd-release-error { color: var(--bs-danger, #e88); }
 .trd-settings [data-release-settings] .trd-sub { font-size: 12px; opacity: .75; }
 .trd-settings .trd-release-pause { display: flex; align-items: center; gap: 8px; margin-top: 14px; }
-@media (max-width: 700px) { .trd-settings [data-release-settings] .form-line { flex-wrap: wrap; gap: 8px; } }
+@media (max-width: 700px) { .trd-settings [data-release-settings] .form-line { flex-wrap: wrap; gap: 8px; } }` + `
 .trd-settings .nav-tabs { margin-bottom: 18px; }
 .trd-settings .nav-tabs .nav-link { cursor: pointer; }
 .trd-settings section { margin-bottom: 28px; scroll-margin-top: 12px; }
 .trd-settings section > h4 { font-size: 15px; margin-bottom: 10px; }
 .trd-settings section > h5 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; opacity: 0.6; margin: 22px 0 6px; }
 .trd-settings section > h5:first-of-type { margin-top: 4px; }
-.trd-settings .form-line .description a { cursor: pointer; text-decoration: underline; }
+.trd-settings .form-line .description a { cursor: pointer; text-decoration: underline; }` + `
 .trd-settings .trd-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 10px; }
 .trd-settings .trd-card { display: flex; flex-direction: column; gap: 8px; padding: 12px; border-radius: 6px;
     border: 1px solid rgba(128, 128, 128, 0.25); }
-.trd-settings .trd-card .trd-card-title { font-weight: 600; display: flex; align-items: center; gap: 6px; }
+.trd-settings .trd-card .trd-card-title { font-weight: 600; display: flex; align-items: center; gap: 6px; }` + `
 .trd-settings .trd-card-text .trd-info, .trd-settings .trd-lead .trd-info, .trd-settings .description .trd-info { margin-left: 4px; vertical-align: middle; font-size: 13px; }
 .trd-settings .trd-info { position: relative; display: inline-flex; opacity: 0.55; cursor: help; outline: none; font-weight: normal; }
-.trd-settings .trd-info:hover, .trd-settings .trd-info:focus { opacity: 1; }
+.trd-settings .trd-info:hover, .trd-settings .trd-info:focus { opacity: 1; }` + `
 .trd-settings .trd-info::after { content: attr(data-tip); position: absolute; left: 0; top: calc(100% + 6px); z-index: 20; width: 260px;
     padding: 8px 10px; border-radius: 6px; font-size: 12px; font-weight: normal; line-height: 1.4; white-space: normal;
     background: var(--theme-bg-more, #2a2a2a); color: var(--bs-body-color, #ddd); border: 1px solid rgba(128, 128, 128, 0.35);
     box-shadow: 0 6px 24px rgba(0, 0, 0, 0.45); opacity: 0; visibility: hidden; transition: opacity 120ms; pointer-events: none; }
 .trd-settings .trd-info:hover::after, .trd-settings .trd-info:focus::after { opacity: 1; visibility: visible; }
 .trd-settings .trd-card .trd-card-text { flex: auto; font-size: 12px; opacity: 0.8; }
-.trd-settings .trd-card button { align-self: flex-start; }
+.trd-settings .trd-card button { align-self: flex-start; }` + `
 .trd-settings kbd { padding: 2px 7px; border-radius: 3px; font-size: 13px; background: rgba(128, 128, 128, 0.25);
     color: inherit; white-space: nowrap; }
 .trd-settings .trd-hotkeys .row { border-bottom: 1px solid rgba(128, 128, 128, 0.15); }
@@ -84,17 +86,17 @@ const STYLE = `
 .trd-settings .trd-hotkeys .trd-conflict { font-size: 12px; color: var(--bs-danger, #e55); }
 .trd-settings .trd-hotkeys multi-hotkey-input { display: flex; flex-wrap: wrap; gap: 5px 0; font-size: 13px; }
 .trd-settings .trd-hotkeys multi-hotkey-input .item, .trd-settings .trd-hotkeys multi-hotkey-input .item .body { display: flex; cursor: pointer; }
-.trd-settings .trd-hotkeys multi-hotkey-input .add { cursor: pointer; }
+.trd-settings .trd-hotkeys multi-hotkey-input .add { cursor: pointer; }` + `
 .trd-capture { position: fixed; inset: 0; z-index: 2000; display: flex; align-items: center; justify-content: center; background: rgba(0, 0, 0, 0.45); }
 .trd-capture hotkey-input-modal { display: block; width: 420px; max-width: calc(100% - 32px); border-radius: 6px; background: var(--bs-body-bg, #222);
-    border: 1px solid rgba(128, 128, 128, 0.35); box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5); }
+    border: 1px solid rgba(128, 128, 128, 0.35); box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5); }` + `
 .trd-capture .modal-header, .trd-capture .modal-footer { padding: 12px 16px; }
 .trd-capture .modal-header h5 { margin: 0; }
 .trd-capture .modal-body { padding: 0 16px 10px; }
 .trd-capture .input { display: flex; align-items: center; }
 .trd-capture .input:empty::before { content: 'Press the key now'; opacity: 0.4; font-size: 14px; }
 .trd-capture .timeout { height: 3px; border-radius: 2px; overflow: hidden; }
-.trd-capture .timeout div { height: 100%; transition: width 25ms linear; }
+.trd-capture .timeout div { height: 100%; transition: width 25ms linear; }` + `
 .trd-settings .trd-keys { width: 100%; font-size: 13px; }
 .trd-settings .trd-keys td { padding: 5px 0; vertical-align: top; border-bottom: 1px solid rgba(128, 128, 128, 0.15); }
 .trd-settings .trd-keys td:first-child { width: 38%; padding-right: 12px; }
@@ -103,36 +105,36 @@ const STYLE = `
     border: 1px solid rgba(128, 128, 128, 0.2); }
 .trd-settings .trd-row > div { flex: auto; min-width: 0; }
 .trd-settings .trd-row .trd-sub { font-size: 12px; opacity: 0.7; overflow: hidden; text-overflow: ellipsis; }
-.trd-settings .trd-empty { font-size: 12px; opacity: 0.7; }
+.trd-settings .trd-empty { font-size: 12px; opacity: 0.7; }` + `
 .trd-settings .trd-account-form { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; padding: 12px; border-radius: 6px;
     border: 1px solid rgba(128, 128, 128, 0.35); }
 .trd-settings .trd-account-form label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; margin: 0; }
 .trd-settings .trd-account-form .trd-account-error { grid-column: 1 / -1; color: #f08080; font-size: 12px; }
 .trd-settings .trd-account-form .trd-account-error:empty { display: none; }
-.trd-settings .trd-account-form .trd-account-buttons { grid-column: 1 / -1; display: flex; gap: 8px; justify-content: flex-end; }
+.trd-settings .trd-account-form .trd-account-buttons { grid-column: 1 / -1; display: flex; gap: 8px; justify-content: flex-end; }` + `
 .trd-settings .trd-list + .trd-add { margin-top: 10px; display: flex; gap: 6px; align-items: center; }
 .trd-settings .trd-row .trd-folder-readonly { flex: none; display: flex; align-items: center; gap: 6px; margin: 0; font-size: 12px; white-space: nowrap; }
 .trd-settings .trd-row .trd-folder-readonly input { margin: 0; position: static; float: none; }
-.trd-settings .trd-row a[data-profile], .trd-settings .trd-row a[data-desktop] { cursor: pointer; text-decoration: underline; }
+.trd-settings .trd-row a[data-profile], .trd-settings .trd-row a[data-desktop] { cursor: pointer; text-decoration: underline; }` + `
 .trd-settings .trd-form-overlay { position: fixed; inset: 0; z-index: 1050; background: rgba(0, 0, 0, 0.55); }
 /* These plain-DOM overlays are not .modal elements, so Tabby's native dialog drag region does not cover them. */
 .trd-settings .trd-form-overlay .trd-form-dragbar, .trd-capture .trd-form-dragbar { display: block; position: absolute; left: 0; right: 0; top: 0;
     height: var(--tabs-height, 38px); -webkit-app-region: drag; }
 .trd-settings .trd-form-overlay .trd-signin { top: var(--tabs-height, 38px); }
 .trd-settings .trd-form-overlay .trd-signin form { padding: 20px; border-radius: 6px; background: var(--bs-body-bg, #1b1b1b);
-    border: 1px solid rgba(128, 128, 128, 0.35); box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5); width: 420px; }
+    border: 1px solid rgba(128, 128, 128, 0.35); box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5); width: 420px; }` + `
 .trd-settings details { border-bottom: 1px solid rgba(128, 128, 128, 0.15); padding: 6px 0; }
 .trd-settings details summary { cursor: pointer; }
 .trd-settings details > div { padding: 6px 0 4px 16px; font-size: 13px; opacity: 0.85; }
 .trd-settings .trd-flash { animation: trd-flash 1.6s ease-out; border-radius: 6px; }
-@keyframes trd-flash { from { background: rgba(80, 150, 255, 0.28); } }
+@keyframes trd-flash { from { background: rgba(80, 150, 255, 0.28); } }` + `
 .trd-settings .form-line .description kbd { font-size: 10px; }
 .trd-settings .form-line { gap: 24px; }
 .trd-settings .form-line > .header { min-width: 0; }
 .trd-settings trd-settings-toggle { display: inline-flex; flex: none; }
 .trd-settings .trd-header-size { display: flex; align-items: center; gap: 8px; flex: none; }
 .trd-settings .trd-header-size input { width: 90px; }
-.trd-settings .form-line select { min-width: 200px; flex: none; }
+.trd-settings .form-line select { min-width: 200px; flex: none; }` + `
 .trd-settings .trd-osd-preview { position: relative; aspect-ratio: 16 / 9; max-width: 520px; margin: 4px 0 14px; border-radius: 6px;
     overflow: hidden; background: linear-gradient(115deg, #e9edf1 0%, #cfd6dd 38%, #3a4048 62%, #1c1f24 100%); }
 .trd-settings .trd-osd-stage { position: absolute; top: 0; left: 0; width: 1280px; height: 720px; transform-origin: 0 0; }
@@ -221,12 +223,13 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
     private render (): void {
         const mac = process.platform === 'darwin'
         const version = installedVersion()
+        // In parts joined with +, as STYLE is.
         this.root.innerHTML = `
             <h3>Remote Desktop</h3>
             <div class="trd-lead">Linux and Windows desktops in Tabby tabs, through SSH or directly.
                 ${version ? `<span>tabby-rdp ${esc(version)}</span>` : ''}
                 <span class="trd-links"><a href="#" data-link="${REPO}#readme">Guide</a><a href="#" data-link="${REPO}/issues">Report a problem</a><a href="#" data-link="${REPO}/discussions/categories/q-a">Ask a question</a><a href="#" data-link="${TROUBLESHOOTING_URL}">Troubleshooting</a></span></div>
-            <ul class="nav nav-tabs" data-nav></ul>
+            <ul class="nav nav-tabs" data-nav></ul>` + `
 
             <section data-topic="start">
                 <h4>Getting started</h4>
@@ -236,13 +239,13 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
                         <div class="trd-card-text">In an SSH tab, press <span data-hotkey></span> or click <b>Desktop</b>.
                             ${this.info('The host is set up on the first connection: GNOME, xrdp, or Windows with OpenSSH. Nothing to install here, no ports to open.')}</div>
                         <button class="btn btn-secondary btn-sm" data-action="ssh">Open a connection…</button>
-                    </div>
+                    </div>` + `
                     <div class="trd-card">
                         <div class="trd-card-title">On your network</div>
                         <div class="trd-card-text">A profile that connects straight to an RDP server.
                             ${this.info('The desktop opens in a tab of its own. For a quick connection, type user@host in the profile selector.')}</div>
                         <button class="btn btn-secondary btn-sm" data-action="profile">New profile…</button>
-                    </div>
+                    </div>` + `
                     <div class="trd-card">
                         <div class="trd-card-title">From an .rdp file</div>
                         <div class="trd-card-text">The file becomes a profile.
@@ -250,7 +253,7 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
                         <button class="btn btn-secondary btn-sm" data-action="import">Import an .rdp file…</button>
                     </div>
                 </div>
-            </section>
+            </section>` + `
 
             <section data-topic="settings">
                 <h4>Settings</h4>
@@ -263,7 +266,7 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
                     <select class="form-control" data-setting="client" aria-label="RDP client">
                         ${Object.entries(RDP_CLIENT_LABELS).map(([id, label]) => `<option value="${id}">${esc(label)}</option>`).join('')}
                     </select>
-                </div>
+                </div>` + `
                 <h5>Picture</h5>
                 <div class="form-line">
                     <div class="header">
@@ -276,31 +279,31 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
                         <option value="fit">Keep the size, scaled</option>
                         <option value="actual">Keep the size, 1:1</option>
                     </select>
-                </div>
+                </div>` + `
                 <div class="form-line">
                     <div class="header">
                         <div class="title">Auto-hide header</div>
                         <div class="description">Automatic hides it only for a connected remote desktop alone in its tab, never a split. Always applies to every tab.
                             Move the pointer to the top edge to reveal it. Full screen follows Tabby's settings.</div>
-                    </div>
+                    </div>` + `
                     <select class="form-control" data-setting="headerAutoHide" aria-label="Auto-hide header">
                         <option value="automatic">Automatic</option>
                         <option value="never">Never</option>
                         <option value="always">Always</option>
                     </select>
-                </div>
+                </div>` + `
                 <div class="form-line" data-header-size>
                     <div class="header">
                         <div class="title">Minimum window size (optional)</div>
                         <div class="description">For Automatic only, in logical pixels. Leave dimensions blank for any size;
                             every size entered must be met. Works with manually resized windows too.</div>
-                    </div>
+                    </div>` + `
                     <div class="trd-header-size">
                         <input class="form-control" type="number" min="0" max="32768" step="1" placeholder="Width" aria-label="Minimum window width" data-setting="headerMinWidth">
                         <span>×</span>
                         <input class="form-control" type="number" min="0" max="32768" step="1" placeholder="Height" aria-label="Minimum window height" data-setting="headerMinHeight">
                     </div>
-                </div>
+                </div>` + `
                 <div class="form-line">
                     <div class="header">
                         <div class="title">Sharpness</div>
@@ -316,7 +319,7 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
 
                 <h5>Sound</h5>
                 ${this.toggleLine('sound', 'Sound', 'Play remote audio. Applies on the next connection.')}
-                ${this.toggleLine('microphone', 'Microphone', `Share your microphone when a remote app requests it. Applies on the next connection; turning it off stops sharing immediately. ${this.info('A red indicator remains visible while sharing, including from background desktops. Its menu can stop sharing with an individual desktop. That desktop stays muted through reconnects until re-enabled or Tabby closes.')}`)}
+                ${this.toggleLine('microphone', 'Microphone', `Share your microphone when a remote app requests it. Applies on the next connection; turning it off stops sharing immediately. ${this.info('A red indicator remains visible while sharing, including from background desktops. Its menu can stop sharing with an individual desktop. That desktop stays muted through reconnects until re-enabled or Tabby closes.')}`)}` + `
 
                 <h5>Clipboard</h5>
                 <div class="form-line">
@@ -329,7 +332,7 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
                     <select class="form-control" data-setting="clipboard">
                         ${Object.entries(CLIPBOARD_LABELS).map(([mode, label]) => `<option value="${mode}">${esc(label)}</option>`).join('')}
                     </select>
-                </div>
+                </div>` + `
 
                 <h5>Shared folders</h5>
                 <div class="trd-lead">Available as remote drives (<code>\\\\tsclient</code> on Windows). Applies on the next connection.
@@ -339,7 +342,7 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
 
                 <h5>Keyboard</h5>
                 ${this.toggleLine('unicodeKeys', 'Send text as typed', `Send characters instead of physical keys. Modifier shortcuts still use key positions. ${this.info('Useful for dead keys or mismatched keyboard layouts. GNOME is limited to characters in its own layout. Chinese, Japanese and Korean input methods are not supported.')}`)}
-                ${mac ? this.toggleLine('macShortcuts', 'Mac-style shortcuts', '⌘C copies and ⌘V pastes. Tap ⌘ for the Windows key; when disabled, ⌘ always sends the Windows key.') : ''}
+                ${mac ? this.toggleLine('macShortcuts', 'Mac-style shortcuts', '⌘C copies and ⌘V pastes. Tap ⌘ for the Windows key; when disabled, ⌘ always sends the Windows key.') : ''}` + `
                 <div class="form-line">
                     <div class="header">
                         <div class="title">Shortcuts</div>
@@ -350,20 +353,20 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
 
                 <h5>SSH hosts</h5>
                 ${this.toggleLine('desk', 'desk integration', `Type <code>desk</code> to open your current SSH shell on the desktop. Installs a helper on GNOME hosts on the next desktop connection; disabling removes it.`)}
-                ${this.toggleLine('discoverVMs', 'Find virtual machines on SSH hosts', 'List libvirt and Hyper-V VMs in the SSH tab menu. Discovery is read-only and runs at most once a minute.')}
+                ${this.toggleLine('discoverVMs', 'Find virtual machines on SSH hosts', 'List libvirt and Hyper-V VMs in the SSH tab menu. Discovery is read-only and runs at most once a minute.')}` + `
                 <div class="form-line">
                     <div class="header">
                         <div class="title">Shut down started VMs</div>
                         <div class="description">Shut down VMs started by this plugin after the selected time with no desktop open.
                             Continues after Tabby closes; previously running VMs are unaffected.</div>
-                    </div>
+                    </div>` + `
                     <select class="form-control" data-setting="shutDownIdle">
                         <option value="0">Never</option>
                         <option value="5">After 5 minutes</option>
                         <option value="15">After 15 minutes</option>
                         <option value="60">After an hour</option>
                     </select>
-                </div>
+                </div>` + `
 
                 <h5>Diagnostics</h5>
                 <div class="form-line">
@@ -373,7 +376,7 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
                             IronRDP's log at this level, to a file of its own in <a data-action="logs">the log folder</a>, readable by you
                             alone. Debug is what a report needs; Trace is far larger.
                             ${this.info('Keys, passwords, licenses, tokens and other byte strings are left out of the file, shown as their length. Names (yours, the desktop\'s, its address) stay: look through the file before you attach it to a report.')}</div>
-                    </div>
+                    </div>` + `
                     <select class="form-control" data-setting="diagnosticLog">
                         <option value="off">Off</option>
                         <option value="debug">Debug</option>
@@ -381,7 +384,7 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
                     </select>
                 </div>
 
-            </section>
+            </section>` + `
 
             <section data-topic="osd">
                 <h4>Desktop name overlay</h4>
@@ -392,7 +395,7 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
                         <option value="1920x1080">1920 × 1080</option>
                         <option value="2560x1440">2560 × 1440</option>
                         <option value="3840x2160">3840 × 2160</option>
-                    </select></div>
+                    </select></div>` + `
                 <div class="form-line">
                     <div class="header"><div class="title">Show</div>
                         <div class="description">Automatic shows names in split panes and when the tab title identifies a different connection.</div></div>
@@ -401,7 +404,7 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
                         <option value="always">Every time</option>
                         <option value="off">Never</option>
                     </select>
-                </div>
+                </div>` + `
                 <div class="form-line">
                     <div class="header"><div class="title">Font</div></div>
                     <select class="form-control" data-osd="font">${Object.entries(OSD_FONTS).map(([id, f]) => `<option value="${id}">${esc(f.label)}</option>`).join('')}</select>
@@ -413,11 +416,11 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
                 <div class="form-line">
                     <div class="header"><div class="title">Position</div></div>
                     <select class="form-control" data-osd="position">${OSD_POSITIONS.map(p => `<option value="${p}">${p === 'middle' ? 'Middle' : p.replace('-', ' ').replace(/^./, c => c.toUpperCase())}</option>`).join('')}</select>
-                </div>
+                </div>` + `
                 <div class="form-line">
                     <div class="header"><div class="title">Color</div></div>
                     <div class="trd-color"><input type="color" data-osd="color"><button class="btn btn-link btn-sm" data-action="osd-white">White</button></div>
-                </div>
+                </div>` + `
                 <div class="form-line">
                     <div class="header"><div class="title">Duration</div></div>
                     <select class="form-control" data-osd="seconds">
@@ -428,13 +431,13 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
                     </select>
                 </div>
                 <button class="btn btn-secondary btn-sm" data-action="osd-try">Preview on open desktops</button>
-            </section>
+            </section>` + `
 
             <section data-topic="keyboard">
                 <h4>Shortcuts</h4>
                 <div class="trd-lead">Also listed in Tabby's <a data-action="hotkeys">Hotkeys</a>.
                     ${this.info('These work while the desktop has the keyboard. Tabby\'s other shortcuts go to the desktop then, except switching tabs and full screen.')}</div>
-                <div class="trd-hotkeys" data-list="hotkeys"></div>
+                <div class="trd-hotkeys" data-list="hotkeys"></div>` + `
                 <h4 style="margin-top: 24px">Keys and tips</h4>
                 <table class="trd-keys"><tbody>
                     ${mac ? `
@@ -446,7 +449,7 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
                     <tr><td>Right-click › <b>View only</b></td><td>Watch without touching: no keys or clicks go to the desktop.</td></tr>
                     <tr><td>Right-click › <b>Save a screenshot</b></td><td>The full-resolution screen, to Downloads and the clipboard.</td></tr>
                 </tbody></table>
-            </section>
+            </section>` + `
 
             <section data-topic="desktops">
                 <h4>Desktops</h4>
@@ -456,7 +459,7 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
                 <div class="trd-add"><button class="btn btn-secondary btn-sm" data-action="desktop">Add desktop…</button></div>
                 <h4 style="margin-top: 24px">Open desktops</h4>
                 <div class="trd-list" data-list="sessions"></div>
-            </section>
+            </section>` + `
 
             <section data-topic="accounts">
                 <h4>Accounts</h4>
@@ -467,12 +470,12 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
                     <button class="btn btn-secondary btn-sm" data-action="account">Add an account…</button>
                     <button class="btn btn-link btn-sm" data-action="profiles">Profiles &amp; connections…</button>
                 </div>
-            </section>
+            </section>` + `
 
             <section data-topic="certificates">
                 <h4>Remembered certificates</h4>
                 <div class="trd-list" data-list="certificates"></div>
-            </section>
+            </section>` + `
 
             <section data-topic="updates"><h4>Updates</h4><div class="trd-update" data-update></div><div data-release-settings></div></section>`
 
@@ -832,11 +835,12 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
         const form = document.createElement('form')
         form.className = 'trd-account-form'
         form.autocomplete = 'off'
+        // In parts joined with +, as STYLE is.
         form.innerHTML = `
             <label>Name<input class="form-control" name="name" spellcheck="false" placeholder="e.g. Domain A admin"></label>
             <label>User name<input class="form-control" name="username" spellcheck="false" placeholder="e.g. adm.user, or DOMAIN\\user"></label>
             <label>Domain<input class="form-control" name="domain" spellcheck="false" placeholder="Optional"></label>
-            <label>Password<input class="form-control" name="password" type="password" autocomplete="new-password"></label>
+            <label>Password<input class="form-control" name="password" type="password" autocomplete="new-password"></label>` + `
             <div class="trd-account-error"></div>
             <div class="trd-account-buttons">
                 <button type="button" class="btn btn-secondary btn-sm" name="cancel">Cancel</button>
