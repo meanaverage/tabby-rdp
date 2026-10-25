@@ -15,4 +15,5 @@ It contains:
 - `licenses/`: the licenses of FreeRDP, WinPR and OpenSSL (Apache-2.0), FreeRDP's notice, and WinPR's Unicode
   conversion notice. The helper's own code is MIT (`LICENSE`).
 
-How the helper is built and released: [native/README.md](https://github.com/meanaverage/tabby-rdp/blob/main/native/README.md).
+How the helper is built and released: `native/README.md` in [tabby-rdp's repository](https://github.com/meanaverage/tabby-rdp),
+at [the tag](https://github.com/meanaverage/tabby-rdp/tags) of this package's version (`main` holds stable releases only).

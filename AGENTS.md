@@ -9,7 +9,7 @@ Read [CONTRIBUTING.md](CONTRIBUTING.md) for implementation, validation and relea
 - Start feature/fix branches from current `origin/0.6.0-rc2` and target their PRs at `0.6.0-rc2`, not `main`.
   Use one PR for a cohesive change and its tests, documentation and packaging. Check an existing checkout's base
   and PR destination before preparing or merging it; preserve newer fixes when moving older work.
-- After publishing a preview, create or select the next preview's branch from the released `main` commit and
+- After publishing a preview, create or select the next preview's branch from the released preview's tag and
   advance its package version before further changes. Do not accumulate new changes under a released version.
   Update the active branch/version recorded here at that transition.
 - Prepare the PR and a downloadable package for analysis and hands-on testing. Keep the PR as a draft while that
@@ -25,13 +25,16 @@ Read [CONTRIBUTING.md](CONTRIBUTING.md) for implementation, validation and relea
   `0.6.0-rc.1` in `package.json` and the root entries of `package-lock.json`; the eventual tag is `v0.6.0-rc.1`.
 - Version preparation and a PR test build do not constitute a release. Use
   `npm run pack:release -- --pack-destination <directory>` to create a test package without a tag.
-- Keep the active preview branch separate from `main` during analysis and hands-on testing. Merge that version
-  branch into `main` only after the required checks pass and the maintainer authorizes that integration.
+- `main` holds stable releases only, so that a checkout of it is always a released, stable version. A preview is
+  tagged on its version branch and is not merged into `main`. Merge a version branch into `main` only for a stable
+  release, after the required checks pass and the maintainer authorizes that integration. (`main` still holds
+  0.6.0-rc.1, merged before this rule; from 0.6.0 on, it holds stable releases only.)
 - **Do not create or push a release tag, stage or approve an npm publication, or publish a GitHub release until the
   maintainer explicitly authorizes that release after testing.** Passing CI or a version bump is not that approval.
-- Once authorized, release from the merged commit on `main`. Follow CONTRIBUTING.md: preview versions use npm's
-  `beta` dist-tag; a release tag triggers package validation and npm staging; independently verify the staged
-  package before approval and verify npm before publishing the GitHub release draft.
+- Once authorized, tag a preview on its version branch, and a stable release on the merged commit on `main`.
+  Follow CONTRIBUTING.md: preview versions use npm's `beta` dist-tag; a release tag triggers package validation and
+  npm staging; independently verify the staged package before approval and verify npm before publishing the GitHub
+  release draft.
 
 ## Documentation
 
