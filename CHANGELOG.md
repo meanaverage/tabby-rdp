@@ -5,6 +5,8 @@
 **Changed**
 - Clarify Preview-channel installation and client test coverage in the documentation.
 - Keep pull request descriptions and generated release notes focused on behavior, limitations and validation.
+- Keep `main` for stable releases: previews are tagged on their version branch, so a checkout of `main` is always a
+  released, stable version.
 - Build the settings page, the profile editor, the desktop form and the auto-hide header styles from shorter strings,
   which package scanners such as Socket no longer report as possibly packed code. Nothing visible changes.
 - Publish the FreeRDP helper in a package per platform (`@tabby-rdp/freerdp-<platform>-<arch>`), which npm installs
