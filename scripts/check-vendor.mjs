@@ -12,11 +12,13 @@
 //       a package (npm pack's, or a staged release from npm stage download) holds the revision's files and nothing
 //       else: vendor/ as the revision's vendor/SHA256SUMS lists it, runtime metadata derived from the revision, every other file but dist/ as committed. The
 //       revision is v<the package's version> unless named. dist/ is built, so it can only be compared with another
-//       build: --same-as checks every file, dist/ included, against a package made from the same revision.
+//       build: --same-as checks every file, dist/ included, against a package made from the same revision. A
+//       platform's FreeRDP package (@tabby-rdp/freerdp-<platform>, package format 4) holds native/bin/<platform> as
+//       committed, the README and license the revision has for it, and package.json as derived from the revision's.
 //
 // The unit tests (test/unit/vendor.ts) run these on made-up repositories and packages, and check the working tree
 // against the list.
-import { runtimeMetadata } from './package-metadata.mjs'
+import { freeRDPFiles, freeRDPMetadata, runtimeMetadata } from './package-metadata.mjs'
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { appendFileSync, lstatSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync } from 'node:fs'
@@ -390,8 +392,11 @@ export function checkPackage (root, tarball, { revision, sameAs } = {}) {
     const problems = []
     const files = packageFiles(tarball, problems)
     let version = null
+    let name = null
     try {
-        version = JSON.parse(files.get('package.json')?.toString('utf8') ?? 'null')?.version ?? null
+        const pkg = JSON.parse(files.get('package.json')?.toString('utf8') ?? 'null')
+        version = pkg?.version ?? null
+        name = pkg?.name ?? null
     } catch {
         problems.push(`package.json in ${tarball}: not JSON`)
     }
@@ -416,6 +421,10 @@ export function checkPackage (root, tarball, { revision, sameAs } = {}) {
     const manifestEntry = committed.get('package.json')
     const manifest = manifestEntry && plainBlob(manifestEntry)
         ? JSON.parse(blob(root, manifestEntry.oid).toString('utf8')) : null
+    const platform = typeof name === 'string' ? /^@tabby-rdp\/freerdp-(.+)$/.exec(name)?.[1] : undefined
+    if (platform !== undefined) {
+        return checkFreeRDPPackage({ files, committed, manifest, platform, blobId, problems, tarball, revision, commit, version, sameAs })
+    }
     let metadata = {}
     if (manifest?.tabbyRdp?.packageFormat !== undefined) {
         // Format 1 published a shrinkwrap projected from the committed one; later formats publish none, and their
@@ -429,6 +438,13 @@ export function checkPackage (root, tarball, { revision, sameAs } = {}) {
         }
         if (manifest.tabbyRdp.packageFormat !== 1 && files.has('npm-shrinkwrap.json')) {
             problems.push('npm-shrinkwrap.json: in the package, which publishes none (npm would install by it)')
+        }
+        if (manifest.tabbyRdp.packageFormat >= 4) {
+            for (const file of files.keys()) {
+                if (file.startsWith('native/bin/')) {
+                    problems.push(`${shown(file)}: in the plugin's package, where format 4 publishes no native code (it is in its platform's FreeRDP package)`)
+                }
+            }
         }
     }
     let built = 0
@@ -467,19 +483,66 @@ export function checkPackage (root, tarball, { revision, sameAs } = {}) {
         problems.push(`${MANIFEST}: missing from the package`)
     }
 
-    if (sameAs) {
-        const other = packageFiles(sameAs, problems)
-        for (const file of [...new Set([...files.keys(), ...other.keys()])].sort()) {
-            if (!other.has(file)) {
-                problems.push(`${shown(file)}: not in ${sameAs}`)
-            } else if (!files.has(file)) {
-                problems.push(`${shown(file)}: only in ${sameAs}`)
-            } else if (!files.get(file).equals(other.get(file))) {
-                problems.push(`${shown(file)}: not as in ${sameAs}`)
+    compareFiles(files, sameAs, problems)
+    return { problems, revision, commit, version, files: files.size, vendor: listed.length, built }
+}
+
+/** With sameAs, every file of a package against that package's. */
+function compareFiles (files, sameAs, problems) {
+    if (!sameAs) {
+        return
+    }
+    const other = packageFiles(sameAs, problems)
+    for (const file of [...new Set([...files.keys(), ...other.keys()])].sort()) {
+        if (!other.has(file)) {
+            problems.push(`${shown(file)}: not in ${sameAs}`)
+        } else if (!files.has(file)) {
+            problems.push(`${shown(file)}: only in ${sameAs}`)
+        } else if (!files.get(file).equals(other.get(file))) {
+            problems.push(`${shown(file)}: not as in ${sameAs}`)
+        }
+    }
+}
+
+/** A platform's FreeRDP package (format 4) against the revision: its package.json as derived from the revision's, the
+ * README and license the revision has for it, native/bin/<platform> as committed at the package's root, and nothing
+ * else. Nothing in it is built, so every file is checked. */
+function checkFreeRDPPackage ({ files, committed, manifest, platform, blobId, problems, tarball, revision, commit, version, sameAs }) {
+    const expected = new Map()
+    if (!(manifest?.tabbyRdp?.packageFormat >= 4)) {
+        problems.push(`${tarball}: a FreeRDP package, which ${revision} doesn't publish (package format 4 does)`)
+    } else {
+        try {
+            const folder = `native/bin/${platform}/`
+            const built = [...committed.keys()].filter(file => file.startsWith(folder)).map(file => file.slice(folder.length))
+            expected.set('package.json', freeRDPMetadata(manifest, platform))
+            for (const [file, source] of freeRDPFiles(platform, built)) {
+                expected.set(file, source)
+            }
+        } catch (e) {
+            problems.push(`${tarball}: ${e.message} (in ${revision})`)
+        }
+    }
+    for (const [file, data] of files) {
+        const source = expected.get(file)
+        if (source === undefined) {
+            if (expected.size) problems.push(`${shown(file)}: not in ${revision}'s package for ${platform}`)
+        } else if (Buffer.isBuffer(source)) {
+            if (!source.equals(data)) problems.push(`${shown(file)}: not as derived from ${revision}`)
+        } else {
+            const entry = committed.get(source)
+            if (!entry || !plainBlob(entry)) {
+                problems.push(`${shown(file)}: ${shown(source)} is not a file in ${revision}`)
+            } else if (entry.oid !== blobId(data)) {
+                problems.push(`${shown(file)}: not as ${shown(source)} in ${revision}`)
             }
         }
     }
-    return { problems, revision, commit, version, files: files.size, vendor: listed.length, built }
+    for (const file of expected.keys()) {
+        if (!files.has(file)) problems.push(`${shown(file)}: missing from the package`)
+    }
+    compareFiles(files, sameAs, problems)
+    return { problems, revision, commit, version, files: files.size, vendor: 0, built: 0, platform }
 }
 
 /** Whether ironrdp/BASE_COMMIT is in IronRDP's own history: an ancestor of its master branch. GitHub serves a commit
@@ -572,6 +635,12 @@ function main (args) {
                 console.log(`  ${problem}`)
             }
             return error(`${tarball} is not ${result.revision}'s package: ${result.problems.length} problem${result.problems.length === 1 ? '' : 's'} (above).`)
+        }
+        if (result.platform) {
+            console.log(`  the ${result.files} files of the FreeRDP package for ${result.platform}: native/bin/${result.platform}, the README and license as in ` +
+                `${result.revision}, and package.json as derived from its package.json; nothing else`)
+            if (options.sameAs) console.log(`  every file: as in ${options.sameAs}`)
+            return
         }
         console.log(`  vendor/: the ${result.vendor} files ${result.revision}'s ${MANIFEST} lists, as it records them, and nothing else`)
         console.log(`  the other ${result.files - result.vendor - result.built} files outside dist/: verified against ${result.revision} (runtime metadata projected when declared)`)

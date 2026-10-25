@@ -2231,8 +2231,9 @@ test('a global FreeRDP default preserves discovered Hyper-V consoles; explicit u
 
 test('a synced FreeRDP default falls back locally when the helper is absent; an explicit override still reports it', async t => {
     const native = require('../../dist/freerdp.js')
-    const fs = require('node:fs'), exists = fs.existsSync
-    t.mock.method(fs, 'existsSync', (path: string) => path !== native.nativeHelperPath() && exists(path))
+    // Found before existsSync stands in for the file system: finding it uses existsSync.
+    const fs = require('node:fs'), exists = fs.existsSync, helper = native.nativeHelperPath()
+    t.mock.method(fs, 'existsSync', (path: string) => path !== helper && exists(path))
     const { svc } = service({ client: 'freerdp' })
     const pane = {}, spec = specOf({ host: 'pc', kind: 'windows' }), s = session(spec, 'rdp#pc:3389')
     svc.sessions.set(pane, s)
@@ -2308,8 +2309,8 @@ test('a stale reconnect dialog cannot interrupt a replacement connection', async
 })
 
 test('Follow default uses the actual local fallback and never offers a redundant reconnect', async t => {
-    const native = require('../../dist/freerdp.js'), fs = require('node:fs'), exists = fs.existsSync
-    t.mock.method(fs, 'existsSync', (path: string) => path !== native.nativeHelperPath() && exists(path))
+    const native = require('../../dist/freerdp.js'), fs = require('node:fs'), exists = fs.existsSync, helper = native.nativeHelperPath()
+    t.mock.method(fs, 'existsSync', (path: string) => path !== helper && exists(path))
     const profile = { id: 'pc-fallback', type: 'rdp', options: { host: 'pc', client: 'ironrdp' } }
     const { svc } = service({ client: 'freerdp' }, { profiles: [profile] })
     const pane = { profile: structuredClone(profile), element: { nativeElement: {} } }

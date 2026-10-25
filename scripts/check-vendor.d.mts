@@ -25,5 +25,7 @@ export function checkPackage (root: string, tarball: string, options?: { revisio
     files: number
     vendor: number
     built: number
+    /** A platform's FreeRDP package's platform; the plugin's package has none. */
+    platform?: string
 }
 export function checkBase (root: string, options?: { upstream?: string, branch?: string }): { commit: string, upstream: boolean }

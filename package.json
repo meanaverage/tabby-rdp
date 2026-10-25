@@ -29,7 +29,6 @@
     "!dist/**/*.map",
     "vendor",
     "remote",
-    "native/bin",
     "native/README.md",
     "LICENSE",
     "CHANGELOG.md",
@@ -75,6 +74,13 @@
   "tabbyRdp": {
     "minimumTabbyVersion": "1.0.236",
     "rollbackFloor": "0.5.3",
-    "packageFormat": 3
+    "packageFormat": 4,
+    "freerdpPlatforms": [
+      "darwin-arm64",
+      "linux-arm64",
+      "linux-x64",
+      "win32-arm64",
+      "win32-x64"
+    ]
   }
 }
