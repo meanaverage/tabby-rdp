@@ -43,6 +43,7 @@ import { scanVMs, vmSpec } from './vms'
 import { SessionLog } from './sessionLog'
 import { installedVersion } from './updates'
 import { DiagnosticLevel, diagnosticLevel, DiagnosticLog, logDirectory } from './diagnosticLog'
+import { PduTrace } from './pduTrace'
 import { HeaderAutoHide, headerAutoHide, terminalInputs } from './hostCompat'
 import { UNSHOWABLE, withoutWordJoiners } from './unshowable'
 
@@ -355,6 +356,14 @@ export class DesktopSession {
     readonly log = new SessionLog()
     /** The log file written for a bug report, while the diagnostic log setting is on (see diagnosticLog.ts). */
     diagnostics: DiagnosticLog | null = null
+    /** The PDU trace of the connection, while the diagnostic log is on (see pduTrace.ts): written as traceFile. */
+    trace: PduTrace | null = null
+    traceFile: string | null = null
+    /** Where this connection went (host:port), for the trace's resource attributes. */
+    traceDestination = ''
+    /** Stops watching the canvas for the trace. */
+    traceStop: (() => void) | null = null
+    private traceSaving: Promise<void> = Promise.resolve()
     /** What the remote display was last set to. */
     remoteSize: RemoteSize | null = null
     /** A resize reconnect retains its requested layout while connecting temporarily restores the header. */
@@ -682,6 +691,10 @@ export class DesktopSession {
                 picture = copy
             }
         })
+        clean(() => this.traceStop?.())
+        this.traceStop = null
+        this.trace?.local('plugin', 'Connection.Ended')
+        clean(() => { void this.saveTrace() })
         this.connectionDisposers.splice(0).forEach(clean)
         clean(() => this.indicator?.setActive(false))
         clean(() => this.ui?.shutdown())
@@ -738,6 +751,35 @@ export class DesktopSession {
         this.proxy?.close()
         this.overlay.remove()
         void this.diagnostics?.close()
+        void this.saveTrace()
+    }
+
+    /**
+     * Writes the PDU trace next to the diagnostic log file, as OTLP/JSON (see PduTrace.toOtlp), for the user alone:
+     * at the end of each connection, when the desktop closes, and every two minutes meanwhile (see watchTrace).
+     * Writes go one after another.
+     */
+    saveTrace (): Promise<void> {
+        const trace = this.trace
+        const file = this.traceFile
+        if (!trace || !file) {
+            return Promise.resolve()
+        }
+        const versions = process.versions as Record<string, string | undefined>
+        const meta = {
+            pluginVersion: installedVersion(), desktop: this.spec.name, destination: this.traceDestination, client: this.client ?? '',
+            graphics: this.graphics, platform: `${process.platform} ${os.release()}`, electron: versions.electron,
+        }
+        this.traceSaving = this.traceSaving.then(async () => {
+            try {
+                const json = JSON.stringify(trace.toOtlp(meta))
+                await fs.promises.mkdir(path.dirname(file), { recursive: true, mode: 0o700 })
+                await fs.promises.writeFile(file, json, { mode: 0o600 })
+            } catch (error: any) {
+                this.log.push(`pdu trace: not written: ${error?.message ?? error}`)
+            }
+        })
+        return this.traceSaving
     }
 }
 
@@ -2815,6 +2857,7 @@ export class RemoteDesktopService {
 
     private applySize (session: DesktopSession, size: RemoteSize): void {
         session.log.push(`resize: ${size.width}x${size.height} @${size.scale}%`)
+        session.trace?.local('plugin', 'Resize.Requested', { width: size.width, height: size.height, scale: size.scale, mode: this.settingsFor(session).resize })
         const before = session.remoteSize
         session.remoteSize = size
         if (session.spec.kind !== 'gnome') {
@@ -3319,6 +3362,35 @@ export class RemoteDesktopService {
         // The status lines carry a stamp of their own already.
         session.log.tee = line => diagnostics.line('plugin', line.replace(/^\d{4}-\d\d-\d\dT[\d:.]+Z /, ''))
         session.log.push(`diagnostics: writing ${diagnostics.file}`)
+        // The PDU trace goes with the log, as OTLP/JSON (see pduTrace.ts and tools/pdu-trace).
+        session.trace = new PduTrace()
+        session.traceFile = diagnostics.file.replace(/\.log$/, '') + '.otlp.json'
+        session.log.push(`pdu trace: writing ${session.traceFile}`)
+    }
+
+    /**
+     * The PDU trace's view of this side while the connection lasts: the canvas (its size and each region drawn),
+     * and a save of the trace every two minutes, so that a crash keeps most of it.
+     */
+    private watchTrace (session: DesktopSession): void {
+        const trace = session.trace
+        if (!trace) {
+            return
+        }
+        // IronRDP reveals its canvas asynchronously: look again for a moment.
+        let attempts = 20
+        const watch = () => {
+            const canvas = session.state === 'connected' ? session.canvas() : null
+            if (canvas) {
+                session.traceStop?.()
+                session.traceStop = trace.watchCanvas(canvas)
+            } else if (attempts-- > 0) {
+                setTimeout(watch, 100)
+            }
+        }
+        watch()
+        const timer = setInterval(() => { void session.saveTrace() }, 120_000)
+        session.onConnectionEnd(() => clearInterval(timer))
     }
 
     /** Where the diagnostic log files go (see diagnosticLog.ts). */
@@ -3568,6 +3640,14 @@ export class RemoteDesktopService {
                             // certificate authorities (see checkTrusted). One behind an SSH host goes by that host's
                             // names, which its certificate can't be checked against: trusted on first use.
                             serverName: target.direct ? serverNameOf(asked.host) : undefined,
+                            // The PDU trace reads the relayed stream (see pduTrace.ts), while the diagnostic log is on.
+                            tap: session.trace ? (direction, data, kind) => {
+                                if (kind === 'x224') {
+                                    session.trace?.x224(direction, data)
+                                } else {
+                                    session.trace?.stream(direction, data)
+                                }
+                            } : undefined,
                         })
                     // The desktop was closed while the proxy started: closing it found no proxy, and nothing else would.
                     if (!alive()) {
@@ -4240,8 +4320,10 @@ export class RemoteDesktopService {
             const info = await native.connect({
                 host: serverNameOf(spec.id === OWN_DESKTOP ? target.hostname ?? target.label : endpoint.host),
                 username, password: endpoint.credentials.password, domain, ...size,
-                // GNOME requires the pipeline. Windows uses FreeRDP's native bitmap decoder in this first build.
-                pipeline: spec.kind === 'gnome',
+                // GNOME requires the pipeline. Windows uses FreeRDP's native bitmap decoder in this first build;
+                // TRD_FREERDP_PIPELINE=1 in Tabby's environment turns the pipeline on there too, for a diagnosis that
+                // compares the two clients on the same path (test/suites/pdu-trace.ts).
+                pipeline: spec.kind === 'gnome' || process.env.TRD_FREERDP_PIPELINE === '1',
                 autologon: spec.kind === 'xrdp',
                 open: async abort => {
                     const stream = gateway ? await this.throughGateway(target, spec, session, gateway, endpoint, abort) : await target.openTcp(endpoint.host, endpoint.port)
@@ -4283,6 +4365,8 @@ export class RemoteDesktopService {
         this.watchSize(pane, session)
         session.state = 'connected'
         session.log.push(`connected: ${size.width}x${size.height}`)
+        session.trace?.local('plugin', 'Connected', { width: size.width, height: size.height })
+        this.watchTrace(session)
         session.status('')
         this.tip(pane, session)
         this.labelOnFocus(pane, session)
@@ -4381,11 +4465,12 @@ export class RemoteDesktopService {
             const [domain, username] = /^([^\\]+)\\(.+)$/.exec(credentials.username)?.slice(1) ?? [endpoint.domain ?? spec.domain ?? '', credentials.username]
             session.status(spec.id === OWN_DESKTOP ? `Connecting to ${target.label}…`
                 : target.direct ? `Connecting to ${spec.name}…` : `Connecting to ${spec.name} via ${target.label}…`)
+            // The name the server is signed in to as: the SSH host's for its own desktop, and for its VMs' consoles.
+            session.traceDestination = `${spec.id === OWN_DESKTOP || spec.hyperv ? target.hostname ?? target.label : endpoint.host}:${endpoint.port}`
             const config = session.ui.configBuilder()
                 .withUsername(username)
                 .withPassword(credentials.password)
-                // The name the server is signed in to as: the SSH host's for its own desktop, and for its VMs' consoles.
-                .withDestination(`${spec.id === OWN_DESKTOP || spec.hyperv ? target.hostname ?? target.label : endpoint.host}:${endpoint.port}`)
+                .withDestination(session.traceDestination)
                 .withProxyAddress(session.proxy!.url)
                 .withServerDomain(domain)
                 .withAuthToken(session.proxy!.token)
@@ -4416,7 +4501,8 @@ export class RemoteDesktopService {
                 // The vendor owns surface retirement and all resource accounting; its public option bounds the
                 // browser decoders without wrapping away lifecycle notifications (see h264.ts).
                 session.h264 = createH264Decoder(rdp.WebCodecsH264Decoder, { onFailure: (reason: string) => session.log.push(`h264: failed: ${reason}`) })
-                config.withExtension(rdp.h264Decoder(session.h264))
+                // Traced: each access unit handed to the browser's decoder and what came back (see pduTrace.ts).
+                config.withExtension(rdp.h264Decoder(session.trace ? session.trace.wrapH264Decoder(session.h264) : session.h264))
             }
             // GNOME Remote Desktop requires the graphics pipeline. Windows (and xrdp) do better with bitmaps than with
             // the pipeline without H.264; with H.264, Windows streams what changes a lot (video) as video. A build

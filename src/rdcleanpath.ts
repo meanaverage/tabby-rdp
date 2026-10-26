@@ -123,6 +123,12 @@ export interface RDCleanPathOptions {
     tls?: tls.ConnectionOptions
     /** How long reaching the server, TLS included, may take before the connection is given up on (tests: less). */
     handshakeTimeoutMs?: number
+    /**
+     * Given the relayed bytes as they pass, each way (`in`: from the server, `out`: from the client), and the X.224
+     * connection request and confirm the proxy exchanged with the server itself (`x224`): the PDU trace (see
+     * pduTrace.ts). Called with the raw stream, in order; what it does with it is its own.
+     */
+    tap?: (direction: 'in' | 'out', data: Buffer, kind?: 'x224') => void
 }
 
 /** The answer to a server without Network Level Authentication where nobody decides otherwise: refused. */
@@ -872,6 +878,7 @@ export async function startRDCleanPathProxy (openUpstream: UpstreamFactory, chec
         ws.on('message', async (data: Buffer) => {
             if (stage === 'relay') {
                 stats.bytesOut += data.length
+                options.tap?.('out', data)
                 // Read from the connection: no longer waiting there, but in the proxy, for as long as the server doesn't
                 // take it (see ServerFlow).
                 if (flowClient === ws) {
@@ -975,6 +982,18 @@ export async function startRDCleanPathProxy (openUpstream: UpstreamFactory, chec
                     }
                 }
                 ws.send(encodeResponse(x224, chain, req.destination))
+                if (options.tap) {
+                    try {
+                        if (req.x224) {
+                            options.tap('out', req.x224, 'x224')
+                        }
+                        if (x224) {
+                            options.tap('in', x224, 'x224')
+                        }
+                    } catch (e: any) {
+                        log(`trace: ${e?.message ?? e}`)
+                    }
+                }
                 stage = 'relay'
                 // The room is this connection's from now on, all of it (see ServerFlow).
                 flowClient = ws
@@ -986,6 +1005,7 @@ export async function startRDCleanPathProxy (openUpstream: UpstreamFactory, chec
                 const frames = serverFraming(!!x224 && earlyUserAuthorization(x224))
                 upstream.on('data', (d: Buffer) => {
                     stats.bytesIn += d.length
+                    options.tap?.('in', d)
                     let pdus: Buffer[]
                     try {
                         pdus = frames(d)
@@ -1020,6 +1040,7 @@ export async function startRDCleanPathProxy (openUpstream: UpstreamFactory, chec
                 upstream.on('error', (e: Error) => { log(`upstream error: ${e.message}`); ws.close() })
                 for (const d of early) {
                     stats.bytesOut += d.length
+                    options.tap?.('out', d)
                     send(d)
                 }
                 log(`RDCleanPath relay up to ${req.destination}`)

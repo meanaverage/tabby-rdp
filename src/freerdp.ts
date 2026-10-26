@@ -19,8 +19,11 @@ export function freeRDPAuthorities (authorities: readonly string[]): Buffer {
 
 export function helperEnvironment (): NodeJS.ProcessEnv {
     // The helper needs OS paths/locale, not the parent app's API keys or the test runner's passwords.
+    // WLOG_*: FreeRDP's own logging, for a diagnosis (see tools/pdu-trace/README.md): the helper keeps its log off
+    // unless these ask for a channel's log into a file (WLOG_APPENDER=FILE); its console stays the IPC's.
     const keys = ['PATH', 'HOME', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'SystemRoot', 'WINDIR', 'TEMP', 'TMP', 'TMPDIR',
-        'LANG', 'LC_ALL', 'TZ', 'OPENSSL_CONF']
+        'LANG', 'LC_ALL', 'TZ', 'OPENSSL_CONF', 'WLOG_FILTER', 'WLOG_APPENDER', 'WLOG_FILEAPPENDER_OUTPUT_FILE_PATH',
+        'WLOG_FILEAPPENDER_OUTPUT_FILE_NAME', 'WLOG_PREFIX']
     return { ...Object.fromEntries(keys.filter(key => process.env[key] !== undefined).map(key => [key, process.env[key]])),
         OPENSSL_MODULES: dirname(nativeHelperPath()) }
 }

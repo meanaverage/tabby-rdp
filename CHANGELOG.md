@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.6.0-rc.3
+
+**Added**
+- A PDU trace for diagnosing picture problems (issue #115): while the diagnostic log is on, each desktop also writes
+  `<log name>.otlp.json`, an OpenTelemetry trace of every RDP PDU that passed the plugin's proxy (X.224, MCS, share
+  control and data, fast-path updates, the static channels, and inside drdynvc the display control and graphics
+  pipeline commands, ZGFX-decompressed), with what this side did with them (H.264 access units handed to the browser's
+  decoder and their latency, the canvas resized and drawn, resize requests), grouped into spans: the connection, each
+  activation, each resize until a frame at the new size is acknowledged, each graphics frame until its acknowledgement,
+  each H.264 access unit. Structure and sizes only: no credentials, keystrokes, clipboard or bitmap data. A D3 viewer
+  (`tools/pdu-trace/index.html`) lays the flow out in lanes and checks each resize; `tools/pdu-trace/from-log.mjs`
+  converts an older debug log. New suites: `test/unit/pdu-trace.ts`, `test/unit/zgfx.ts`, `npm test -- pdu-trace`.
+- The same resizes with the FreeRDP client, for comparison: `TRD_TEST_CLIENT=freerdp npm test -- pdu-trace` reads
+  the graphics commands from FreeRDP's own log (`tools/pdu-trace/from-freerdp-log.mjs`), which the helper now writes
+  when `WLOG_*` is set in Tabby's environment, and `TRD_FREERDP_PIPELINE=1` puts FreeRDP on the graphics pipeline
+  for Windows desktops too (it uses bitmaps there otherwise).
+- `npm test -- fps`: frame pacing under motion (testufo.com in Edge on a Windows desktop): the server's frame rate,
+  the client's, and with IronRDP where each frame's time goes (decoder, canvas, acknowledgement) from the trace.
+
+**Fixed**
+- Tearing after a live resize with IronRDP on Windows (issue #115): stale pieces of the old picture, black bars at the
+  old edge and a garbled taskbar. The trace shows Windows repainting a resized desktop from the bitmap cache, which
+  IronRDP cleared on `ResetGraphics` (IronRDP patch 58, upstream [#2011](https://github.com/Devolutions/IronRDP/pull/2011)),
+  and a tile column that its Progressive decoder never painted because the server had moved the tiles to a new codec
+  context (patch 59, upstream [#2117](https://github.com/Devolutions/IronRDP/pull/2117)). Six resizes in three runs
+  against Windows Server 2025 now settle without any of it; the `pdu-trace` suite checks the flow and the picture.
+
 ## 0.6.0-rc.2
 
 **Changed**
