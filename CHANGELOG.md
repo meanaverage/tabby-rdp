@@ -16,6 +16,8 @@
   the graphics commands from FreeRDP's own log (`tools/pdu-trace/from-freerdp-log.mjs`), which the helper now writes
   when `WLOG_*` is set in Tabby's environment, and `TRD_FREERDP_PIPELINE=1` puts FreeRDP on the graphics pipeline
   for Windows desktops too (it uses bitmaps there otherwise).
+- `npm test -- fps`: frame pacing under motion (testufo.com in Edge on a Windows desktop): the server's frame rate,
+  the client's, and with IronRDP where each frame's time goes (decoder, canvas, acknowledgement) from the trace.
 
 **Fixed**
 - Tearing after a live resize with IronRDP on Windows (issue #115): stale pieces of the old picture, black bars at the

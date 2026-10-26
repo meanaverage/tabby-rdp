@@ -20,7 +20,7 @@ import { npmCommand } from '../scripts/npm-command.mjs'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const LINUX_SUITES = ['e2e', 'desk', 'resize', 'keyboard', 'focus', 'actions', 'clipboard', 'files', 'audio', 'microphone', 'graphics', 'reconnect', 'desktops', 'profiles', 'direct', 'certificates', 'status', 'wake', 'help', 'nested', 'vms', 'headless', 'takeover']
-const ALL_SUITES = [...LINUX_SUITES, 'freerdp', 'wasm-isolation', 'windows', 'winhost', 'hyperv', 'gateway', 'xrdp', 'rds', 'pdu-trace', 'trd-pty', 'screenshots', 'demo', 'smoke-host', 'smoke-rdp', 'smoke-updates', 'visual-host', 'visual-smoke', 'visual-linux', 'visual-windows']
+const ALL_SUITES = [...LINUX_SUITES, 'freerdp', 'wasm-isolation', 'windows', 'winhost', 'hyperv', 'gateway', 'xrdp', 'rds', 'pdu-trace', 'fps', 'trd-pty', 'screenshots', 'demo', 'smoke-host', 'smoke-rdp', 'smoke-updates', 'visual-host', 'visual-smoke', 'visual-linux', 'visual-windows']
 
 const args = process.argv.slice(2)
 const flag = (name: string) => args.includes(name)
