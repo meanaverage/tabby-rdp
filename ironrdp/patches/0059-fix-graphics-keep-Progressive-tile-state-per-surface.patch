@@ -1,5 +1,5 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
-From: meanaverage <aaronhritz@gmail.com>
+From: meanaverage <meanaverage@users.noreply.github.com>
 Date: Sun, 26 Oct 2026 02:20:00 -0700
 Subject: [PATCH] fix(graphics): keep Progressive tile state per surface, not per
  codec context
