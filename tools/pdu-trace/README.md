@@ -24,6 +24,23 @@ A diagnostic log written before the trace existed can be turned into a coarser t
 `node tools/pdu-trace/from-log.mjs <log>` (after `npm run build`): the resize requests, resets and surfaces are in a
 debug log; frames, acknowledgements and the decoder's timing are not.
 
+## FreeRDP, for comparison
+
+The FreeRDP helper's traffic doesn't pass the proxy (TLS is its own), so it can't be tapped; FreeRDP logs each
+graphics command it receives instead. Start Tabby, or the suite, with FreeRDP's logging aimed at a file (the plugin
+hands these through to the helper) and `TRD_FREERDP_PIPELINE=1` so that a Windows desktop uses the graphics pipeline
+as IronRDP does (the plugin keeps FreeRDP on bitmaps there otherwise):
+
+```sh
+export WLOG_APPENDER=FILE WLOG_FILEAPPENDER_OUTPUT_FILE_PATH=/tmp/rdp WLOG_FILEAPPENDER_OUTPUT_FILE_NAME=freerdp.log
+export WLOG_FILTER='com.freerdp.channels.rdpgfx.client:TRACE,com.freerdp.channels.disp.client:DEBUG' TRD_FREERDP_PIPELINE=1
+node tools/pdu-trace/from-freerdp-log.mjs /tmp/rdp/freerdp.log <the plugin's .otlp.json of the same connection>
+```
+
+The result is a trace in the same form (the resize requests and the canvas from the plugin's trace, the commands
+and acknowledgements from FreeRDP's log), which the viewer and the suite's checks take as they take IronRDP's. The
+suite does this itself with `TRD_TEST_CLIENT=freerdp`.
+
 ## Reading it
 
 Open `tools/pdu-trace/index.html` in a browser (it loads D3 from cdnjs) and drop the `.otlp.json` on it.

@@ -568,7 +568,17 @@ export class PduTrace {
         if (ctx) {
             const original = ctx.putImageData
             ctx.putImageData = function (this: CanvasRenderingContext2D, image: ImageData, dx: number, dy: number, ...rest: any[]) {
-                trace.add(trace.now(), 'local', 'canvas', 'Canvas.Draw', 0, { x: dx, y: dy, width: image.width, height: image.height })
+                // How much of what is drawn is black (every 97th pixel): a frame that paints nothing shows here.
+                const d = image.data
+                let black = 0
+                let n = 0
+                for (let i = 0; i < d.length; i += 4 * 97) {
+                    n++
+                    if (d[i] < 8 && d[i + 1] < 8 && d[i + 2] < 8) {
+                        black++
+                    }
+                }
+                trace.add(trace.now(), 'local', 'canvas', 'Canvas.Draw', 0, { x: dx, y: dy, width: image.width, height: image.height, black: n ? Math.round(black / n * 1000) / 1000 : 0 })
                 return (original as any).call(this, image, dx, dy, ...rest)
             } as typeof ctx.putImageData
             restore = () => { ctx.putImageData = original }
@@ -1243,9 +1253,10 @@ export class PduTrace {
         const name = this.state.dvcNames.get(channelId) ?? `dvc${channelId}`
         const attrs: Record<string, AttrValue> = { channelId, length: message.length }
         if (name === 'Microsoft::Windows::RDS::Graphics') {
+            // RDP_SEGMENTED_DATA (ZGFX) around the PDUs; IronRDP's client sends its own PDUs bare, which Windows takes.
             let decompressed: Uint8Array
             try {
-                decompressed = this.state.zgfx[dir].decompress(message)
+                decompressed = message[0] === 0xe0 || message[0] === 0xe1 ? this.state.zgfx[dir].decompress(message) : message
             } catch (error: any) {
                 this.add(t, dir, 'egfx', 'EGFX.ZgfxError', bytes, { ...attrs, error: String(error?.message ?? error) })
                 return
@@ -1265,14 +1276,15 @@ export class PduTrace {
         try {
             const type = r.u32()
             r.u32()
-            if (type === 0x02) {
+            // MS-RDPEDISP 2.2.2: DISPLAYCONTROL_PDU_TYPE_CAPS is 0x05, DISPLAYCONTROL_PDU_TYPE_MONITOR_LAYOUT 0x02.
+            if (type === 0x05) {
                 attrs.maxNumMonitors = r.u32()
                 attrs.maxMonitorAreaFactorA = r.u32()
                 attrs.maxMonitorAreaFactorB = r.u32()
                 this.add(t, dir, 'displaycontrol', 'DisplayControl.Caps', bytes, attrs)
                 return
             }
-            if (type === 0x05) {
+            if (type === 0x02) {
                 const entrySize = r.u32()
                 const count = r.u32()
                 const monitors: string[] = []
@@ -1350,23 +1362,39 @@ export class PduTrace {
                         attrs.rects = rects.join(' ') + (n > 8 ? ' …' : '')
                         break
                     }
-                    case 0x05:
+                    case 0x05: {
                         attrs.sourceSurfaceId = body.u16()
                         attrs.surfaceId = body.u16()
                         attrs.source = rect16(body)
-                        attrs.points = body.u16()
+                        const n = body.u16()
+                        attrs.points = n
+                        const at: string[] = []
+                        for (let i = 0; i < n && i < 16 && body.remaining >= 4; i++) {
+                            at.push(`${body.u16()},${body.u16()}`)
+                        }
+                        attrs.at = at.join(' ') + (n > 16 ? ' …' : '')
                         break
+                    }
                     case 0x06:
                         attrs.surfaceId = body.u16()
                         body.u64()
                         attrs.cacheSlot = body.u16()
                         attrs.source = rect16(body)
                         break
-                    case 0x07:
+                    case 0x07: {
                         attrs.cacheSlot = body.u16()
                         attrs.surfaceId = body.u16()
-                        attrs.points = body.u16()
+                        const n = body.u16()
+                        attrs.points = n
+                        // Where the tile goes (the first 48 points): a resize repaints from the cache, and where
+                        // each paste lands says which tile the server thinks covers which part of the new surface.
+                        const at: string[] = []
+                        for (let i = 0; i < n && i < 48 && body.remaining >= 4; i++) {
+                            at.push(`${body.u16()},${body.u16()}`)
+                        }
+                        attrs.at = at.join(' ') + (n > 48 ? ' …' : '')
                         break
+                    }
                     case 0x08: attrs.cacheSlot = body.u16(); break
                     case 0x09:
                         attrs.surfaceId = body.u16()

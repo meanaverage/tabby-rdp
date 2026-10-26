@@ -12,6 +12,18 @@
   each H.264 access unit. Structure and sizes only: no credentials, keystrokes, clipboard or bitmap data. A D3 viewer
   (`tools/pdu-trace/index.html`) lays the flow out in lanes and checks each resize; `tools/pdu-trace/from-log.mjs`
   converts an older debug log. New suites: `test/unit/pdu-trace.ts`, `test/unit/zgfx.ts`, `npm test -- pdu-trace`.
+- The same resizes with the FreeRDP client, for comparison: `TRD_TEST_CLIENT=freerdp npm test -- pdu-trace` reads
+  the graphics commands from FreeRDP's own log (`tools/pdu-trace/from-freerdp-log.mjs`), which the helper now writes
+  when `WLOG_*` is set in Tabby's environment, and `TRD_FREERDP_PIPELINE=1` puts FreeRDP on the graphics pipeline
+  for Windows desktops too (it uses bitmaps there otherwise).
+
+**Fixed**
+- Tearing after a live resize with IronRDP on Windows (issue #115): stale pieces of the old picture, black bars at the
+  old edge and a garbled taskbar. The trace shows Windows repainting a resized desktop from the bitmap cache, which
+  IronRDP cleared on `ResetGraphics` (IronRDP patch 58, upstream [#2011](https://github.com/Devolutions/IronRDP/pull/2011)),
+  and a tile column that its Progressive decoder never painted because the server had moved the tiles to a new codec
+  context (patch 59, upstream [#2117](https://github.com/Devolutions/IronRDP/pull/2117)). Six resizes in three runs
+  against Windows Server 2025 now settle without any of it; the `pdu-trace` suite checks the flow and the picture.
 
 ## 0.6.0-rc.2
 

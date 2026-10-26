@@ -243,9 +243,9 @@ test('static channels reassemble their chunks; drdynvc opens channels, display c
     trace.stream('in', ...svc('in', 1004, dvcCreate(7, 'Microsoft::Windows::RDS::Graphics')))
     trace.stream('out', ...svc('out', 1004, cat([0x10], [7], u32(0))))
     trace.stream('in', ...svc('in', 1004, dvcCreate(10, 'Microsoft::Windows::RDS::DisplayControl')))
-    trace.stream('in', ...svc('in', 1004, dvcData(10, cat(u32(2), u32(20), u32(16), u32(8192), u32(8192)))))
+    trace.stream('in', ...svc('in', 1004, dvcData(10, cat(u32(5), u32(20), u32(16), u32(8192), u32(8192)))))
     // The client's monitor layout (one monitor) and capability advertisement.
-    const layout = cat(u32(5), u32(8 + 8 + 40), u32(40), u32(1), u32(1), u32(0), u32(0), u32(2056), u32(1252), u32(0), u32(0), u32(0), u32(100), u32(100))
+    const layout = cat(u32(2), u32(8 + 8 + 40), u32(40), u32(1), u32(1), u32(0), u32(0), u32(2056), u32(1252), u32(0), u32(0), u32(0), u32(100), u32(100))
     trace.stream('out', ...svc('out', 1004, dvcData(10, layout)))
     const caps = gfx(0x12, cat(u16(1), u32(0xa0700), u32(4), u32(0x02)))
     trace.stream('out', ...svc('out', 1004, dvcData(7, zgfxPlain(caps))))
@@ -264,7 +264,8 @@ test('static channels reassemble their chunks; drdynvc opens channels, display c
     const half = Math.floor(wire.length / 2)
     trace.stream('in', ...svc('in', 1004, dvcDataFirst(7, wire.length, wire.subarray(0, half))))
     trace.stream('in', ...svc('in', 1004, dvcData(7, wire.subarray(half))))
-    trace.stream('out', ...svc('out', 1004, dvcData(7, zgfxPlain(gfx(0x0d, cat(u32(0), u32(1), u32(1)))))))
+    // IronRDP sends its own EGFX PDUs without the segmented wrapper; Windows takes them, and so does the trace.
+    trace.stream('out', ...svc('out', 1004, dvcData(7, gfx(0x0d, cat(u32(0), u32(1), u32(1))))))
     assert.deepEqual(names(trace).slice(before), [
         'in:cliprdr.MonitorReady',
         'in:DVC.CapabilitiesRequest', 'out:DVC.CapabilitiesResponse',
@@ -325,7 +326,7 @@ test('a resize to a larger size becomes a span that settles on the first acknowl
     tick(100)
     // The pane grows: the plugin asks, the server resets, a key frame at the new size comes and is acknowledged.
     trace.local('plugin', 'Resize.Requested', { width: 2056, height: 1252, scale: 100 })
-    const layout = cat(u32(5), u32(8 + 8 + 40), u32(40), u32(1), u32(1), u32(0), u32(0), u32(2056), u32(1252), u32(0), u32(0), u32(0), u32(100), u32(100))
+    const layout = cat(u32(2), u32(8 + 8 + 40), u32(40), u32(1), u32(1), u32(0), u32(0), u32(2056), u32(1252), u32(0), u32(0), u32(0), u32(100), u32(100))
     trace.stream('out', ...svc('out', 1004, dvcData(10, layout)))
     tick(18)
     egfxIn(gfx(0x0a, u16(0)))
@@ -384,7 +385,7 @@ test('a legacy resize goes through deactivation and reactivation, settling on th
     trace.stream('in', ...svc('in', 1004, dvcCreate(10, 'Microsoft::Windows::RDS::DisplayControl')))
     trace.stream('in', demandActive(1202, 746))
     trace.stream('in', shareData('in', 0x28, u32(0)))
-    const layout = cat(u32(5), u32(8 + 8 + 40), u32(40), u32(1), u32(1), u32(0), u32(0), u32(1600), u32(900), u32(0), u32(0), u32(0), u32(100), u32(100))
+    const layout = cat(u32(2), u32(8 + 8 + 40), u32(40), u32(1), u32(1), u32(0), u32(0), u32(1600), u32(900), u32(0), u32(0), u32(0), u32(100), u32(100))
     trace.stream('out', ...svc('out', 1004, dvcData(10, layout)))
     tick(20)
     trace.stream('in', mcsData('in', 1003, cat(u16(10), u16(0x16), u16(1002), u32(0x1234))))

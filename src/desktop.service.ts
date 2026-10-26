@@ -4320,8 +4320,10 @@ export class RemoteDesktopService {
             const info = await native.connect({
                 host: serverNameOf(spec.id === OWN_DESKTOP ? target.hostname ?? target.label : endpoint.host),
                 username, password: endpoint.credentials.password, domain, ...size,
-                // GNOME requires the pipeline. Windows uses FreeRDP's native bitmap decoder in this first build.
-                pipeline: spec.kind === 'gnome',
+                // GNOME requires the pipeline. Windows uses FreeRDP's native bitmap decoder in this first build;
+                // TRD_FREERDP_PIPELINE=1 in Tabby's environment turns the pipeline on there too, for a diagnosis that
+                // compares the two clients on the same path (test/suites/pdu-trace.ts).
+                pipeline: spec.kind === 'gnome' || process.env.TRD_FREERDP_PIPELINE === '1',
                 autologon: spec.kind === 'xrdp',
                 open: async abort => {
                     const stream = gateway ? await this.throughGateway(target, spec, session, gateway, endpoint, abort) : await target.openTcp(endpoint.host, endpoint.port)
