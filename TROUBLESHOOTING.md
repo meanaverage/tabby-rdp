@@ -38,6 +38,12 @@ After sleep or a network change the desktop reconnects by itself, with growing p
 
 **Sharpness › Retina** renders at your screen's device pixels, with the remote's scale set to match. Video (H.264) is used when the remote sends it: Windows does, GNOME only with a hardware encoder (VA-API or NVENC). **Show connection status** shows the frame rate, the round trip and how the picture comes.
 
+<a id="trace"></a>
+
+## Reporting a picture problem (tearing, a stale picture after a resize)
+
+Turn on **Settings › Remote Desktop › Settings › Diagnostics › Write a log file** (Debug), reproduce the problem, then open the log folder: next to the desktop's `.log` is a `.otlp.json`, the PDU trace: every RDP PDU of the connection with its time, what the browser's H.264 decoder did with each picture, and when the canvas was resized and drawn, grouped by resize and by frame. Open it in the viewer at `tools/pdu-trace/index.html` from the repository (drop the file on it) to see the flow of a resize and the checks on it, and attach it to a report along with the log. Neither file holds passwords, keystrokes, clipboard or picture data; both hold the desktop's name and address. See [tools/pdu-trace/README.md](tools/pdu-trace/README.md).
+
 <a id="sound"></a>
 
 ## No sound, or the microphone isn't heard

@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+**Added**
+- A PDU trace for diagnosing picture problems (issue #115): while the diagnostic log is on, each desktop also writes
+  `<log name>.otlp.json`, an OpenTelemetry trace of every RDP PDU that passed the plugin's proxy (X.224, MCS, share
+  control and data, fast-path updates, the static channels, and inside drdynvc the display control and graphics
+  pipeline commands, ZGFX-decompressed), with what this side did with them (H.264 access units handed to the browser's
+  decoder and their latency, the canvas resized and drawn, resize requests), grouped into spans: the connection, each
+  activation, each resize until a frame at the new size is acknowledged, each graphics frame until its acknowledgement,
+  each H.264 access unit. Structure and sizes only: no credentials, keystrokes, clipboard or bitmap data. A D3 viewer
+  (`tools/pdu-trace/index.html`) lays the flow out in lanes and checks each resize; `tools/pdu-trace/from-log.mjs`
+  converts an older debug log. New suites: `test/unit/pdu-trace.ts`, `test/unit/zgfx.ts`, `npm test -- pdu-trace`.
+
 ## 0.6.0-rc.2
 
 **Changed**
