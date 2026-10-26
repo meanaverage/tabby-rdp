@@ -38,6 +38,12 @@ After sleep or a network change the desktop reconnects by itself, with growing p
 
 **Sharpness › Retina** renders at your screen's device pixels, with the remote's scale set to match. Video (H.264) is used when the remote sends it: Windows does, GNOME only with a hardware encoder (VA-API or NVENC). **Show connection status** shows the frame rate, the round trip and how the picture comes.
 
+<a id="performance"></a>
+
+## The picture is slow, or the frame rate is low
+
+Start with the server. A Windows session renders at about 30 frames a second by default, and no client shows more than the session renders: open [testufo.com](https://testufo.com) in a browser inside the session and read its own frame-rate readout. To raise the cap, set `DWMFRAMEINTERVAL` (DWORD, 15 for 60 fps) under `HKLM\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations` on the server and start a new session. With H.264 on the server (Group Policy "Prioritize H.264/AVC 444 graphics mode for Remote Desktop Connections") IronRDP hands each frame to the browser's hardware decoder, which takes a few milliseconds; without it the server sends ClearCodec and RemoteFX Progressive, which cost more per frame. **Show connection status** (Settings › Remote Desktop) shows the frame rate and the bytes as they arrive. Its frame rate counts server frames for IronRDP and paint batches for FreeRDP, so the two numbers aren't comparable with each other; compare each with the readout inside the session instead. If it still feels slow, the PDU trace (below) shows per frame whether the time goes to the decoder, the canvas or waiting for the server.
+
 <a id="trace"></a>
 
 ## Reporting a picture problem (tearing, a stale picture after a resize)
