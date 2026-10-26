@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.6.0-rc.3
 
 **Added**
 - A PDU trace for diagnosing picture problems (issue #115): while the diagnostic log is on, each desktop also writes
