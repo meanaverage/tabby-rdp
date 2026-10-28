@@ -12,6 +12,7 @@
 // Remote Desktop of TRD_TEST_HOST on port 3389 with the plugin's generated account, as the profiles suite uses. Skipped
 // with neither, or when that address can't be reached from here.
 import { suite, type CanvasInfo, type StatusInfo } from '../lib/harness.js'
+import { userScope } from '../../src/desktops.js'
 
 const NAME = 'Direct desktop (test)'
 
@@ -92,14 +93,17 @@ await suite('direct', async t => {
     // A desktop never seen before: its certificate forgotten (and the account, where the keychain answers), and put back
     // as it was at the end.
     const key = `rdp#${host}:${port}`
+    const credentialKeys = [key, key + userScope(user)] // Include the pre-0.5.6 key, which could otherwise be adopted.
     const trustedBefore = await ev('return JSON.stringify(H.config.store.remoteDesktop.trustedCertificates ?? [])')
     const profilesBefore = await ev('return JSON.stringify(H.config.store.profiles ?? [])')
     t.onCleanup(() => ev(`H.inZone(() => { H.config.store.remoteDesktop.trustedCertificates = ${trustedBefore}; H.config.store.profiles = ${profilesBefore}; H.config.save() })`))
     const forget = () => ev(`H.inZone(() => { const r = H.config.store.remoteDesktop; r.trustedCertificates = (r.trustedCertificates ?? []).filter(e => e?.desktop !== ${JSON.stringify(key)}); H.config.save() })`)
     await forget()
     if (await t.keychainWorks()) {
-        await t.keychain(`deletePassword('tabby-rdp', ${JSON.stringify(key)})`)
-        t.onCleanup(() => t.keychain(`deletePassword('tabby-rdp', ${JSON.stringify(key)})`))
+        for (const credentialKey of new Set(credentialKeys)) {
+            await t.keychain(`deletePassword('tabby-rdp', ${JSON.stringify(credentialKey)})`)
+            t.onCleanup(() => t.keychain(`deletePassword('tabby-rdp', ${JSON.stringify(credentialKey)})`))
+        }
     }
     const remembered = () => ev<{ sha256: string, authority?: boolean } | null>(`return (H.config.store.remoteDesktop.trustedCertificates ?? []).find(e => e?.desktop === ${JSON.stringify(key)}) ?? null`)
     const profile = { type: 'rdp', name: NAME, options: { host, port, kind, username: user, via: '' } }

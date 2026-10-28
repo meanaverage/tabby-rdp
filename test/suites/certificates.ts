@@ -60,7 +60,7 @@ await suite('certificates', async t => {
     // 1. The own desktop: the certificate the setup made, nothing remembered in the config.
     await ev('await H.inZone(() => RD.desktop.showDesktop(H.pane))')
     check('own desktop connected', !!(await t.waitFor('return H.up()', 40)), await ev('return H.attempt()'))
-    const onDisk = (await t.remote('H.pane', `openssl x509 -in ~/.local/share/tabby-rdp/tls.crt -noout -fingerprint -sha256 | sed 's/^[^=]*=//'`)).trim().toUpperCase()
+    const onDisk = (await t.remote('H.pane', `openssl x509 -in "$HOME/.local/share/tabby-rdp/hosts/$(cat /etc/machine-id)/tls.crt" -noout -fingerprint -sha256 | sed 's/^[^=]*=//'`)).trim().toUpperCase()
     const seen = await ev(`return H.attempt().map(l => /^certificate: SHA-256 (\\S+), as set up$/.exec(l)?.[1]).find(Boolean) ?? null`)
     check('own desktop: checked against the certificate the setup made', FINGERPRINT.test(onDisk) && seen === onDisk, { seen, onDisk })
     check('own desktop: nothing remembered in the config', !(await ev(`return H.trusted(${JSON.stringify(ownKey)})`)))
