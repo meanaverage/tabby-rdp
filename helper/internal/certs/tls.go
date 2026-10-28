@@ -5,8 +5,8 @@ import (
 	"net"
 )
 
-// ClientTLS is the TLS a connection to an RDP server or an RD Gateway uses: TLS 1.2 or 1.3, as Node in Tabby's window
-// offered (its minimum is TLS 1.2). Any certificate completes the handshake (RDP servers make their own): the chain is
+// ClientTLS is the base TLS configuration for an RDP server or an RD Gateway. Gateway HTTPS can use TLS 1.2 or 1.3;
+// RDPClientTLS limits RDP to TLS 1.2. Any certificate completes the handshake (RDP servers make their own): the chain is
 // checked afterwards (Verify) and the plugin decides on it before anything more is sent. A host name goes as SNI, an
 // address doesn't.
 //
@@ -29,6 +29,15 @@ func ClientTLS(serverName string) *tls.Config {
 	if serverName != "" && net.ParseIP(serverName) == nil {
 		config.ServerName = serverName
 	}
+	return config
+}
+
+// RDPClientTLS keeps RDP's TLS at 1.2 with forward-secret ECDHE suites. Windows Server 2025 RDS accepts a TLS 1.3
+// handshake but sends an internal-error alert when CredSSP starts; the same server continues through CredSSP over
+// TLS 1.2 ECDHE. RD Gateway HTTPS uses ClientTLS and may still negotiate TLS 1.3.
+func RDPClientTLS(serverName string) *tls.Config {
+	config := ClientTLS(serverName)
+	config.MaxVersion = tls.VersionTLS12
 	return config
 }
 

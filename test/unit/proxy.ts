@@ -624,7 +624,7 @@ test('an error that only says a TLS library\'s words is no reason to try again e
     assert.match(proxy.failure ?? '', /administratively prohibited/)
     await attempt(proxy, log)
     assert.ok(!log.some(l => /RSA key exchange/.test(l)), log.join('\n'))
-    assert.match(server.handshakes[0], /^TLSv1\.3/)
+    assert.match(server.handshakes[0], /^TLSv1\.2 ECDHE-/)
 })
 
 /**
@@ -811,9 +811,9 @@ test('the user name reaches no server whose certificate is refused: Windows\' ow
     assert.equal(Buffer.concat(server.received).length, 0, 'nothing after the handshake reached the server')
 })
 
-test('Windows\' own certificate (no signatures in its key usage) gets modern TLS, forward secrecy kept, over a socket or a stream', { skip: !encipherOnly }, async t => {
+test('Windows\' own certificate (no signatures in its key usage) gets TLS 1.2 ECDHE over a socket or a stream', { skip: !encipherOnly }, async t => {
     // Electron's TLS library refused such a certificate in any handshake that needs a signature, and the plugin fell
-    // back to TLS 1.2 with RSA key exchange for it. The helper's TLS doesn't refuse it: one handshake, TLS 1.3.
+    // back to TLS 1.2 with RSA key exchange for it. The helper accepts it with forward-secret ECDHE.
     const server = await tlsServer(encipherOnly!)
     t.after(() => server.close())
     for (const route of ['stream', 'direct'] as const) {
@@ -825,8 +825,8 @@ test('Windows\' own certificate (no signatures in its key usage) gets modern TLS
             await attempt(proxy, log)
             assert.ok(log.some(l => /relay up/.test(l)), `${route}: ${log.join('\n')}`)
             assert.ok(!log.some(l => /RSA key exchange/.test(l)), log.join('\n'))
-            assert.match(server.handshakes[server.handshakes.length - 1], /^TLSv1\.3 /, route)
-            assert.ok(log.some(l => /^TLS: negotiated TLS 1\.3 TLS_/.test(l)), `${route}: ${log.join('\n')}`)
+            assert.match(server.handshakes[server.handshakes.length - 1], /^TLSv1\.2 ECDHE-/, route)
+            assert.ok(log.some(l => /^TLS: negotiated TLS 1\.2 TLS_ECDHE_/.test(l)), `${route}: ${log.join('\n')}`)
             if (route === 'stream') {
                 assert.equal(server.opened() - before, 1, 'one connection')
             }

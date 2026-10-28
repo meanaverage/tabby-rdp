@@ -241,7 +241,8 @@ certificate there). The edit form is the add form, filled in (`wake` included).
   better with bitmaps than with the pipeline, and xrdp encodes H.264 only in some builds.
 - **TLS:** IronRDP's proxy and its TLS connection run in the plugin's Go network helper (`helper/`), one process per
   desktop. Go accepts Windows' default self-signed RDP certificate with key-encipherment-only usage for a modern
-  handshake, where Electron's BoringSSL refused it. The helper offers TLS 1.3 and TLS 1.2 with ECDHE suites; it does
+  handshake, where Electron's BoringSSL refused it. RDP uses TLS 1.2 ECDHE: Windows Server 2025 RDS accepted TLS 1.3
+  but sent an internal-error alert as CredSSP began in live testing. RD Gateway HTTPS can use TLS 1.3. The helper does
   not offer RSA key exchange or retry a failed handshake with weaker ciphers. A server offering only RSA key exchange
   cannot connect. The negotiated version and cipher are logged. The certificate still has to pass the plugin's
   authority or fingerprint check before CredSSP sends any sign-in data. The helper carries SSH streams through a

@@ -920,7 +920,7 @@ func (c *client) connect(ctx context.Context, req *rdp.Request) (*tls.Conn, []by
 			}
 		}
 	}
-	upstream := tls.Client(&prefixed{Conn: raw, rest: rest}, certs.ClientTLS(c.p.opts.ServerName))
+	upstream := tls.Client(&prefixed{Conn: raw, rest: rest}, certs.RDPClientTLS(c.p.opts.ServerName))
 	if !c.track(upstream) {
 		return nil, nil, errClientLeft
 	}

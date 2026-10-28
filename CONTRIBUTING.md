@@ -64,7 +64,7 @@ The suites run against real machines; set up a Linux test host as described in [
 then `npm test` ([test/README.md](test/README.md)). Please run the suites your change touches, and add checks for new
 behavior. `npm test -- --packed` checks the plugin as npm would install it. The suites and their harness are
 TypeScript; `npm run typecheck` checks the plugin and them (CI runs the build and `npm run typecheck:test`).
-`npm run test:unit` and `npm run test:helper` need no test machine. The proxy tests verify TLS 1.3 with a certificate
+`npm run test:unit` and `npm run test:helper` need no test machine. The proxy tests verify TLS 1.2 ECDHE with a certificate
 like Windows' default one. The Electron proxy test checks that Tabby's runtime starts the helper and carries direct,
 SSH and gateway-like streams when `TRD_ELECTRON` names an
 Electron binary that may run as Node (an app's with that fuse on, such as Visual Studio Code's `Contents/MacOS/Code`,
