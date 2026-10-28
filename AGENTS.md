@@ -11,7 +11,7 @@ Read [CONTRIBUTING.md](CONTRIBUTING.md) for implementation, validation and relea
   and PR destination before preparing or merging it; preserve newer fixes when moving older work.
 - After publishing a preview, create or select the next preview's branch from the released preview's tag and
   advance its package version before further changes. Do not accumulate new changes under a released version.
-  Update the active branch/version recorded here at that transition.
+  Update the active branch/version recorded here and each `target-branch` in `.github/dependabot.yml` at that transition.
 - Prepare the PR and a downloadable package for analysis and hands-on testing. Keep the PR as a draft while that
   work remains. State which client OS/architecture and remote servers were actually tested, and which remain pending.
 - A requested PR authorizes the branch, commits, push and PR needed to make the change reviewable. A direction to
