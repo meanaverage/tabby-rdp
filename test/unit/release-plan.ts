@@ -44,10 +44,13 @@ test('draft notes require an exact nonempty changelog and do not promise staged 
 
 test('publishing workflow keeps every staging gate, explicit tags and draft availability boundary', () => {
     const workflow = readFileSync(new URL('../../.github/workflows/publish.yml', import.meta.url), 'utf8')
-    assert.match(workflow, /needs: \[ironrdp, package\]/)
+    assert.match(workflow, /needs: \[ironrdp, package, helpers\]/)
     assert.match(workflow, /id-token: write/)
     assert.match(workflow, /sha256sum --strict -c -/)
     assert.match(workflow, /check-vendor\.mjs package/)
+    // The package's network helpers are another system's build of them, byte for byte (their list's hash).
+    assert.match(workflow, /check-vendor\.mjs package [^\n]*--helpers-sha256 "\$HELPERS"/)
+    assert.match(workflow, /HELPERS: \$\{\{ needs\.helpers\.outputs\.sha256 \}\}/)
     assert.match(workflow, /npm stage publish[^\n]*--tag "\$npm_tag"[^\n]*--provenance --access public --ignore-scripts/)
     const creates = workflow.split('\n').filter(line => /gh release create/.test(line))
     assert.equal(creates.length, 2)

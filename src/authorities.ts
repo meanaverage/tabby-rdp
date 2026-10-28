@@ -347,6 +347,94 @@ export function certificateDetails (
     }
 }
 
+/** A `ca` list (PEM, as TLS options take it), or Node's own list without one, as the PEM text of all of it. */
+export function authoritiesPem (authorities?: tls.SecureContextOptions['ca'] | readonly string[]): string {
+    return [authorities ?? certificateAuthorities() ?? tls.rootCertificates].flat().map(item => String(item)).join('\n')
+}
+
+/** The certificates of a `ca` list, parsed, by the list they were read from. */
+const parsedByList = new WeakMap<object, X509Certificate[]>()
+
+function parsedAuthorities (authorities: tls.SecureContextOptions['ca'] | readonly string[]): X509Certificate[] {
+    const cached = typeof authorities === 'object' && authorities ? parsedByList.get(authorities) : undefined
+    if (cached) {
+        return cached
+    }
+    const parsed: X509Certificate[] = []
+    for (const pem of authoritiesPem(authorities).matchAll(/-----BEGIN CERTIFICATE-----[^-]+-----END CERTIFICATE-----/g)) {
+        try {
+            parsed.push(new X509Certificate(pem[0]))
+        } catch { }
+    }
+    if (typeof authorities === 'object' && authorities) {
+        parsedByList.set(authorities, parsed)
+    }
+    return parsed
+}
+
+/**
+ * A server's certificate as Node's TLS read it (TLSSocket.getPeerCertificate(true)), from the chain it sent (DER, its
+ * own certificate first) and the authorities its connection was checked against, now that the network helper does
+ * the TLS: each certificate's issuer is the next one the server sent that issued it, else one of the authorities that
+ * did (as OpenSSL takes a certificate for another's issuer: by name, key identifiers and key usage), up to one that is
+ * its own issuer, which is its own issuerCertificate, as Node has it. Undefined without a certificate it can read.
+ */
+export function peerCertificate (chain: Buffer[], authorities?: tls.SecureContextOptions['ca'] | readonly string[]): tls.DetailedPeerCertificate | undefined {
+    const sent: X509Certificate[] = []
+    for (const der of chain) {
+        try {
+            sent.push(new X509Certificate(der))
+        } catch {
+            if (!sent.length) {
+                return undefined
+            }
+        }
+    }
+    if (!sent.length) {
+        return undefined
+    }
+    const legacy = (c: X509Certificate) => c.toLegacyObject() as tls.DetailedPeerCertificate
+    const anchors = parsedAuthorities(authorities ?? certificateAuthorities() ?? tls.rootCertificates)
+    const leaf = legacy(sent[0])
+    const used = new Set([sent[0]])
+    let current = leaf
+    let currentX = sent[0]
+    // A chain is a few certificates long; a server can send more, which go unused.
+    for (let depth = 0; depth < 16; depth++) {
+        if (currentX.checkIssued(currentX)) {
+            current.issuerCertificate = current
+            break
+        }
+        const next = sent.find(c => !used.has(c) && currentX.checkIssued(c)) ?? anchors.find(c => !used.has(c) && currentX.checkIssued(c))
+        if (!next) {
+            break
+        }
+        used.add(next)
+        const issuer = legacy(next)
+        current.issuerCertificate = issuer
+        current = issuer
+        currentX = next
+    }
+    return leaf
+}
+
+/**
+ * Whether a certificate is valid for `name`, and why not: from the network helper's check of its chain against the
+ * authorities (`chainOk`, and OpenSSL's reason where it doesn't lead to one), then, as Node checks a name once the
+ * chain has passed, by Node's own rule for names (tls.checkServerIdentity). Without a name, never valid, and no reason
+ * (the desktops reached through an SSH host, whose names are that host's).
+ */
+export function validity (name: string | undefined, chainOk: boolean, reason: string, peer: tls.PeerCertificate | undefined): { valid: boolean, reason: string } {
+    if (!name) {
+        return { valid: false, reason: '' }
+    }
+    if (!chainOk || !peer) {
+        return { valid: false, reason: reason || 'UNABLE_TO_VERIFY_LEAF_SIGNATURE' }
+    }
+    const wrong = tls.checkServerIdentity(name, peer) as (Error & { code?: string }) | undefined
+    return wrong ? { valid: false, reason: wrong.code ?? wrong.message } : { valid: true, reason: '' }
+}
+
 /**
  * A certificate's details in a line: "Issued to <name> (<names>) by <issuer>, valid <from> to <to>." The server chose
  * all of it, so what could reorder or hide part of it shows as U+FFFD, and each part is cut short. `unchecked`: no

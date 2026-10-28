@@ -10,6 +10,7 @@ import { createHash } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import { execFileSync } from 'node:child_process'
 import { freeRDPFiles, freeRDPMetadata, freeRDPPlatforms, runtimeMetadata } from './package-metadata.mjs'
+import { helperFile, SUMS, TARGETS } from './build-helper.mjs'
 import { npmCommand } from './npm-command.mjs'
 const npm = npmCommand()
 
@@ -28,6 +29,13 @@ const format = manifest.tabbyRdp?.packageFormat
 // The committed lock: format 1's shrinkwrap (published, projected), later formats' package-lock.json (never published).
 const lockFile = format === 1 ? 'npm-shrinkwrap.json' : 'package-lock.json'
 const metadata = runtimeMetadata(manifest, JSON.parse(fs.readFileSync(path.join(root, lockFile), 'utf8')))
+if (format >= 5) {
+    for (const file of [SUMS, ...TARGETS.map(helperFile)]) {
+        if (!fs.existsSync(path.join(root, file))) {
+            throw new Error(`${file} is missing: npm run build:helpers builds the network helpers`)
+        }
+    }
+}
 fs.mkdirSync(destination, { recursive: true })
 
 /** Copies a checkout's file into a stage. Executable helpers stay executable: writeFileSync's default mode would make

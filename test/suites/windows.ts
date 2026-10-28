@@ -114,11 +114,13 @@ await suite('windows', async t => {
     const graphics = await ev<string | null>('return RD.desktop.logOf(H.pane).findLast(l => /^graphics: /.test(l)) ?? null')
     const decodes = await ev('return !!H.session(H.pane)?.h264')
     check(decodes ? 'graphics pipeline with H.264' : 'bitmaps (this Tabby does not decode H.264)', decodes ? /with H\.264/.test(graphics ?? '') : /bitmaps/.test(graphics ?? ''), graphics)
-    // The certificate: remembered on first use, and checked after the legacy TLS retry when Windows needed one.
+    // The default Windows certificate must use forward-secret TLS, then be checked before sign-in.
     const certificate = await ev<string | null>(`return H.trusted(${JSON.stringify(key)})`)
     check('its certificate remembered on first use', /^([0-9A-F]{2}:){31}[0-9A-F]{2}$/.test(certificate ?? ''), certificate)
-    const order = await ev<number[]>('const log = RD.desktop.logOf(H.pane); return [log.findIndex(l => /using TLS 1\\.2/.test(l)), log.findIndex(l => /^certificate: /.test(l))]')
-    check(`the certificate checked${order[0] >= 0 ? ' after the TLS 1.2 retry' : ''}`, order[1] >= 0 && order[1] > order[0], order)
+    const tls = await ev<string | null>('return RD.desktop.logOf(H.pane).find(l => /^TLS: negotiated /.test(l)) ?? null')
+    check('TLS uses forward secrecy', /^TLS: negotiated (?:TLS 1\.3 |TLS 1\.2 TLS_ECDHE_)/.test(tls ?? ''), tls)
+    const order = await ev<number[]>('const log = RD.desktop.logOf(H.pane); return [log.findIndex(l => /^TLS: negotiated /.test(l)), log.findIndex(l => /^certificate: /.test(l))]')
+    check('the certificate checked after TLS', order[0] >= 0 && order[1] > order[0], order)
 
     if (winrm) {
         // 4. Typing: Start (the Windows key), "notepad", Enter; Windows runs Notepad.

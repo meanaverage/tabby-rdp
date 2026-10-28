@@ -29,7 +29,7 @@ import { RemoteDesktopHelp } from './help'
 import { configNumber, OSD_STYLE, OsdSettings, osdSettings, renderOsd } from './osd'
 import { MAX_RDP_FILE, MICROPHONE_NOTE, parseRdpFile } from './rdpFile'
 import { prepareRemoteDesktop, RemoteDesktopEndpoint } from './remoteSetup'
-import { normalizeFingerprint, RDCleanPathProxy, startRDCleanPathProxy, withoutToken } from './rdcleanpath'
+import { GatewayUpstream, normalizeFingerprint, RDCleanPathProxy, startRDCleanPathProxy, Upstream, withoutToken } from './rdcleanpath'
 import {
     adoptCredentials, askCredentials, Credentials, forgetCredentials, forgetCredentialsFor, forgetCredentialsIf, forgetCredentialsOrFail, forgetMark, forgetOnce, forgottenSince, gatewayScope, hasCredentials,
     isFor, loadCredentials, moveCredentialsFor, saveCredentials, saveCredentialsIf, Store, storeName, STYLE as SIGNIN_STYLE,
@@ -3628,10 +3628,19 @@ export class RemoteDesktopService {
                     }
                     asked.gatewayAccount = signIn
                 }
-                // The proxy outlives an attempt: it reads the sign-in of the attempt it serves.
+                // The proxy outlives an attempt: it reads the sign-in of the attempt it serves. One whose network helper
+                // stopped (it failed, or was killed) is replaced: nothing connects there any more.
+                if (session.proxy?.ended) {
+                    session.log.push('proxy: its network helper has stopped; starting another')
+                    session.proxy.close()
+                    session.proxy = null
+                }
                 if (!session.proxy && client !== 'freerdp') {
                     const proxy = await startRDCleanPathProxy(
-                        (_destination, signal) => gateway ? this.throughGateway(target, spec, session, gateway, endpoint!, signal) : target.openTcp(asked.host, asked.port),
+                        // A desktop connected to directly is reached by the proxy's own connection; one behind an SSH host
+                        // through a channel of the SSH connection, carried to the proxy.
+                        async (_destination, signal): Promise<Upstream> => gateway ? this.throughGateway(target, spec, session, gateway, endpoint!, signal)
+                            : target.direct ? { direct: { host: asked.host, port: asked.port } } : target.openTcp(asked.host, asked.port),
                         (fingerprint, valid, reason, details) => this.checkCertificate(session, fingerprint, valid, reason, details),
                         m => session.log.push(m),
                         {
@@ -3754,38 +3763,55 @@ export class RemoteDesktopService {
     }
 
     /**
-     * The proxy's stream to a desktop behind an RD Gateway (see gateway.ts): to the gateway as the SSH host (or this
-     * computer) reaches it, signed in with the gateway's own account or else the desktop's, then on to the desktop.
+     * The proxy's way to a desktop behind an RD Gateway (see GatewayUpstream): to the gateway as the SSH host (or this
+     * computer) reaches it, signed in with the gateway's own account or else the desktop's, then on to the desktop. The
+     * account goes to the proxy only once the gateway's certificate is accepted.
      */
-    private async throughGateway (target: RemoteTarget, spec: DesktopSpec, session: DesktopSession, gateway: Gateway, endpoint: Endpoint, signal?: AbortSignal): Promise<Duplex> {
+    private async throughGateway (target: RemoteTarget, spec: DesktopSpec, session: DesktopSession, gateway: Gateway, endpoint: Endpoint, signal?: AbortSignal): Promise<GatewayUpstream> {
         session.gatewayRefused = null
         const own = endpoint.gatewayAccount
         if (spec.gatewayAccount && !own) {
             throw new Error('A separate gateway sign-in is required before connecting.')
         }
+        if (signal?.aborted) {
+            throw new Error('the desktop was closed meanwhile')
+        }
         const credentials = own?.credentials ?? endpoint.credentials
         session.log.push(`gateway: ${gateway.host}:${gateway.port}, signing in with ${own ? 'its separate account' : 'the desktop\'s sign-in'}`)
+        return {
+            gateway: { host: gateway.host, port: gateway.port },
+            target: { host: endpoint.host, port: endpoint.port },
+            via: target.direct ? { direct: { host: gateway.host, port: gateway.port } } : () => target.openTcp(gateway.host, gateway.port),
+            clientName: os.hostname(),
+            checkCertificate: (fingerprint, valid, reason, details) => this.checkGatewayCertificate(session, gateway, fingerprint, valid, reason, details),
+            account: () => ({ username: credentials.username, password: credentials.password, domain: (own ? own.domain : endpoint.domain ?? spec.domain) || undefined }),
+            // The gateway refused the account (its sign-in, or its connection authorization policy).
+            refused: message => { session.gatewayRefused = message },
+            opened: () => {
+                // Entered a moment ago and taken by the gateway: kept, while the account is still what it was signed in as.
+                if (own?.remember && own.saveKey) {
+                    own.remember = false
+                    const saveKey = own.saveKey
+                    saveCredentialsIf(saveKey, own.credentials,
+                        () => this.accountCurrent(saveKey, own.saveFor, own.accountRevision), own.saveLabel).then(
+                        saved => session.log.push(saved ? `gateway: saved as the account's password in ${storeName()}` : 'gateway: not saved: the account changed meanwhile'),
+                        e => session.log.push(`gateway: ${storeName()}: ${e?.message ?? e}`))
+                }
+            },
+        }
+    }
+
+    /** FreeRDP still uses the plugin's stream-based gateway while IronRDP's helper owns its tunnel. */
+    private async throughGatewayStream (target: RemoteTarget, spec: DesktopSpec, session: DesktopSession, gateway: Gateway, endpoint: Endpoint, signal: AbortSignal): Promise<Duplex> {
+        const route = await this.throughGateway(target, spec, session, gateway, endpoint, signal)
         try {
             const stream = await openThroughGateway(
-                () => target.openTcp(gateway.host, gateway.port), gateway,
-                { username: credentials.username, password: credentials.password, domain: (own ? own.domain : endpoint.domain ?? spec.domain) || undefined },
-                { host: endpoint.host, port: endpoint.port },
-                (fingerprint, valid, reason, details) => this.checkGatewayCertificate(session, gateway, fingerprint, valid, reason, details),
-                { log: m => session.log.push(m), clientName: os.hostname(), signal })
-            // Entered a moment ago and taken by the gateway: kept, while the account is still what it was signed in as.
-            if (own?.remember && own.saveKey) {
-                own.remember = false
-                const saveKey = own.saveKey
-                saveCredentialsIf(saveKey, own.credentials,
-                    () => this.accountCurrent(saveKey, own.saveFor, own.accountRevision), own.saveLabel).then(
-                    saved => session.log.push(saved ? `gateway: saved as the account's password in ${storeName()}` : 'gateway: not saved: the account changed meanwhile'),
-                    e => session.log.push(`gateway: ${storeName()}: ${e?.message ?? e}`))
-            }
+                () => target.openTcp(gateway.host, gateway.port), gateway, await route.account(), route.target,
+                route.checkCertificate, { log: m => session.log.push(m), clientName: route.clientName, signal })
+            route.opened?.()
             return stream
         } catch (e: any) {
-            if (e instanceof GatewaySignInError) {
-                session.gatewayRefused = e.message
-            }
+            if (e instanceof GatewaySignInError) { route.refused?.(e.message) }
             throw e
         }
     }
@@ -4332,7 +4358,7 @@ export class RemoteDesktopService {
                 autologon: spec.kind === 'xrdp',
                 relaxOrderChecks,
                 open: async abort => {
-                    const stream = gateway ? await this.throughGateway(target, spec, session, gateway, endpoint, abort) : await target.openTcp(endpoint.host, endpoint.port)
+                    const stream = gateway ? await this.throughGatewayStream(target, spec, session, gateway, endpoint, abort) : await target.openTcp(endpoint.host, endpoint.port)
                     if (abort.aborted) { stream.destroy(); throw new Error('Connection cancelled') }
                     return stream
                 },

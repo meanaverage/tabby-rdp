@@ -19,6 +19,7 @@
 // The unit tests (test/unit/vendor.ts) run these on made-up repositories and packages, and check the working tree
 // against the list.
 import { freeRDPFiles, freeRDPMetadata, runtimeMetadata } from './package-metadata.mjs'
+import { helperFile, SUMS, TARGETS } from './build-helper.mjs'
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { appendFileSync, lstatSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync } from 'node:fs'
@@ -290,6 +291,9 @@ export function readTarball (file) {
             fail('has a size that is not one')
         }
         let size = parseInt(digits[1], 8)
+        const modeDigits = /^ *([0-7]{1,7}) *$/.exec(text(100, 8))
+        if (!modeDigits) fail('has a mode that is not one')
+        const mode = parseInt(modeDigits[1], 8)
         const name = text(0, 100)
         const link = text(157, 100)
         const prefix = text(345, 155)
@@ -332,7 +336,7 @@ export function readTarball (file) {
             if (type === '0' && (path.endsWith('/') || written.endsWith('/'))) {
                 fail('is a file whose name ends in a slash, a folder to node-tar')
             }
-            entries.push({ path, type, data })
+            entries.push({ path, type, data, mode })
             pax = null
         }
         at += 512 + Math.ceil(size / 512) * 512
@@ -353,7 +357,7 @@ export function readTarball (file) {
  * only), so any of them is a problem here, as are a name twice and two names one disk that ignores case would take
  * for one. A folder entry is no file to check, but an extractor makes a folder at its path, where the package has a
  * file (a required one, say) or not. */
-export function packageFiles (tarball, problems) {
+export function packageFiles (tarball, problems, modes = new Map()) {
     const files = new Map()
     const folded = new Map()
     for (const entry of readTarball(tarball)) {
@@ -380,6 +384,7 @@ export function packageFiles (tarball, problems) {
         }
         folded.set(key, file)
         files.set(file, entry.data)
+        modes.set(file, entry.mode)
     }
     return files
 }
@@ -388,9 +393,10 @@ export function packageFiles (tarball, problems) {
  * runtime metadata derived from the revision and other files outside dist/ as committed; with sameAs, every file
  * against that package's too. The list
  * read is the repository's, never the package's own copy, which could only vouch for itself. */
-export function checkPackage (root, tarball, { revision, sameAs } = {}) {
+export function checkPackage (root, tarball, { revision, sameAs, helpersSha256 } = {}) {
     const problems = []
-    const files = packageFiles(tarball, problems)
+    const modes = new Map()
+    const files = packageFiles(tarball, problems, modes)
     let version = null
     let name = null
     try {
@@ -447,9 +453,10 @@ export function checkPackage (root, tarball, { revision, sameAs } = {}) {
             }
         }
     }
+    const helpers = (manifest?.tabbyRdp?.packageFormat ?? 0) >= 5
     let built = 0
     for (const [file, data] of files) {
-        if (file.startsWith('dist/')) {
+        if (file.startsWith('dist/') || helpers && file.startsWith('bin/')) {
             built++
             continue
         }
@@ -483,8 +490,44 @@ export function checkPackage (root, tarball, { revision, sameAs } = {}) {
         problems.push(`${MANIFEST}: missing from the package`)
     }
 
+    let helperSums = null
+    if (helpers) {
+        const expected = TARGETS.map(helperFile)
+        if (!files.has(SUMS)) {
+            problems.push(`${SUMS}: missing from the package`)
+        } else {
+            try { helperSums = parseManifest(files.get(SUMS).toString('utf8')) }
+            catch (e) { problems.push(`${SUMS}: ${e.message}`) }
+        }
+        for (const file of expected) {
+            if (!files.has(file)) {
+                problems.push(`${shown(file)}: missing from the package`)
+                continue
+            }
+            if (helperSums && sha256(files.get(file)) !== helperSums.get(file)) {
+                problems.push(`${shown(file)}: not what ${SUMS} records`)
+            }
+            if (!file.endsWith('.exe') && !(modes.get(file) & 0o100)) {
+                problems.push(`${shown(file)}: not executable in the package`)
+            }
+        }
+        for (const file of helperSums?.keys() ?? []) {
+            if (!expected.includes(file)) problems.push(`${SUMS} lists ${shown(file)}, which is not a network helper`)
+        }
+        for (const file of files.keys()) {
+            if (file.startsWith('bin/') && file !== SUMS && !expected.includes(file)) {
+                problems.push(`${shown(file)}: unexpected file in bin/`)
+            }
+        }
+        if (helpersSha256 && files.has(SUMS) && sha256(files.get(SUMS)) !== helpersSha256) {
+            problems.push(`${SUMS}: differs from an independent helper build`)
+        }
+    } else if (helpersSha256) {
+        problems.push('--helpers-sha256: this package has no network helpers')
+    }
+
     compareFiles(files, sameAs, problems)
-    return { problems, revision, commit, version, files: files.size, vendor: listed.length, built }
+    return { problems, revision, commit, version, files: files.size, vendor: listed.length, built, helpers: helpers ? TARGETS.length : 0 }
 }
 
 /** With sameAs, every file of a package against that package's. */
@@ -582,7 +625,7 @@ function main (args) {
         process.exitCode = 1
     }
     const [command, ...rest] = args
-    const usage = 'usage: node scripts/check-vendor.mjs base | rebuilt | package <package.tgz> [<revision>] [--same-as <package.tgz>]'
+    const usage = 'usage: node scripts/check-vendor.mjs base | rebuilt | package <package.tgz> [<revision>] [--same-as <package.tgz>] [--helpers-sha256 <hex>]'
     if (command === 'base' && rest.length === 0) {
         const { commit, upstream } = checkBase(root)
         if (!upstream) {
@@ -617,6 +660,8 @@ function main (args) {
         for (let i = 0; i < rest.length; i++) {
             if (rest[i] === '--same-as' && i + 1 < rest.length) {
                 options.sameAs = rest[++i]
+            } else if (rest[i] === '--helpers-sha256' && i + 1 < rest.length && /^[0-9a-f]{64}$/.test(rest[i + 1])) {
+                options.helpersSha256 = rest[++i]
             } else if (rest[i].startsWith('-')) {
                 // Not a revision to look up: git would take it for an option of its own.
                 return error(usage)
@@ -628,7 +673,7 @@ function main (args) {
             return error(usage)
         }
         const [tarball, revision] = positional
-        const result = checkPackage(root, resolve(tarball), { revision, sameAs: options.sameAs && resolve(options.sameAs) })
+        const result = checkPackage(root, resolve(tarball), { revision, sameAs: options.sameAs && resolve(options.sameAs), helpersSha256: options.helpersSha256 })
         console.log(`${tarball} (version ${result.version ?? 'unknown'}) against ${result.revision} (${result.commit}):`)
         if (result.problems.length > 0) {
             for (const problem of result.problems) {
