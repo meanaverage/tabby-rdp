@@ -48,7 +48,8 @@ test('each platform package.json names for a FreeRDP package has a build in nati
     const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'))
     // Source-only development checkouts may not have built a helper yet.
     if (!existsSync(join(root, 'native/bin'))) return
-    assert.deepEqual([...pkg.tabbyRdp.freerdpPlatforms].sort(), readdirSync(join(root, 'native/bin')).filter(name => !name.startsWith('.')).sort(),
+    const expected = process.env.TRD_SINGLE_NATIVE_BUILD === '1' ? [`${process.platform}-${process.arch}`] : pkg.tabbyRdp.freerdpPlatforms
+    assert.deepEqual([...expected].sort(), readdirSync(join(root, 'native/bin')).filter(name => !name.startsWith('.')).sort(),
         'scripts/pack.mjs makes a package per platform named, from its build')
 })
 
