@@ -4,9 +4,9 @@ Read [CONTRIBUTING.md](CONTRIBUTING.md) for implementation, validation and relea
 
 ## Branches, PRs and test builds
 
-- The active development branch is **`0.6.0-rc4`**, for package version **`0.6.0-rc.4`**. All follow-up changes,
-  including documentation and agent instructions, belong there. `0.6.0-rc.1`, `0.6.0-rc.2` and `0.6.0-rc.3` are released.
-- Start feature/fix branches from current `origin/0.6.0-rc4` and target their PRs at `0.6.0-rc4`, not `main`.
+- The active development branch is **`0.6.0-rc5`**, for package version **`0.6.0-rc.5`**. All follow-up changes,
+  including documentation and agent instructions, belong there. `0.6.0-rc.1` through `0.6.0-rc.4` are released.
+- Start feature/fix branches from current `origin/0.6.0-rc5` and target their PRs at `0.6.0-rc5`, not `main`.
   Use one PR for a cohesive change and its tests, documentation and packaging. Check an existing checkout's base
   and PR destination before preparing or merging it; preserve newer fixes when moving older work.
 - After publishing a preview, create or select the next preview's branch from the released preview's tag and
