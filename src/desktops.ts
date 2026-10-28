@@ -96,7 +96,8 @@ export interface DesktopSpec {
  */
 export interface ExtraDesktopConfig {
     client?: string
-    relaxOrderChecks?: boolean | ''
+    /** A profile's null value explicitly follows the global setting, even through group defaults. */
+    relaxOrderChecks?: boolean | null
     name?: string
     via?: string
     host?: string

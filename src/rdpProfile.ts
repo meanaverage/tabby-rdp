@@ -25,8 +25,8 @@ export interface RDPProfile extends ConnectableProfile {
     options: {
         /** Empty/absent follows Settings › Remote Desktop. Applies on reconnect. */
         client?: '' | RDPClient
-        /** Empty/absent follows Settings; applies to FreeRDP on reconnect. */
-        relaxOrderChecks?: '' | boolean
+        /** Null follows Settings even through group defaults; applies to FreeRDP on reconnect. */
+        relaxOrderChecks?: boolean | null
         /** The RDP server: as this computer sees it, or as the `via` host sees it. */
         host: string
         port: number
@@ -275,7 +275,7 @@ export class RDPProfileSettingsComponent implements ProfileSettingsComponent<RDP
         const relaxOrderChecks = field<HTMLSelectElement>('relaxOrderChecks')
         relaxOrderChecks.value = o.relaxOrderChecks === true ? 'on' : o.relaxOrderChecks === false ? 'off' : ''
         relaxOrderChecks.addEventListener('change', () => {
-            o.relaxOrderChecks = relaxOrderChecks.value === 'on' ? true : relaxOrderChecks.value === 'off' ? false : ''
+            o.relaxOrderChecks = relaxOrderChecks.value === 'on' ? true : relaxOrderChecks.value === 'off' ? false : null
         })
         const accounts = desktop.accounts()
         const saved = field<HTMLSelectElement>('account')
@@ -401,7 +401,7 @@ export class RDPProfilesService extends QuickConnectProfileProvider<RDPProfile> 
     override name = 'Remote desktop (RDP)'
     override settingsComponent = RDPProfileSettingsComponent
     override configDefaults = {
-        options: { host: '', port: 3389, kind: 'windows', username: '', domain: '', account: '', via: '', gateway: '', gatewayAccount: '', clipboard: '', client: '' },
+        options: { host: '', port: 3389, kind: 'windows', username: '', domain: '', account: '', via: '', gateway: '', gatewayAccount: '', clipboard: '', client: '', relaxOrderChecks: null },
         clearServiceMessagesOnConnect: false,
     }
 
@@ -411,8 +411,8 @@ export class RDPProfilesService extends QuickConnectProfileProvider<RDPProfile> 
     }
 
     async getBuiltinProfiles (): Promise<PartialProfile<RDPProfile>[]> {
-        // No clipboard or client here: a new profile is made from a copy of this, and a value saved with it (even '', the
-        // setting's) would hide the clipboard its group's or the type's defaults give it, which may well be narrower.
+        // No clipboard, client or drawing-order choice here: a new profile is made from a copy of this, and a value
+        // saved with it (even a "follow Settings" value) would hide what its group's or the type's defaults give it.
         // Left out, the profile follows those defaults (configDefaults has the key) until it is given one of its own.
         return [{
             id: `${RDP_PROFILE_TYPE}:template`,
