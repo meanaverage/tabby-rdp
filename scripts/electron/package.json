@@ -4,6 +4,6 @@
   "private": true,
   "description": "The Electron shipped by the Tabby release used for compatibility tests",
   "dependencies": {
-    "electron": "43.7.0"
+    "electron": "43.8.1"
   }
 }
