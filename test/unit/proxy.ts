@@ -742,12 +742,12 @@ test('in Electron: the plugin\'s side of the proxy starts the helper and carries
             server.close()
         }
     }
-    // Windows' own certificate, whichever way the desktop is reached: one modern handshake.
+    // Windows' own certificate, whichever way the desktop is reached: one forward-secret handshake.
     for (const mode of ['direct', 'ssh', 'tunnel']) {
         const fine = await run(mode)
         assert.ok(fine.electron, 'ran in Electron')
         assert.ok(fine.log.some((l: string) => /relay up/.test(l)), `${mode}: ${fine.log.join('\n')}`)
-        assert.match(fine.handshakes[0], /^TLSv1\.3 /, mode)
+        assert.match(fine.handshakes[0], /^TLSv1\.2 ECDHE-/, mode)
     }
     for (const mode of ['tunnel-broken', 'ssh-broken']) {
         const broken = await run(mode)
