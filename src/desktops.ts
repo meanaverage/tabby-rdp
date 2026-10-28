@@ -28,6 +28,8 @@ export interface OwnDesktopFound {
 /** A desktop reachable through an SSH connection. */
 export interface DesktopSpec {
     client?: RDPClient
+    /** Override the FreeRDP drawing-order check for this desktop. */
+    relaxOrderChecks?: boolean
     /** 'own' for the SSH host's own desktop, otherwise `host:port`. */
     id: string
     /** For menus and status messages. */
@@ -94,6 +96,7 @@ export interface DesktopSpec {
  */
 export interface ExtraDesktopConfig {
     client?: string
+    relaxOrderChecks?: boolean | ''
     name?: string
     via?: string
     host?: string
@@ -151,7 +154,8 @@ export function specOf (extra: ExtraDesktopConfig): DesktopSpec | null {
     // Its own clipboard sharing, or none (the setting's).
     const clipboard = ownClipboard(extra?.clipboard)
     const client = ownRDPClient(extra?.client)
-    const own = { ...clipboard ? { clipboard } : {}, ...client ? { client } : {} }
+    const own = { ...clipboard ? { clipboard } : {}, ...client ? { client } : {},
+        ...typeof extra?.relaxOrderChecks === 'boolean' ? { relaxOrderChecks: extra.relaxOrderChecks } : {} }
     const hyperv = vmId(extra?.hyperv)
     if (hyperv) {
         return hyperVSpec(hyperv, configText(extra.name) || hyperv, {

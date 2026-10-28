@@ -25,6 +25,8 @@ export interface RDPProfile extends ConnectableProfile {
     options: {
         /** Empty/absent follows Settings › Remote Desktop. Applies on reconnect. */
         client?: '' | RDPClient
+        /** Empty/absent follows Settings; applies to FreeRDP on reconnect. */
+        relaxOrderChecks?: '' | boolean
         /** The RDP server: as this computer sees it, or as the `via` host sees it. */
         host: string
         port: number
@@ -208,6 +210,16 @@ export class RDPProfileSettingsComponent implements ProfileSettingsComponent<RDP
                     clipboard, sound and shared folders are unavailable.</div>
             </div>` + `
             <div class="mb-3">
+                <label>Drawing order checks (FreeRDP)</label>
+                <select class="form-control" name="relaxOrderChecks" aria-label="Drawing order checks (FreeRDP)">
+                    <option value="">As in Settings › Remote Desktop</option>
+                    <option value="on">Relax checks</option>
+                    <option value="off">Keep strict checks</option>
+                </select>
+                <div class="text-muted small">Try relaxing checks if a server or PAM proxy causes a black screen or sends an unannounced drawing order.
+                    Applies on the next FreeRDP connection; IronRDP is unaffected.</div>
+            </div>` + `
+            <div class="mb-3">
                 <label>Account</label>
                 <select class="form-control" name="account"></select>
                 <div class="text-muted small">A saved account's password is kept once, for every desktop that signs in with it.
@@ -260,6 +272,11 @@ export class RDPProfileSettingsComponent implements ProfileSettingsComponent<RDP
             ...Object.entries(RDP_CLIENT_LABELS).map(([id, label]) => new Option(label, id)))
         client.value = ownRDPClient(o.client) ?? ''
         client.addEventListener('change', () => { o.client = ownRDPClient(client.value) ?? '' })
+        const relaxOrderChecks = field<HTMLSelectElement>('relaxOrderChecks')
+        relaxOrderChecks.value = o.relaxOrderChecks === true ? 'on' : o.relaxOrderChecks === false ? 'off' : ''
+        relaxOrderChecks.addEventListener('change', () => {
+            o.relaxOrderChecks = relaxOrderChecks.value === 'on' ? true : relaxOrderChecks.value === 'off' ? false : ''
+        })
         const accounts = desktop.accounts()
         const saved = field<HTMLSelectElement>('account')
         const label = (a: { name: string, username: string, domain?: string }) => `${a.name} (${signInName(a)})`

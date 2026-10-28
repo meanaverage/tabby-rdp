@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.6.0-rc.4 (unreleased)
+
+**Added**
+- A default-off **Relax drawing order checks** option for FreeRDP, with overrides in RDP profiles and configured
+  desktops. It accepts drawing orders a server or PAM proxy did not announce, which may help diagnose black screens.
+  The option applies on reconnect and does not change IronRDP.
+
 ## 0.6.0-rc.3
 
 **Added**

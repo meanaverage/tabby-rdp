@@ -103,6 +103,19 @@ export function numbers (...values: number[]): Buffer {
     return out
 }
 
+/** The native helper's IPC 3 start message: six strings followed by six uint32 fields. */
+export function freeRDPStart (options: Pick<FreeRDPOptions, 'host' | 'username' | 'password' | 'domain' | 'width' | 'height' | 'pipeline' | 'autologon' | 'relaxOrderChecks'>,
+    relay: { port: number, token: string }): Buffer {
+    const strings = [options.host, options.username, options.password, options.domain, '', relay.token]
+    const fields = strings.map(value => {
+        if (value.includes('\0')) { throw new Error('FreeRDP settings cannot contain a null character') }
+        const text = Buffer.from(value)
+        return Buffer.concat([numbers(text.length), text])
+    })
+    return Buffer.concat([...fields, numbers(relay.port, options.width, options.height, +options.pipeline,
+        +!!options.autologon, +!!options.relaxOrderChecks)])
+}
+
 /** Only a process holding the per-attempt token can open the SSH channel or gateway connection. */
 export async function freeRDPRelay (open: (signal: AbortSignal) => Promise<Duplex>): Promise<{
     port: number, token: string, stats: { bytesIn: number, bytesOut: number }, readonly failure?: Error, close: () => void,
@@ -188,6 +201,7 @@ interface FreeRDPOptions {
     height: number
     pipeline: boolean
     autologon?: boolean
+    relaxOrderChecks?: boolean
     open: (signal: AbortSignal) => Promise<Duplex>
     certificate: (fingerprint: string, valid: boolean, reason: string, details?: CertificateDetails) => void
     withoutNla: () => void
@@ -255,13 +269,7 @@ export class FreeRDPProcess {
                 if (this.closed) { throw new Error('FreeRDP connection cancelled') }
                 await new Promise<void>((resolve, reject) => child.stdin.write(ipcFrame('A', authorities.subarray(at, at + 64 * 1024)), error => error ? reject(error) : resolve()))
             }
-            const strings = [options.host, options.username, options.password, options.domain, '', this.relay.token]
-            const fields = strings.map(value => {
-                if (value.includes('\0')) { throw new Error('FreeRDP settings cannot contain a null character') }
-                const text = Buffer.from(value)
-                return Buffer.concat([numbers(text.length), text])
-            })
-            this.send('S', Buffer.concat([...fields, numbers(this.relay.port, options.width, options.height, +options.pipeline, +!!options.autologon)]))
+            this.send('S', freeRDPStart(options, this.relay))
         } catch (error) { this.fail(error as Error) }
         return started
     }
