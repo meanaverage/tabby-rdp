@@ -21,6 +21,7 @@ npm test -- xrdp                  # the xrdp suite (TRD_TEST_XRDP_*)
 npm test -- direct                # a desktop reached directly, not through SSH (TRD_TEST_DIRECT_*, else the test host)
 npm test -- --packed freerdp      # opt-in native client and switch back to IronRDP (TRD_TEST_DIRECT_*, native helper required)
 npm test -- --packed e2e          # with the plugin installed as npm would install it (the release packer)
+npm test -- helper                # the network helper in Tabby itself; no remote machine (see below)
 npm test -- --keep e2e            # leave the test Tabby open afterwards
 npm test -- --port 9334 e2e       # use a Tabby already running with --remote-debugging-port=9334
 npm test -- screenshots           # regenerate docs/images from the test machines
@@ -108,6 +109,15 @@ All live RDP checks used Ubuntu 24.04 GNOME Remote Desktop as the server.
 
 Tabby 1.0.238 ships xterm 5; xterm 6 was tested separately. These results record the tested builds, rather than
 qualifying every later host release. Rerun the relevant suites when the plugin or host changes.
+
+## The network helper in Tabby
+
+`npm test -- helper` (or `npm test -- --packed --hidden helper`, the plugin installed from the package) needs no remote
+machine: in the test Tabby's window it starts the proxy (Electron's Node spawning the helper from the plugin's
+`bin/`), connects Chromium's own WebSocket to it as IronRDP's client does, relays both ways to a stand-in RDP server in
+the window, kills the helper under the relay (the failure has to say how it stopped, the client has to hear the end,
+and the next proxy has to work), and closes a proxy (its helper has to be gone). Linked, it needs this computer's
+helper built (`npm run build:helper`); packed, every platform's (`npm run build:helpers`).
 
 ## Package-change smoke tests
 

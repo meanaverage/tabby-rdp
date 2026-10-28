@@ -15,7 +15,8 @@
 // package.json names each one in tabbyRdp.freerdpPlatforms as an optional dependency, pinned to the plugin's own version:
 // npm installs the one that matches the computer, and the plugin's package holds no native code. The committed
 // package.json names none, so that the lock never has to resolve packages that are published with the release.
-export const PACKAGE_FORMATS = [1, 2, 3, 4]
+// Format 5 keeps format 4's optional FreeRDP packages and adds reproducible Go network helpers to bin/.
+export const PACKAGE_FORMATS = [1, 2, 3, 4, 5]
 
 const EXACT = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?$/
 

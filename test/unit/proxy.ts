@@ -14,7 +14,7 @@ import * as path from 'node:path'
 import * as tls from 'node:tls'
 
 const require = createRequire(import.meta.url)
-const { startRDCleanPathProxy, preconnectionPdu, offersNla, signsNothing, earlyUserAuthorization, withoutUserCookie, FLOW_WINDOW, SERVER_BACKLOG } = require('../../dist/rdcleanpath.js')
+const { startRDCleanPathProxy, FLOW_WINDOW, SERVER_BACKLOG } = require('../../dist/rdcleanpath.js')
 const WebSocket = require('ws')
 import { authority, signedWith } from './support/certificates.js'
 
@@ -23,6 +23,20 @@ const der = (tag: number, content: Buffer) => {
     const length = n < 128 ? [n] : n < 256 ? [0x81, n] : [0x82, n >> 8, n & 0xff]
     return Buffer.concat([Buffer.from([tag, ...length]), content])
 }
+/**
+ * A version 2 pre-connection PDU ([MS-RDPEPS] 2.2.1.2) carrying `text`, as the proxy (in the network helper) sends it
+ * first to a Hyper-V host: what these tests expect it to send. The helper's own tests check its PDU field by field.
+ */
+function preconnectionPdu (text: string): Buffer {
+    const blob = Buffer.from(text + '\0', 'utf16le')
+    const pdu = Buffer.alloc(18 + blob.length)
+    pdu.writeUInt32LE(pdu.length, 0)
+    pdu.writeUInt32LE(2, 8)
+    pdu.writeUInt16LE(blob.length / 2, 16)
+    blob.copy(pdu, 18)
+    return pdu
+}
+
 /** An RDCleanPath request: version 3390, a destination, the token, an X.224 request. */
 const request = (token: string) => der(0x30, Buffer.concat([
     der(0xa0, der(0x02, Buffer.from([0x0d, 0x3e]))),
@@ -196,13 +210,6 @@ test('no more than a few clients at once', async () => {
     proxy.close()
 })
 
-test('a pre-connection PDU: version 2, the text in UTF-16 with its terminator', () => {
-    const pdu: Buffer = preconnectionPdu('ab')
-    assert.equal(pdu.length, 18 + 6)
-    assert.deepEqual([pdu.readUInt32LE(0), pdu.readUInt32LE(4), pdu.readUInt32LE(8), pdu.readUInt32LE(12), pdu.readUInt16LE(16)], [24, 0, 2, 0, 3])
-    assert.equal(pdu.subarray(18).toString('utf16le'), 'ab\0')
-})
-
 test('a Hyper-V VM\'s console: the blob goes first, then TLS at once, no X.224 from the proxy', async () => {
     const upstream = silentUpstream()
     const proxy = await startRDCleanPathProxy(upstream.open, () => { })
@@ -283,15 +290,6 @@ function answeringUpstream (answer: Buffer): { open: () => Promise<Duplex>, sent
         },
     }
 }
-
-test('Network Level Authentication: what the server chose', () => {
-    assert.equal(offersNla(confirm(2)), true)    // CredSSP
-    assert.equal(offersNla(confirm(8)), true)    // CredSSP with early user authorization
-    assert.equal(offersNla(confirm(1)), false)   // TLS alone: the password would go in the Client Info PDU
-    assert.equal(offersNla(confirm(0)), false)   // standard RDP security
-    assert.equal(offersNla(confirm(2, true)), false)  // a refusal whose code happens to be 2
-    assert.equal(offersNla(Buffer.from([3, 0, 0, 11, 6, 0xd0, 0, 0, 0, 0, 0])), false)  // no negotiation response at all
-})
 
 test('an answer to the connection request that isn\'t RDP is refused at once, not waited on for the length it seems to give', async t => {
     // A web server on the desktop's port, say: "HTTP" would be TPKT's version and reserved byte, and 21 KB to wait for.
@@ -382,41 +380,11 @@ test('a proxy started without a decision about servers without Network Level Aut
     }
 })
 
-test('HYBRID_EX is a flag: an Early User Authorization Result follows whenever it is set, as IronRDP expects', () => {
-    assert.equal(earlyUserAuthorization(confirm(8)), true)
-    // HYBRID|HYBRID_EX: IronRDP waits for the result, and the proxy has to frame it (it refused the stream before).
-    assert.equal(earlyUserAuthorization(confirm(0x0a)), true)
-    assert.equal(offersNla(confirm(0x0a)), true)
-    assert.equal(earlyUserAuthorization(confirm(2)), false)
-    assert.equal(earlyUserAuthorization(confirm(1)), false)
-    assert.equal(earlyUserAuthorization(confirm(8, true)), false)  // a refusal whose code happens to be 8
-    assert.equal(earlyUserAuthorization(Buffer.from([3, 0, 0, 11, 6, 0xd0, 0, 0, 0, 0, 0])), false)
-})
-
 /**
  * An X.224 connection request as IronRDP's web client builds it (a native build of its connector, user
  * alice@corp.example): the user name as a cookie, then SSL|HYBRID|HYBRID_EX.
  */
 const IRONRDP_REQUEST = Buffer.from('0300003833e00000000000436f6f6b69653a206d737473686173683d616c69636540636f72702e6578616d706c650d0a010008000b000000', 'hex')
-
-test('the user name cookie is taken out of the connection request; the rest stays as it was', () => {
-    assert.match(IRONRDP_REQUEST.toString('latin1'), /Cookie: mstshash=alice@corp\.example\r\n/)
-    const out: Buffer = withoutUserCookie(IRONRDP_REQUEST)
-    assert.equal(out.toString('hex'), '030000130ee00000000000010008000b000000')
-    assert.equal(out.readUInt16BE(2), out.length, 'TPKT length')
-    assert.equal(out[4], out.length - 5, 'X.224 length indicator')
-    // Already without one, a broker's routing token (no user name in it), or not a connection request: as it is.
-    const plain = Buffer.from([3, 0, 0, 11, 6, 0xe0, 0, 0, 0, 0, 0])
-    assert.equal(withoutUserCookie(plain), plain)
-    const token = Buffer.concat([Buffer.from([3, 0, 0, 0, 0, 0xe0, 0, 0, 0, 0, 0]), Buffer.from('Cookie: msts=3640205228.15629.0000\r\n')])
-    token.writeUInt16BE(token.length, 2)
-    token[4] = token.length - 5
-    assert.equal(withoutUserCookie(token), token)
-    const confirmation = confirm(2)
-    assert.equal(withoutUserCookie(confirmation), confirmation)
-    const unterminated = Buffer.from(IRONRDP_REQUEST.toString('latin1').replace('\r\n', '__'), 'latin1')
-    assert.equal(withoutUserCookie(unterminated), unterminated)
-})
 
 test('the server never sees the user name before the certificate check: not even one the proxy then refuses', async t => {
     const upstream = answeringUpstream(confirm(1))
@@ -517,20 +485,6 @@ const encipherOnly = selfSigned('keyUsage=critical,keyEncipherment,dataEncipherm
 const signing = selfSigned('keyUsage=critical,digitalSignature,keyEncipherment')
 const unrestricted = selfSigned()
 
-test('certificates that leave signatures out of their key usage, and those that don\'t', { skip: !encipherOnly || !signing || !unrestricted }, () => {
-    assert.equal(signsNothing(encipherOnly!.der), true)
-    assert.equal(signsNothing(signing!.der), false)
-    assert.equal(signsNothing(unrestricted!.der), false)
-    // What can't be read doesn't show the need: no fallback for it (TLS took it, but that is no reason to give up
-    // forward secrecy).
-    assert.equal(signsNothing(Buffer.from('not a certificate')), false)
-    assert.equal(signsNothing(encipherOnly!.der.subarray(0, encipherOnly!.der.length - 300)), false)
-    const keyUsage = encipherOnly!.der.indexOf(Buffer.from([0x06, 0x03, 0x55, 0x1d, 0x0f]))
-    const garbled = Buffer.from(encipherOnly!.der)
-    garbled[garbled.indexOf(0x03, keyUsage + 5)] = 0x04
-    assert.equal(signsNothing(garbled), false, 'a key usage that isn\'t a bit string')
-})
-
 /**
  * The error Electron's TLS library (BoringSSL) raises for a server certificate whose key usage rules the handshake out,
  * as Electron 43 has it: its code, reason, library and function, and its message.
@@ -595,28 +549,6 @@ async function tlsServer (certificate: { key: Buffer | string, cert: Buffer | st
     return { port, open, handshakes, requests, names, received, opened: () => opened, close: () => server.close() }
 }
 
-/**
- * Has the TLS library turn the server's certificate down in these handshakes (by number, from 1), as Electron's
- * (BoringSSL) does a certificate whose key usage rules the handshake out; plain Node doesn't check key usage. As there,
- * the TLS socket ends itself with the library's error, and the stream under it is left as it was (Electron 43: the
- * stream's `errored` stays null). The highest TLS version each handshake allowed is kept, in order (`any`: not limited).
- */
-function refusedByTls (handshakes: number[]): { versions: string[], restore: () => void } {
-    // The module the proxy calls (not the namespace imported above, whose bindings can't be replaced).
-    const library = require('tls')
-    const connect = library.connect
-    const versions: string[] = []
-    library.connect = (options: tls.ConnectionOptions, ...rest: unknown[]) => {
-        const socket: tls.TLSSocket = connect.call(library, options, ...rest)
-        versions.push(options.maxVersion ?? 'any')
-        if (handshakes.includes(versions.length)) {
-            setImmediate(() => socket.destroy(keyUsageRefusal()))
-        }
-        return socket
-    }
-    return { versions, restore: () => { library.connect = connect } }
-}
-
 /** An RDCleanPath request, as `request` makes it, with this X.224 connection request. */
 const requestWith = (token: string, x224: Buffer) => der(0x30, Buffer.concat([
     der(0xa0, der(0x02, Buffer.from([0x0d, 0x3e]))),
@@ -666,25 +598,9 @@ test('a client that leaves while its upstream is still being opened has the fact
     assert.equal(signals[0].aborted, true)
 })
 
-test('TLS falls back to RSA key exchange on the TLS library\'s key-usage refusal, for a certificate without signatures', { skip: !encipherOnly }, async t => {
-    const server = await tlsServer(encipherOnly!)
-    const handshakes = refusedByTls([1])
-    const log: string[] = []
-    const proxy = await startRDCleanPathProxy(server.open, () => { }, (m: string) => log.push(m))
-    t.after(() => { handshakes.restore(); proxy.close(); server.close() })
-    await attempt(proxy, log)
-    assert.ok(log.some(l => /using TLS 1.2 with RSA key exchange/.test(l)), log.join('\n'))
-    assert.ok(log.some(l => /relay up/.test(l)), log.join('\n'))
-    assert.equal(server.opened(), 2)
-    assert.match(server.handshakes[0], /^TLSv1\.2 AES/)
-    // Shown to be needed, with a certificate that was accepted: the next connection starts with it.
-    await attempt(proxy, log)
-    assert.deepEqual(handshakes.versions, ['any', 'TLSv1.2', 'TLSv1.2'])
-})
-
-test('an error of the stream under TLS doesn\'t make TLS fall back, whatever its code', { skip: !encipherOnly }, async t => {
-    // Only the TLS library's own refusal counts: one passed on by the way there (an SSH channel, a gateway) is the
-    // way there's, and could come from anywhere.
+test('an error of the stream under TLS ends the connection with its words, and nothing is tried again', { skip: !encipherOnly }, async t => {
+    // One passed on by the way there (an SSH channel, a gateway) is the way there's, and could come from anywhere,
+    // whatever its code says: the connection fails with it, as it is.
     const server = await tlsServer(encipherOnly!, [1])
     const log: string[] = []
     const proxy = await startRDCleanPathProxy(server.open, () => { }, (m: string) => log.push(m))
@@ -695,7 +611,7 @@ test('an error of the stream under TLS doesn\'t make TLS fall back, whatever its
     assert.ok(!log.some(l => /RSA key exchange/.test(l)), log.join('\n'))
 })
 
-test('an error that only says the words doesn\'t make TLS fall back', { skip: !signing }, async t => {
+test('an error that only says a TLS library\'s words is no reason to try again either', { skip: !signing }, async t => {
     // As a gateway or an SSH host can put them in an error of its own (a sign-in scheme's name, a channel failure).
     const server = await tlsServer(signing!)
     let calls = 0
@@ -711,119 +627,13 @@ test('an error that only says the words doesn\'t make TLS fall back', { skip: !s
     assert.match(server.handshakes[0], /^TLSv1\.3/)
 })
 
-test('a certificate that allows signatures after a key-usage refusal: stopped, and the next connection starts without the fallback', { skip: !signing }, async t => {
-    // Something on the way made the first handshake fail, to take forward secrecy away from the connection.
-    const server = await tlsServer(signing!)
-    const handshakes = refusedByTls([1])
-    const log: string[] = []
-    const proxy = await startRDCleanPathProxy(server.open, () => { }, (m: string) => log.push(m))
-    t.after(() => { handshakes.restore(); proxy.close(); server.close() })
-    await attempt(proxy, log)
-    assert.match(proxy.failure ?? '', /doesn't show a need for the fallback/)
-    assert.ok(!log.some(l => /relay up/.test(l)), log.join('\n'))
-    await attempt(proxy, log)
-    assert.ok(log.some(l => /relay up/.test(l)), log.join('\n'))
-    assert.deepEqual(handshakes.versions, ['any', 'TLSv1.2', 'any'])
-    assert.match(server.handshakes[server.handshakes.length - 1], /^TLSv1\.3/)
-})
-
-test('a certificate whose key usage can\'t be read doesn\'t get the fallback either', { skip: !encipherOnly }, async t => {
-    // Windows' certificate, its key usage made unreadable (not a bit string): TLS takes it, but nothing shows that it
-    // rules modern TLS out.
-    const der = Buffer.from(encipherOnly!.der)
-    der[der.indexOf(0x03, der.indexOf(Buffer.from([0x06, 0x03, 0x55, 0x1d, 0x0f])) + 5)] = 0x04
-    const cert = `-----BEGIN CERTIFICATE-----\n${der.toString('base64').replace(/.{64}/g, '$&\n')}\n-----END CERTIFICATE-----\n`
-    const server = await tlsServer({ key: encipherOnly!.key, cert })
-    const handshakes = refusedByTls([1])
-    const log: string[] = []
-    const proxy = await startRDCleanPathProxy(server.open, () => { }, (m: string) => log.push(m))
-    t.after(() => { handshakes.restore(); proxy.close(); server.close() })
-    await attempt(proxy, log)
-    assert.deepEqual(handshakes.versions, ['any', 'TLSv1.2'])
-    assert.match(proxy.failure ?? '', /doesn't show a need for the fallback/)
-    assert.ok(!log.some(l => /relay up/.test(l)), log.join('\n'))
-})
-
-test('a fallback whose own handshake fails leaves the next connection on modern TLS', { skip: !encipherOnly }, async t => {
-    const server = await tlsServer(encipherOnly!)
-    const handshakes = refusedByTls([1, 2])
-    const log: string[] = []
-    const proxy = await startRDCleanPathProxy(server.open, () => { }, (m: string) => log.push(m))
-    t.after(() => { handshakes.restore(); proxy.close(); server.close() })
-    await attempt(proxy, log)
-    assert.ok(!log.some(l => /relay up/.test(l)), log.join('\n'))
-    await attempt(proxy, log)
-    assert.deepEqual(handshakes.versions, ['any', 'TLSv1.2', 'any'])
-    assert.ok(log.some(l => /relay up/.test(l)), log.join('\n'))
-})
-
-test('a remembered fallback that then fails is forgotten: the next connection tries modern TLS first', { skip: !encipherOnly }, async t => {
-    // The third connection (the second attempt, with the fallback as remembered) fails on its way there.
-    const server = await tlsServer(encipherOnly!, [3])
-    const handshakes = refusedByTls([1])
-    const log: string[] = []
-    const proxy = await startRDCleanPathProxy(server.open, () => { }, (m: string) => log.push(m))
-    t.after(() => { handshakes.restore(); proxy.close(); server.close() })
-    await attempt(proxy, log)
-    await attempt(proxy, log)
-    await attempt(proxy, log)
-    assert.deepEqual(handshakes.versions, ['any', 'TLSv1.2', 'TLSv1.2', 'any'])
-})
-
-test('a remembered fallback whose server doesn\'t answer in time is forgotten too: a server that hangs fails either way', { skip: !encipherOnly }, async t => {
-    // Windows' certificate. The third connection (the second attempt, with the fallback as remembered) goes to a
-    // server that never answers; the third attempt meets the TLS library's refusal again, and falls back again.
-    const server = await tlsServer(encipherOnly!)
-    const handshakes = refusedByTls([1, 3])
-    const hanging = silentUpstream()
-    let connections = 0
-    const open = () => ++connections === 3 ? hanging.open() : server.open()
-    const log: string[] = []
-    const proxy = await startRDCleanPathProxy(open, () => { }, (m: string) => log.push(m), { withoutNla: () => { }, handshakeTimeoutMs: 300 })
-    t.after(() => { handshakes.restore(); proxy.close(); server.close() })
-    await attempt(proxy, log)
-    await attempt(proxy, log)
-    assert.equal(proxy.failure, 'the server didn\'t answer in time')
-    assert.equal(hanging.streams[0].destroyed, true)
-    await attempt(proxy, log)
-    assert.deepEqual(handshakes.versions, ['any', 'TLSv1.2', 'any', 'TLSv1.2'])
-    assert.equal(log.filter(l => /relay up/.test(l)).length, 2, log.join('\n'))
-})
-
-test('a remembered fallback whose client leaves before the server answers is forgotten too', { skip: !encipherOnly }, async t => {
-    const server = await tlsServer(encipherOnly!)
-    const handshakes = refusedByTls([1, 3])
-    const hanging = silentUpstream()
-    let connections = 0
-    const open = () => ++connections === 3 ? hanging.open() : server.open()
-    const log: string[] = []
-    const proxy = await startRDCleanPathProxy(open, () => { }, (m: string) => log.push(m))
-    t.after(() => { handshakes.restore(); proxy.close(); server.close() })
-    await attempt(proxy, log)
-    // The second attempt, with the fallback as remembered: its client goes once the server is being reached.
-    const ws = new WebSocket(proxy.url)
-    await opened(ws)
-    ws.send(request(proxy.token))
-    for (let i = 0; i < 80 && !hanging.streams.length; i++) {
-        await soon(25)
-    }
-    ws.terminate()
-    for (let i = 0; i < 80 && !hanging.streams[0]?.destroyed; i++) {
-        await soon(25)
-    }
-    assert.equal(hanging.streams[0].destroyed, true)
-    await attempt(proxy, log)
-    assert.deepEqual(handshakes.versions, ['any', 'TLSv1.2', 'any', 'TLSv1.2'])
-    assert.equal(log.filter(l => /relay up/.test(l)).length, 2, log.join('\n'))
-})
-
 /**
- * Runs in Electron (ELECTRON_RUN_AS_NODE), whose TLS library is BoringSSL, as in Tabby: the plugin's proxy, with a
- * client sending one request through it to the RDP server at `port`, reached the ways the proxy is given in Tabby:
- * directly (`direct`, a socket), through an SSH channel (`ssh`, the plugin's SSHChannelStream over a stand-in for
- * Tabby's channel), or through a stream of the plugin's own (`tunnel`: one like an RD Gateway's tunnel). The
- * last two also come `-broken`: failing at TLS's first bytes with an error shaped like the TLS library's refusal, as
- * one passed on from elsewhere would be. Prints what the proxy logged and why it failed, as JSON.
+ * Runs in Electron (ELECTRON_RUN_AS_NODE), as in Tabby: the plugin's side of the proxy, which starts the network helper
+ * and carries its streams, with a client sending one request through it to the RDP server at `port`, reached the ways
+ * the proxy is given in Tabby: by the helper's own connection (`direct`), through an SSH channel (`ssh`, the plugin's
+ * SSHChannelStream over a stand-in for Tabby's channel), or through a stream of the plugin's own (`tunnel`). The last
+ * two also come `-broken`: failing at TLS's first bytes with an error shaped like a TLS library's refusal, as one
+ * passed on from elsewhere would be. Prints what the proxy logged and why it failed, as JSON.
  */
 const ELECTRON_CLIENT = String.raw`
 const [dist, port, mode] = process.argv.slice(2)
@@ -832,7 +642,7 @@ const { Duplex } = require('stream')
 const { createRequire } = require('module')
 const { startRDCleanPathProxy } = require(dist + '/rdcleanpath.js')
 const { SSHChannelStream } = require(dist + '/sshChannelStream.js')
-const WebSocket = createRequire(dist + '/rdcleanpath.js')('ws')
+const WebSocket = globalThis.WebSocket ?? createRequire(dist + '/rdcleanpath.js')('ws')
 const der = (tag, content) => {
     const n = content.length
     return Buffer.concat([Buffer.from([tag, ...n < 128 ? [n] : n < 256 ? [0x81, n] : [0x82, n >> 8, n & 0xff]]), content])
@@ -884,11 +694,8 @@ const channelOver = (socket, broken) => {
         close: async () => { socket.destroy() },
     }
 }
-const open = () => new Promise(resolve => {
+const open = () => mode === 'direct' ? Promise.resolve({ direct: { host: '127.0.0.1', port: Number(port) } }) : new Promise(resolve => {
     const socket = net.connect(Number(port), '127.0.0.1', () => {
-        if (mode === 'direct') {
-            return resolve(socket)
-        }
         const broken = mode.endsWith('-broken')
         const stream = mode.startsWith('ssh') ? new SSHChannelStream(channelOver(socket, broken)) : tunnelOver(socket, broken)
         socket.on('error', e => stream.destroy(e))
@@ -898,19 +705,24 @@ const open = () => new Promise(resolve => {
 ;(async () => {
     const log = []
     const proxy = await startRDCleanPathProxy(open, () => { }, m => log.push(m))
+    // Electron's own WebSocket, as IronRDP's client in Tabby's window has; Node 22's otherwise.
     const ws = new WebSocket(proxy.url)
-    ws.on('error', () => { })
-    await new Promise(resolve => ws.once('open', resolve))
+    ws.binaryType = 'arraybuffer'
+    await new Promise(resolve => { ws.onopen = resolve })
+    let closed = false
+    ws.onclose = () => { closed = true }
     ws.send(request(proxy.token))
-    for (let i = 0; i < 200 && ws.readyState === WebSocket.OPEN && !log.some(l => /relay up/.test(l)); i++) {
+    for (let i = 0; i < 200 && !closed && !log.some(l => /relay up/.test(l)); i++) {
         await new Promise(resolve => setTimeout(resolve, 25))
     }
+    ws.close()
+    proxy.close()
     process.stdout.write(JSON.stringify({ electron: process.versions.electron, log, failure: proxy.failure }))
     process.exit(0)
 })()
 `
 
-test('in Electron: its TLS library\'s own key-usage refusal falls back over a socket, an SSH channel or a gateway-like tunnel, an error passed on by the stream doesn\'t', {
+test('in Electron: the plugin\'s side of the proxy starts the helper and carries a socket, an SSH channel or a gateway-like tunnel; an error passed on by the stream ends the connection', {
     skip: !process.env.TRD_ELECTRON ? 'set TRD_ELECTRON to an Electron binary to run this' : !encipherOnly,
 }, async t => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'trd-electron-'))
@@ -930,18 +742,16 @@ test('in Electron: its TLS library\'s own key-usage refusal falls back over a so
             server.close()
         }
     }
-    // BoringSSL's own refusal leaves the stream under TLS as it was, whichever kind it is: a Windows desktop reached
-    // directly, through an SSH host (most of them) or a gateway falls back.
+    // Windows' own certificate, whichever way the desktop is reached: one modern handshake.
     for (const mode of ['direct', 'ssh', 'tunnel']) {
         const fine = await run(mode)
         assert.ok(fine.electron, 'ran in Electron')
-        assert.ok(fine.log.some((l: string) => /using TLS 1.2 with RSA key exchange/.test(l)), `${mode}: ${fine.log.join('\n')}`)
         assert.ok(fine.log.some((l: string) => /relay up/.test(l)), `${mode}: ${fine.log.join('\n')}`)
-        assert.match(fine.handshakes[0], /^TLSv1\.2 AES/, mode)
+        assert.match(fine.handshakes[0], /^TLSv1\.3 /, mode)
     }
     for (const mode of ['tunnel-broken', 'ssh-broken']) {
         const broken = await run(mode)
-        assert.ok(!broken.log.some((l: string) => /RSA key exchange/.test(l)), `${mode}: ${broken.log.join('\n')}`)
+        assert.ok(!broken.log.some((l: string) => /relay up/.test(l)), `${mode}: ${broken.log.join('\n')}`)
         assert.match(broken.failure ?? '', /passed on/, mode)
     }
 })
@@ -985,33 +795,82 @@ test('a server without NLA is held to the certificate it shows, after the certif
     assert.equal(answers[0].includes(unrestricted!.der), false)
 })
 
-test('the user name reaches no server whose certificate is refused, the retry with legacy TLS included', { skip: !encipherOnly }, async t => {
-    // Windows' certificate: the first handshake fails as Electron's does (its TLS library's own refusal), the proxy
-    // starts over on a fresh connection, and the certificate check (refusing it here) comes after that one's handshake.
+test('the user name reaches no server whose certificate is refused: Windows\' own certificate, checked once', { skip: !encipherOnly }, async t => {
+    // Windows' certificate (key and data encipherment only) completes the handshake as it is; the certificate check,
+    // refusing it here, comes before anything more goes to the server.
     const server = await tlsServer(encipherOnly!)
-    const handshakes = refusedByTls([1])
     const log: string[] = []
     let checked = 0
     const proxy = await startRDCleanPathProxy(server.open, () => { checked++; throw new Error('not the certificate remembered') }, (m: string) => log.push(m), { withoutNla: () => { } })
-    t.after(() => { handshakes.restore(); proxy.close(); server.close() })
+    t.after(() => { proxy.close(); server.close() })
     await attempt(proxy, log, IRONRDP_REQUEST)
-    assert.ok(log.some(l => /using TLS 1.2 with RSA key exchange/.test(l)), log.join('\n'))
     assert.equal(checked, 1)
     assert.match(proxy.failure ?? '', /not the certificate remembered/)
-    assert.equal(server.requests.length, 2)
-    for (const sent of server.requests) {
-        assert.equal(sent.toString('hex'), '030000130ee00000000000010008000b000000')
+    assert.equal(server.requests.length, 1)
+    assert.equal(server.requests[0].toString('hex'), '030000130ee00000000000010008000b000000')
+    assert.equal(Buffer.concat(server.received).length, 0, 'nothing after the handshake reached the server')
+})
+
+test('Windows\' own certificate (no signatures in its key usage) gets modern TLS, forward secrecy kept, over a socket or a stream', { skip: !encipherOnly }, async t => {
+    // Electron's TLS library refused such a certificate in any handshake that needs a signature, and the plugin fell
+    // back to TLS 1.2 with RSA key exchange for it. The helper's TLS doesn't refuse it: one handshake, TLS 1.3.
+    const server = await tlsServer(encipherOnly!)
+    t.after(() => server.close())
+    for (const route of ['stream', 'direct'] as const) {
+        const log: string[] = []
+        const proxy = await startRDCleanPathProxy(route === 'stream' ? server.open : async () => ({ direct: { host: '127.0.0.1', port: server.port } }),
+            () => { }, (m: string) => log.push(m), { withoutNla: () => { } })
+        try {
+            const before = server.opened()
+            await attempt(proxy, log)
+            assert.ok(log.some(l => /relay up/.test(l)), `${route}: ${log.join('\n')}`)
+            assert.ok(!log.some(l => /RSA key exchange/.test(l)), log.join('\n'))
+            assert.match(server.handshakes[server.handshakes.length - 1], /^TLSv1\.3 /, route)
+            assert.ok(log.some(l => /^TLS: negotiated TLS 1\.3 TLS_/.test(l)), `${route}: ${log.join('\n')}`)
+            if (route === 'stream') {
+                assert.equal(server.opened() - before, 1, 'one connection')
+            }
+        } finally {
+            proxy.close()
+        }
     }
+})
+
+test('the network helper delivers X.224 and relay bytes to the optional PDU trace', { skip: !encipherOnly }, async t => {
+    const server = await tlsServer(encipherOnly!)
+    const seen: { direction: 'in' | 'out', data: Buffer, kind?: 'x224' }[] = []
+    const log: string[] = []
+    const proxy = await startRDCleanPathProxy(server.open, () => { }, (m: string) => log.push(m), {
+        withoutNla: () => { },
+        tap: (direction: 'in' | 'out', data: Buffer, kind?: 'x224') => seen.push({ direction, data: Buffer.from(data), kind }),
+    })
+    t.after(() => { proxy.close(); server.close() })
+    const ws = new WebSocket(proxy.url)
+    ws.on('error', () => { })
+    await opened(ws)
+    ws.send(request(proxy.token))
+    for (let i = 0; i < 80 && !log.some(l => /relay up/.test(l)); i++) await soon(25)
+    assert.ok(log.some(l => /relay up/.test(l)), log.join('\n'))
+    const data = Buffer.from([3, 0, 0, 6, 9, 9])
+    ws.send(data)
+    for (let i = 0; i < 80 && !server.received.some(chunk => chunk.equals(data)); i++) await soon(25)
+    assert.ok(server.received.some(chunk => chunk.equals(data)))
+    assert.ok(seen.some(item => item.direction === 'out' && item.kind === 'x224'))
+    assert.ok(seen.some(item => item.direction === 'in' && item.kind === 'x224'))
+    assert.ok(seen.some(item => item.direction === 'out' && item.kind === undefined && item.data.equals(data)))
+    const gone = closed(ws)
+    ws.terminate()
+    await gone
 })
 
 test('a connection request that still names the user once the cookie is taken out goes nowhere', async t => {
     const upstream = silentUpstream()
     const proxy = await startRDCleanPathProxy(upstream.open, () => { }, () => { }, { withoutNla: () => { } })
     t.after(() => proxy.close())
-    // IronRDP's request with a TPKT length that doesn't add up: withoutUserCookie leaves it as it is.
+    // IronRDP's request with a TPKT length that doesn't add up: the cookie can't be taken out of it (the helper's own
+    // tests check that it is left as it is).
     const odd = Buffer.from(IRONRDP_REQUEST)
     odd.writeUInt16BE(odd.length + 1, 2)
-    assert.equal(withoutUserCookie(odd), odd)
     const ws = new WebSocket(proxy.url)
     t.after(() => ws.terminate())
     ws.on('error', () => { })
@@ -1140,14 +999,11 @@ const madeUpLeaf = madeUp?.issue(['server.test'], { extendedKeyUsage: RDP_ONLY }
  * What the certificate check heard for a server with `certificate` (and the chain it sends), checked as `name` against
  * `ca` (the tests' authority unless said otherwise), and the question's words for it: why it isn't valid (whyNotValid,
  * from what the check heard) and what it says of itself (describeCertificate, marked as its own word unless vouched for).
- * `legacy`: the TLS library refuses the first handshake for the certificate's key usage, as Electron's does with
- * Windows' own, so the one checked is the fallback's.
  */
-async function checked (certificate: { key: Buffer, cert: Buffer }, options: { name?: string, ca?: Buffer, legacy?: boolean } = {}) {
+async function checked (certificate: { key: Buffer, cert: Buffer }, options: { name?: string, ca?: Buffer } = {}) {
     const { whyNotValid, describeCertificate, vouched } = require('../../dist/authorities.js')
     const name = options.name ?? 'server.test'
     const server = await tlsServer(certificate)
-    const handshakes = options.legacy ? refusedByTls([1]) : null
     const heard: [boolean, string, any][] = []
     const log: string[] = []
     const proxy = await startRDCleanPathProxy(server.open, (_fingerprint: string, valid: boolean, reason: string, details: any) => { heard.push([valid, reason, details]) },
@@ -1155,14 +1011,13 @@ async function checked (certificate: { key: Buffer, cert: Buffer }, options: { n
     try {
         await attempt(proxy, log)
     } finally {
-        handshakes?.restore()
         proxy.close()
         server.close()
     }
     assert.equal(heard.length, 1, log.join('\n'))
     const [valid, reason, details] = heard[0]
     return {
-        valid, reason, chain: details?.chain, forName: details?.forName, fellBack: log.some(l => /using TLS 1.2 with RSA key exchange/.test(l)),
+        valid, reason, chain: details?.chain, forName: details?.forName,
         why: valid ? '' : whyNotValid(reason, name, details), about: details ? describeCertificate(details, !vouched(valid, details)) : '',
     }
 }
@@ -1192,12 +1047,10 @@ test('the certificate check hears where the certificate\'s chain stands, which t
 })
 
 test('a self-signed certificate is called so whatever its key usage: Windows\' own, and a gateway\'s', { skip: !encipherOnly || !signing || !unrestricted || !testAuthority }, async () => {
-    // Windows' own (key and data encipherment, which Node doesn't take for one that signed itself), checked as it is
-    // and after the fallback Electron's TLS library makes it take; a self-signed gateway's (digital signature and key
-    // encipherment); and openssl's own kind.
-    for (const [certificate, legacy] of [[encipherOnly!, false], [encipherOnly!, true], [signing!, false], [unrestricted!, false]] as const) {
-        const self = await checked(certificate, { legacy })
-        assert.equal(self.fellBack, legacy)
+    // Windows' own (key and data encipherment, which OpenSSL doesn't take for one that signed itself); a self-signed
+    // gateway's (digital signature and key encipherment); and openssl's own kind.
+    for (const certificate of [encipherOnly!, signing!, unrestricted!]) {
+        const self = await checked(certificate)
         assert.deepEqual([self.valid, self.chain, self.forName], [false, 'self-signed', true])
         assert.equal(self.why, 'it is self-signed (made by the server itself, as RDP servers make theirs unless given one), so no certificate authority vouches for it')
         assert.match(self.about, /: its own word, which nothing here has checked/)
@@ -1404,7 +1257,7 @@ const open = () => new Promise(resolve => { const socket = net.connect(Number(po
 })()
 `
 
-test('in Electron: where a certificate\'s chain stands, and whether it is for the name, as its TLS library (BoringSSL) leaves them to say', {
+test('in Electron: where a certificate\'s chain stands, and whether it is for the name, as the plugin reads them there (BoringSSL)', {
     skip: !process.env.TRD_ELECTRON ? 'set TRD_ELECTRON to an Electron binary to run this' : !encipherOnly || !endEntity || !crossSigned || !testAuthority,
 }, async t => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'trd-electron-'))
@@ -1429,10 +1282,8 @@ test('in Electron: where a certificate\'s chain stands, and whether it is for th
             server.close()
         }
     }
-    // Windows' own: its TLS library refuses the first handshake (KEY_USAGE_BIT_INCORRECT), and the fallback's reports it
-    // only as a signature it can't check (UNABLE_TO_VERIFY_LEAF_SIGNATURE). Self-signed all the same.
+    // Windows' own: self-signed, though OpenSSL doesn't take it for its own issuer (its key usage).
     const windows = await run(encipherOnly!, 'server.test', testAuthority!.ca)
-    assert.ok(windows.log.some((l: string) => /using TLS 1.2 with RSA key exchange/.test(l)), windows.log.join('\n'))
     assert.deepEqual([windows.valid, windows.chain, windows.forName], [false, 'self-signed', true])
     assert.match(windows.why, /^it is self-signed \(/)
     // Signed with the key of a server's certificate from the trusted authority: no authority, no word of organisations.
@@ -1698,18 +1549,6 @@ test('a self-signed or expired certificate is not valid, and says which', { skip
     }
 })
 
-test('after the fallback to TLS 1.2, the certificate is checked as on the first handshake', { skip: !encipheringOnly || !testAuthority }, async t => {
-    // The first connection fails as Electron's TLS does with such a certificate (its TLS library's own refusal); the
-    // second, made with the fallback, is the one checked: valid for its name, the name sent as SNI there too.
-    const server = await tlsServer(encipheringOnly!)
-    const handshakes = refusedByTls([1])
-    t.after(() => { handshakes.restore(); server.close() })
-    const { calls, sni, log } = await heard(server, { serverName: 'server.test', tls: { ca: testAuthority!.ca } })
-    assert.ok(log.some(l => /using TLS 1.2 with RSA key exchange/.test(l)), log.join('\n'))
-    assert.equal(server.opened(), 2)
-    assert.deepEqual([calls, sni], [[[true, '']], 'server.test'])
-})
-
 test('a certificate refused by the check: the client gets no response, and nothing it sent goes to the server', { skip: !forServer }, async t => {
     const server = await tlsServer(forServer!)
     const log: string[] = []
@@ -1732,4 +1571,152 @@ test('a certificate refused by the check: the client gets no response, and nothi
     assert.equal(messages[0].toString('hex'), '300fa00402020d3ea1073005a003020101')
     await soon(50)
     assert.equal(Buffer.concat(server.received).length, 0, 'nothing after the handshake reached the server')
+})
+
+test('the last of what a server sends over an SSH channel before closing it reaches a client that was behind', { skip: !unrestricted }, async t => {
+    // The channel ends and closes right after the server's last bytes, while the client isn't reading: what the stream
+    // still holds, and what waits for the helper's credit, goes before the stream closes (its end reason, say).
+    const { SSHChannelStream } = require('../../dist/sshChannelStream.js')
+    const { Subject } = require('rxjs')
+    const secureContext = tls.createSecureContext({ key: unrestricted!.key, cert: unrestricted!.cert })
+    const PDU = 16384
+    const total = 24 * 1024 * 1024
+    const server = net.createServer(socket => {
+        socket.on('error', () => { })
+        socket.once('data', () => {
+            socket.write(confirm(2))
+            const secure = new tls.TLSSocket(socket, { isServer: true, secureContext })
+            secure.on('error', () => { })
+            secure.once('secure', () => {
+                const frame = Buffer.alloc(PDU, 0x41)
+                frame.writeUInt8(3, 0)
+                frame.writeUInt8(0, 1)
+                frame.writeUInt16BE(PDU, 2)
+                for (let sent = 0; sent < total; sent += PDU) {
+                    secure.write(frame)
+                }
+                secure.end()
+            })
+        })
+    })
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+    const port = (server.address() as net.AddressInfo).port
+    // An SSH channel as russh hands it over: its data as it comes, then its EOF and close.
+    const open = () => new Promise<Duplex>(resolve => {
+        const socket = net.connect(port, '127.0.0.1', () => {
+            const channel = {
+                data$: new Subject(), eof$: new Subject(), closed$: new Subject(),
+                write: (data: Uint8Array) => new Promise<void>(done => socket.write(data, () => done())),
+                eof: async () => { socket.end() },
+                close: async () => { socket.destroy() },
+            }
+            socket.on('data', d => channel.data$.next(new Uint8Array(d.buffer, d.byteOffset, d.byteLength)))
+            socket.on('end', () => channel.eof$.next())
+            socket.on('close', () => channel.closed$.next())
+            socket.on('error', () => { })
+            resolve(new SSHChannelStream(channel))
+        })
+    })
+    const log: string[] = []
+    const proxy = await startRDCleanPathProxy(open, () => { }, (m: string) => log.push(m), { withoutNla: () => { } })
+    const ws = new WebSocket(proxy.url)
+    t.after(() => { ws.terminate(); proxy.close(); server.close() })
+    ws.on('error', () => { })
+    await opened(ws)
+    let received = 0
+    let first = true
+    ws.on('message', (d: Buffer) => {
+        if (first) {
+            first = false
+        } else {
+            received += d.length
+        }
+    })
+    ws.send(request(proxy.token))
+    for (let i = 0; i < 80 && first; i++) {
+        await soon(25)
+    }
+    ws.pause()
+    await soon(1500)
+    ws.resume()
+    for (let i = 0; i < 600 && received < total && ws.readyState === WebSocket.OPEN; i++) {
+        await soon(25)
+    }
+    assert.equal(received, total, `${received} of ${total} bytes; ${proxy.failure ?? ''} ${log.join('\n')}`)
+})
+
+test('a stream that hands over megabytes at once (an SSH channel catching up after a pause) is carried within the window, whole', { skip: !unrestricted }, async t => {
+    // SSHChannelStream gives what it held while its reader paused in one piece, however large: the plugin's side has to
+    // send the helper no more than the window's credit allows, and keep the rest until the helper takes some.
+    const secureContext = tls.createSecureContext({ key: unrestricted!.key, cert: unrestricted!.cert })
+    const PDU = 16384
+    const total = 32 * 1024 * 1024
+    const server = net.createServer(socket => {
+        socket.on('error', () => { })
+        socket.once('data', () => {
+            socket.write(confirm(2))
+            const secure = new tls.TLSSocket(socket, { isServer: true, secureContext })
+            secure.on('error', () => { })
+            secure.once('secure', () => {
+                const frame = Buffer.alloc(PDU, 0x41)
+                frame.writeUInt8(3, 0)
+                frame.writeUInt8(0, 1)
+                frame.writeUInt16BE(PDU, 2)
+                for (let sent = 0; sent < total; sent += PDU) {
+                    secure.write(frame)
+                }
+            })
+        })
+    })
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+    const port = (server.address() as net.AddressInfo).port
+    // What arrives is held and handed over every 100 ms, all of it in one chunk.
+    const open = () => new Promise<Duplex>(resolve => {
+        const socket = net.connect(port, '127.0.0.1', () => {
+            let held: Buffer[] = []
+            const stream: Duplex = new Duplex({
+                read () { },
+                write (chunk, _encoding, done) { socket.write(chunk, () => done()) },
+                destroy (error, done) { clearInterval(timer); socket.destroy(); done(error) },
+            })
+            const timer = setInterval(() => {
+                if (held.length) {
+                    stream.push(Buffer.concat(held))
+                    held = []
+                }
+            }, 100)
+            socket.on('data', d => held.push(d))
+            socket.on('error', e => stream.destroy(e))
+            resolve(stream)
+        })
+    })
+    const log: string[] = []
+    const proxy = await startRDCleanPathProxy(open, () => { }, (m: string) => log.push(m), { withoutNla: () => { } })
+    const ws = new WebSocket(proxy.url)
+    t.after(() => { ws.terminate(); proxy.close(); server.close() })
+    ws.on('error', () => { })
+    await opened(ws)
+    let received = 0
+    let first = true
+    ws.on('message', (d: Buffer) => {
+        if (first) {
+            first = false
+        } else {
+            received += d.length
+        }
+    })
+    ws.send(request(proxy.token))
+    // The client stops reading for a while, as a busy window does: the helper stops reading the stream, whose
+    // window fills, while the stream goes on handing over what it held.
+    for (let i = 0; i < 80 && first; i++) {
+        await soon(25)
+    }
+    ws.pause()
+    await soon(1500)
+    ws.resume()
+    for (let i = 0; i < 600 && received < total && ws.readyState === WebSocket.OPEN; i++) {
+        await soon(25)
+    }
+    assert.equal(received, total, `${received} of ${total} bytes; ${proxy.failure ?? ''} ${log.join('\n')}`)
+    assert.equal(proxy.failure, null)
 })

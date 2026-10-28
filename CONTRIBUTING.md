@@ -52,6 +52,7 @@ any reader. Read back saved GitHub descriptions and release notes before conside
 ```sh
 npm install
 npm run build          # or: npm run watch
+npm run build:helper   # this computer's Go network helper for linked testing
 scripts/sandbox.sh     # a separate Tabby with this checkout linked in (macOS); restart it to load a new build
 ```
 
@@ -63,9 +64,9 @@ The suites run against real machines; set up a Linux test host as described in [
 then `npm test` ([test/README.md](test/README.md)). Please run the suites your change touches, and add checks for new
 behavior. `npm test -- --packed` checks the plugin as npm would install it. The suites and their harness are
 TypeScript; `npm run typecheck` checks the plugin and them (CI runs the build and `npm run typecheck:test`).
-`npm run test:unit` runs the unit tests, which need no test machine. Three of them run the plugin's proxy in Electron,
-whose TLS library is the one Tabby has (the fallback for Windows' own certificate, why the certificate question says a
-certificate isn't valid, and ending a direct connection with TLS over its socket), when `TRD_ELECTRON` names an
+`npm run test:unit` and `npm run test:helper` need no test machine. The proxy tests verify TLS 1.3 with a certificate
+like Windows' default one. The Electron proxy test checks that Tabby's runtime starts the helper and carries direct,
+SSH and gateway-like streams when `TRD_ELECTRON` names an
 Electron binary that may run as Node (an app's with that fuse on, such as Visual Studio Code's `Contents/MacOS/Code`,
 or the `electron` npm package's: `node -p "require('electron')"` in a folder where it is installed); without it, they
 are skipped. CI runs them on Linux in the Electron of the Tabby release the plugin is qualified on.
@@ -75,6 +76,10 @@ with `npm install --package-lock-only --ignore-scripts --prefix scripts/electron
 review all dependency and integrity changes, and run the proxy tests with that binary. CI installs this tree using
 `npm ci --ignore-scripts`, then explicitly runs only Electron's locked binary installer, which checks the downloaded
 archive against Electron's release checksums. The project does not install Electron as a plugin dependency.
+
+`npm test -- helper` starts the helper in Tabby and tests its relay and crash recovery without a remote machine.
+For a packed test, build every target first with `npm run build:helpers`, then run
+`npm test -- --packed --hidden helper`.
 
 For a Tabby host upgrade, run `npm run build` and then `npm run test:smoke -- --tabby <binary> --expect-xterm <major>`.
 This checks a locally packed plugin in an isolated host profile, with dummy credential storage. Add `--require-rdp`
@@ -118,7 +123,8 @@ else the lock would install at run time. The committed `package-lock.json` locks
 for `npm ci`; npm never publishes it. Build with Node 22.12 or newer on the Node 22 line (CI uses Node 22). Angular 21.2.25 is a development dependency used for type checking;
 Tabby supplies Angular at runtime. The plugin uses TypeScript compilation, not Angular template compilation.
 
-Create distributable packages with `npm run pack:release -- --pack-destination <directory>`, not a direct `npm pack`.
+Build every network helper with `npm run build:helpers`, then create distributable packages with
+`npm run pack:release -- --pack-destination <directory>`, not a direct `npm pack`.
 The packer stages files without changing the checkout, removes development dependencies and every script but `test`
 from the published manifest (the test script says how the tests run, from this repository; npm never runs it on
 install, and scanners read it as the package having tests), and publishes no shrinkwrap (0.5.5's packages carried a runtime-only one; check-vendor still checks
@@ -127,11 +133,15 @@ plugin installations. CI audits the complete development tree too; excluding too
 keeping those tools patched. Upgrade dependencies through
 a reviewed change, run `npm ci --ignore-scripts`, build, and check the packed package before releasing.
 
-**FreeRDP packages.** The plugin's package holds no native code. The FreeRDP helper is published in a package per
+**Native helpers.** The plugin's package includes the Go network helper for macOS, Windows and Linux on supported
+architectures. `scripts/build-helper.mjs --all` uses the pinned Go toolchain and records every binary in
+`bin/SHA256SUMS`. The release workflow builds them on Linux and independently on macOS; the package check compares
+their lists byte for byte. Before approving an npm stage, rebuild the helpers from the release tag and compare its
+`bin/SHA256SUMS` to the staged package. The FreeRDP helper is published in a package per
 platform, `@tabby-rdp/freerdp-<platform>` (`linux-x64`, say), made from the committed `native/bin/<platform>` for each
 platform in `tabbyRdp.freerdpPlatforms`. The published `package.json` names each one as an optional dependency at the
 plugin's own version, so npm installs only the one for the computer, along with the plugin. The committed `package.json`
-names none, so the lock never has to resolve packages that are published with the release (package format 4,
+names none, so the lock never has to resolve packages that are published with the release (package format 5,
 `scripts/package-metadata.mjs`). `pack:release` makes all of them: the plugin's package first, then one per platform. To
 try an unreleased build, install the plugin's package together with the one for the computer, in Tabby's plugin folder:
 `npm install ./tabby-rdp-<version>.tgz ./tabby-rdp-freerdp-<platform>-<version>.tgz`. On its own, the plugin's package
@@ -170,7 +180,7 @@ against a build of your own:
 ```sh
 npm stage download <stage-id>     # saves tabby-rdp-<version>-<stage-id>.tgz
 git worktree add /tmp/tabby-rdp-v<version> v<version>     # the tag, built here: tabby-rdp-<version>.tgz
-(cd /tmp/tabby-rdp-v<version> && npm ci --ignore-scripts && npm run build && npm run pack:release)
+(cd /tmp/tabby-rdp-v<version> && npm ci --ignore-scripts && npm run build && npm run build:helpers && npm run pack:release)
 node scripts/check-vendor.mjs package tabby-rdp-<version>-<stage-id>.tgz --same-as /tmp/tabby-rdp-v<version>/tabby-rdp-<version>.tgz
 ```
 

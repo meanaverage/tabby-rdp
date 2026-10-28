@@ -922,13 +922,44 @@ async function standInGateway (certificate: { key: Buffer, cert: Buffer }) {
     return { port, got: () => Buffer.concat(got).toString('latin1'), close: () => { server.close(); sockets.forEach(s => s.destroy()) } }
 }
 
+/**
+ * Connects once through the desktop's proxy (in the network helper) to pc.corp behind `gateway`, the gateway's
+ * certificate decided on by the service for `s`, and the account asked for only once it is accepted: resolves when the
+ * tunnel is up, rejects with the proxy's failure otherwise. `options`: the proxy's (its authorities, say).
+ */
+async function through (svc: any, gateway: { host: string, port: number }, s: any, options: Record<string, unknown> = {}): Promise<void> {
+    const { startRDCleanPathProxy } = require('../../dist/rdcleanpath.js')
+    const WebSocket = require('ws')
+    let opened = false
+    const proxy = await startRDCleanPathProxy(async () => ({
+        gateway, target: { host: 'pc.corp', port: 3389 }, timeoutMs: 300,
+        via: () => new Promise<net.Socket>(resolve => { const socket = net.connect(gateway.port, '127.0.0.1', () => resolve(socket)) }),
+        checkCertificate: (fingerprint: string, valid: boolean, reason: string) => svc.checkGatewayCertificate(s, gateway, fingerprint, valid, reason),
+        account: () => ({ username: 'alice', password: 'Secret1' }),
+        opened: () => { opened = true },
+    }), () => { }, () => { }, { withoutNla: () => { }, ...options })
+    try {
+        const ws = new WebSocket(proxy.url)
+        ws.on('error', () => { })
+        await new Promise(resolve => ws.once('open', resolve))
+        const closed = new Promise(resolve => ws.once('close', resolve))
+        const der = (tag: number, content: Buffer) => Buffer.concat([Buffer.from([tag, content.length]), content])
+        ws.send(der(0x30, Buffer.concat([
+            der(0xa0, der(0x02, Buffer.from([0x0d, 0x3e]))), der(0xa2, der(0x0c, Buffer.from('pc.corp:3389'))),
+            der(0xa3, der(0x0c, Buffer.from(proxy.token))), der(0xa6, der(0x04, Buffer.from([3, 0, 0, 11, 6, 0xe0, 0, 0, 0, 0, 0]))),
+        ])))
+        await closed
+        if (!opened) {
+            throw new Error(proxy.failure ?? 'the connection ended')
+        }
+    } finally {
+        proxy.close()
+        await proxy.stopped
+    }
+}
+
 test('a gateway\'s certificate is decided on before any of the sign-in goes to the gateway', { skip: !gatewayAuthority || !gatewayIssued || !gatewaySelfSigned }, async t => {
-    const { openThroughGateway } = require('../../dist/gateway.js')
     const { svc, store } = service()
-    const through = (gateway: { host: string, port: number }, s: any, options: Record<string, unknown> = {}) => openThroughGateway(
-        () => new Promise<net.Socket>(resolve => { const socket = net.connect(gateway.port, '127.0.0.1', () => resolve(socket)) }), gateway,
-        { username: 'alice', password: 'Secret1' }, { host: 'pc.corp', port: 3389 },
-        (fingerprint: string, valid: boolean, reason: string) => svc.checkGatewayCertificate(s, gateway, fingerprint, valid, reason), { timeoutMs: 300, ...options })
     const self = await standInGateway(gatewaySelfSigned!)
     const issued = await standInGateway(gatewayIssued!)
     t.after(() => { self.close(); issued.close() })
@@ -939,24 +970,24 @@ test('a gateway\'s certificate is decided on before any of the sign-in goes to t
     const s = session(spec, 'rdp#pc.corp:3389', 'Trust the certificate')
     svc.sessions.set(pane, s)
     const gateway = { host: '127.0.0.1', port: self.port }
-    await assert.rejects(through(gateway, s), /hasn't been seen before/)
+    await assert.rejects(through(svc, gateway, s), /hasn't been seen before/)
     await new Promise(resolve => setTimeout(resolve, 50))
     assert.equal(self.got(), '')
     assert.equal(s.certificateProblem.reason, 'DEPTH_ZERO_SELF_SIGNED_CERT')
     // Trusted: the next attempt goes on to the sign-in (NTLM's first message reaches the gateway, which doesn't answer here).
     assert.equal(await svc.refusedCertificate(pane, target, spec, s, { port: 3389 }, s.certificateProblem), true)
-    await assert.rejects(through(gateway, s), /didn't answer in time/)
+    await assert.rejects(through(svc, gateway, s), /didn't answer in time/)
     assert.match(self.got(), /^RDG_OUT_DATA [^\r]*\r\n(.*\r\n)*Authorization: NTLM /)
     // Changed since: stopped again before the sign-in.
     store.trustedCertificates = [{ desktop: `gateway#127.0.0.1:${self.port}`, sha256: A, authority: false }]
     const before = self.got().length
-    await assert.rejects(through(gateway, s), /is not the one remembered/)
+    await assert.rejects(through(svc, gateway, s), /is not the one remembered/)
     await new Promise(resolve => setTimeout(resolve, 50))
     assert.equal(self.got().length, before)
     // One this computer's certificate authorities vouch for (here the test's own): no question, remembered as theirs.
     const valid = { host: '127.0.0.1', port: issued.port }
     const fresh = session(spec, 'rdp#pc.corp:3389')
-    await assert.rejects(through(valid, fresh, { tls: { ca: gatewayAuthority!.ca } }), /didn't answer in time/)
+    await assert.rejects(through(svc, valid, fresh, { tls: { ca: gatewayAuthority!.ca } }), /didn't answer in time/)
     assert.equal(fresh.certificateProblem, null)
     assert.match(issued.got(), /Authorization: NTLM /)
     assert.equal(store.trustedCertificates.find((e: any) => e.desktop === `gateway#127.0.0.1:${issued.port}`)?.authority, true)

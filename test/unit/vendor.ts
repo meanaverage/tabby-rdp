@@ -13,6 +13,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { gunzipSync, gzipSync } from 'node:zlib'
 import { freeRDPFiles, freeRDPMetadata, freeRDPPackage, runtimeMetadata } from '../../scripts/package-metadata.mjs'
+import { helperFile, SUMS, TARGETS } from '../../scripts/build-helper.mjs'
 import { MANIFEST, checkBase, checkPackage, checkTree, compareRebuilt, sha256 } from '../../scripts/check-vendor.mjs'
 
 const root = fileURLToPath(new URL('../../', import.meta.url))
@@ -192,18 +193,18 @@ test("CI's rebuild comparison refuses a link in vendor/, committed or rebuilt", 
     assert.deepEqual(result.odd, ['vendor/linked.js (rebuilt, not a file)'])
 })
 
-type Entry = { path: string, data?: string | Buffer, type?: string, link?: string, prefix?: string, magic?: string }
+type Entry = { path: string, data?: string | Buffer, type?: string, link?: string, prefix?: string, magic?: string, mode?: string }
 
 /** A gzipped tar of the entries, as npm pack writes one (ustar headers), then its end: two empty blocks, or `end`. A
  * type of 2 is a link, 5 a folder; a prefix is the folder part of a long name, which ustar keeps apart. Entries in more
  * come after a single empty block, where npm's tar reader reads on. */
 function tarball (entries: Entry[], more: Entry[] = [], end = Buffer.alloc(1024)): string {
     const blocks: Buffer[] = []
-    const add = ({ path: name, data = '', type = '0', link = '', prefix = '', magic = 'ustar\u000000' }: Entry) => {
+    const add = ({ path: name, data = '', type = '0', link = '', prefix = '', magic = 'ustar\u000000', mode = '0000644' }: Entry) => {
         const body = Buffer.from(data)
         const header = Buffer.alloc(512)
         header.write(name, 0, 100, 'utf8')
-        header.write('0000644\0', 100, 'latin1')
+        header.write(`${mode}\0`, 100, 'latin1')
         header.write('0000000\0', 108, 'latin1')
         header.write('0000000\0', 116, 'latin1')
         header.write(`${body.length.toString(8).padStart(11, '0')}\0`, 124, 'latin1')
@@ -446,7 +447,7 @@ test('the publish check fails a tarball npm would read otherwise, rather than ch
  * exit code, what it printed, and what it added to the run's summary. */
 function command (dir: string, ...args: string[]): { status: number | null, output: string, summary: string } {
     fs.mkdirSync(path.join(dir, 'scripts'), { recursive: true })
-    for (const script of ['check-vendor.mjs', 'package-metadata.mjs']) {
+    for (const script of ['check-vendor.mjs', 'package-metadata.mjs', 'build-helper.mjs']) {
         fs.copyFileSync(path.join(root, 'scripts', script), path.join(dir, 'scripts', script))
     }
     const summary = `${fresh('summary')}.md`
@@ -558,7 +559,7 @@ test('format 1 (0.5.5): runtime publication excludes development tools and prese
     assert.ok(verify(contents.map(([name, data]) => [name, name === 'npm-shrinkwrap.json' ? JSON.stringify(altered) : data])).length,
         'a changed runtime dependency must fail publication')
     assert.throws(() => runtimeMetadata(manifest, { ...lock, version: '9.9.9' }), /disagree/)
-    assert.throws(() => runtimeMetadata({ ...manifest, tabbyRdp: { packageFormat: 5 } }, lock), /packageFormat/)
+    assert.throws(() => runtimeMetadata({ ...manifest, tabbyRdp: { packageFormat: 6 } }, lock), /packageFormat/)
 })
 
 test('format 3: as format 2, and package.json publishes its test script, the only script it publishes', () => {
@@ -713,4 +714,26 @@ test("format 4: the plugin's package holds no native code, and a revision before
         ['native/bin/linux-x64/tabby-freerdp: in the plugin\'s package, where format 4 publishes no native code (it is in its platform\'s FreeRDP package)'])
     const old = released()
     assert.match(checkPackage(old, tarball(entries(helperPackage()))).problems.join('\n'), /a FreeRDP package, which v1\.2\.3 doesn't publish/)
+})
+
+test('format 5: the plugin carries only the seven executable network helpers verified by an independent build', () => {
+    const manifest = { ...FORMAT_4, tabbyRdp: { ...FORMAT_4.tabbyRdp, packageFormat: 5 } }
+    const lock = { ...FORMAT_4_LOCK, packages: { ...FORMAT_4_LOCK.packages, '': { ...FORMAT_4_LOCK.packages[''], tabbyRdp: manifest.tabbyRdp } } }
+    const dir = repository(BUILD, { 'package.json': JSON.stringify(manifest), 'package-lock.json': JSON.stringify(lock) })
+    const metadata = runtimeMetadata(manifest, lock)
+    const helpers = Object.fromEntries(TARGETS.map(target => [helperFile(target), `helper for ${target.platform}-${target.arch}\n`]))
+    const sums = `# built\n${Object.entries(helpers).map(([file, data]) => `${sha256(Buffer.from(data))}  ${file}`).join('\n')}\n`
+    const contents = [...packaged().filter(([file]) => file !== 'package.json' && file !== 'README.md'), ...Object.entries(metadata), ...Object.entries(DIST)]
+    const pack = (bin: Record<string, string>, executable = true) => tarball([...entries(contents),
+        ...Object.entries(bin).map(([file, data]) => ({ path: `package/${file}`, data,
+            mode: file === SUMS || file.endsWith('.exe') || !executable ? '0000644' : '0000755' }))])
+    const good = { ...helpers, [SUMS]: sums }
+    assert.deepEqual(checkPackage(dir, pack(good), { revision: 'HEAD', helpersSha256: sha256(Buffer.from(sums)) }).problems, [])
+    const first = helperFile(TARGETS[0])
+    const { [first]: _missing, ...withoutOne } = good
+    assert.match(checkPackage(dir, pack(withoutOne), { revision: 'HEAD' }).problems.join('\n'), /missing from the package/)
+    assert.match(checkPackage(dir, pack({ ...good, [first]: 'changed' }), { revision: 'HEAD' }).problems.join('\n'), /not what bin\/SHA256SUMS records/)
+    assert.match(checkPackage(dir, pack(good, false), { revision: 'HEAD' }).problems.join('\n'), /not executable/)
+    assert.match(checkPackage(dir, pack({ ...good, 'bin/other': 'x' }), { revision: 'HEAD' }).problems.join('\n'), /unexpected file in bin/)
+    assert.match(checkPackage(dir, pack(good), { revision: 'HEAD', helpersSha256: '0'.repeat(64) }).problems.join('\n'), /differs from an independent helper build/)
 })

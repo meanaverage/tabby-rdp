@@ -20,7 +20,7 @@ import { npmCommand } from '../scripts/npm-command.mjs'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const LINUX_SUITES = ['e2e', 'desk', 'resize', 'keyboard', 'focus', 'actions', 'clipboard', 'files', 'audio', 'microphone', 'graphics', 'reconnect', 'desktops', 'profiles', 'direct', 'certificates', 'status', 'wake', 'help', 'nested', 'vms', 'headless', 'takeover']
-const ALL_SUITES = [...LINUX_SUITES, 'freerdp', 'wasm-isolation', 'windows', 'winhost', 'hyperv', 'gateway', 'xrdp', 'rds', 'pdu-trace', 'fps', 'trd-pty', 'screenshots', 'demo', 'smoke-host', 'smoke-rdp', 'smoke-updates', 'visual-host', 'visual-smoke', 'visual-linux', 'visual-windows']
+const ALL_SUITES = [...LINUX_SUITES, 'helper', 'freerdp', 'wasm-isolation', 'windows', 'winhost', 'hyperv', 'gateway', 'xrdp', 'rds', 'pdu-trace', 'fps', 'trd-pty', 'screenshots', 'demo', 'smoke-host', 'smoke-rdp', 'smoke-updates', 'visual-host', 'visual-smoke', 'visual-linux', 'visual-windows']
 
 const args = process.argv.slice(2)
 const flag = (name: string) => args.includes(name)
@@ -38,7 +38,7 @@ for (const s of suites) {
     }
 }
 const selected = suites.length ? suites : LINUX_SUITES
-const smoke = selected.some(s => s === 'freerdp' || s.startsWith('smoke-') || s.startsWith('visual-'))
+const smoke = selected.some(s => s === 'helper' || s === 'freerdp' || s.startsWith('smoke-') || s.startsWith('visual-'))
 if (flag('--require-rdp') && selected.includes('smoke-rdp') && !process.env.TRD_TEST_HOST) {
     console.error('--require-rdp needs TRD_TEST_HOST; live RDP coverage cannot be skipped')
     process.exit(2)

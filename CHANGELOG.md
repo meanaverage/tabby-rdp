@@ -2,6 +2,12 @@
 
 ## 0.6.0-rc.5 (unreleased)
 
+**Fixed**
+- Windows' default self-signed RDP certificate now connects with forward-secret TLS in IronRDP ([#102](https://github.com/meanaverage/tabby-rdp/issues/102)). The RDP connection runs in the plugin's Go network helper, which accepts that certificate's key usage while still checking its fingerprint or authority before sign-in. TLS 1.3 and TLS 1.2 with ECDHE are supported; RSA key exchange is no longer offered, so a server that only offers it cannot connect. The negotiated version and cipher are shown in the connection log.
+
+**Changed**
+- The plugin package includes the network helper for supported macOS, Windows and Linux architectures. Tabby starts one per open IronRDP desktop and stops it when the desktop closes. FreeRDP remains an optional, experimental client with its own helper package.
+
 ## 0.6.0-rc.4
 
 **Added**

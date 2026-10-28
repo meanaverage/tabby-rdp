@@ -22,10 +22,20 @@ jobs:
         with:
           node-version: 22
           cache: npm
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: 1.27.1
+          cache: false
       - run: npm ci
       - name: Audit all locked dependencies, including build and QA tools
         run: npm audit --audit-level=low
       - run: npm run build
+      - run: npm run build:helpers
+      - name: Network helper checks
+        run: |
+          test -z "$(gofmt -l helper)"
+          go -C helper vet ./...
+          go -C helper test -race ./...
       - name: Type check the tests
         run: npm run typecheck:test
       - name: Unit tests
@@ -43,6 +53,9 @@ jobs:
           grep -q 'vendor/iron-remote-desktop-rdp.js' plugin.txt
           grep -q 'vendor/ironrdp_web_bg.wasm' plugin.txt
           grep -q 'remote/trd-pty.py' plugin.txt
+          grep -q 'bin/SHA256SUMS' plugin.txt
+          for platform in darwin-arm64 darwin-x64 linux-arm linux-arm64 linux-x64; do grep -q "bin/$platform/tabby-rdp-proxy" plugin.txt; done
+          for platform in win32-arm64 win32-x64; do grep -q "bin/$platform/tabby-rdp-proxy.exe" plugin.txt; done
           # No shrinkwrap: package.json pins the runtime dependencies exactly (scripts/package-metadata.mjs).
           if grep -qE ' (npm-shrinkwrap|package-lock)\.json' plugin.txt; then exit 1; fi
           if grep -qE ' (src|test|testbed|ironrdp)/' plugin.txt; then exit 1; fi
@@ -87,8 +100,13 @@ jobs:
         with:
           node-version: 22
           cache: npm
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: 1.27.1
+          cache: false
       - run: npm ci
       - run: npm run build
+      - run: npm run build:helper
       - name: Electron
         # Tabby 1.0.238 ships Electron 43.7.0. The separate manifest and lock pin the complete download toolchain.
         run: |
