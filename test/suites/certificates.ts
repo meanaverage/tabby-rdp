@@ -87,7 +87,7 @@ await suite('certificates', async t => {
 
     // 3. The desktop behind the host, first use: remembered without asking.
     await ev(`H.inZone(() => { H.config.store.remoteDesktop.desktops = [{ name: ${JSON.stringify(NAME)}, via: H.test.host, host: '127.0.0.1', port: 3389, kind: 'gnome', username: 'tabby' }]; H.config.save() })`)
-    const password = (await t.remote('H.pane', 'cat ~/.local/share/tabby-rdp/rdp-password')).trim()
+    const password = await t.gnomePassword('H.pane')
     const key = await ev(`return (await RD.targets.targetOf(H.pane)).key + '#${ID}'`)
     const k = JSON.stringify(key)
     await ev(`H.setTrusted(${k}, null)`)

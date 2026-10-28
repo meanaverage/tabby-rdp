@@ -83,7 +83,7 @@ await suite('wake', async t => {
         }
         await ev('await H.inZone(() => RD.desktop.showDesktop(H.pane))')
     }
-    const password = (await t.remote('H.pane', 'cat ~/.local/share/tabby-rdp/rdp-password')).trim()
+    const password = await t.gnomePassword('H.pane')
     const grdPort = Number((await t.remote('H.pane', 'grdctl --headless status 2>/dev/null | sed -n "s/.*Port: *//p" | head -n 1')).trim()) || 3389
 
     const machine = {

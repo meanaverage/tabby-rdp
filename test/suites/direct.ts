@@ -70,7 +70,7 @@ await suite('direct', async t => {
         await ev('await H.inZone(() => RD.desktop.showDesktop(H.pane))')
         check('own desktop connected (account created)', !!await waitFor('return H.connected(H.pane)', 40))
         await ev('H.inZone(() => RD.desktop.disconnect(H.pane))')
-        password = (await t.remote('H.pane', 'cat ~/.local/share/tabby-rdp/rdp-password')).trim()
+        password = await t.gnomePassword('H.pane')
         address = `${t.env.host}:3389`
         user = 'tabby'
         kind = 'gnome'

@@ -335,6 +335,8 @@ export interface TestContext {
     readFile: (file: string) => Promise<string | null>
     /** Runs a command on the remote of `pane` (a page expression, e.g. 'H.pane'), with optional stdin. */
     remote: (pane: string, command: string, stdin?: string) => Promise<string>
+    /** Reads the GNOME RDP password created for this remote machine. */
+    gnomePassword: (pane: string) => Promise<string>
     /** Changes plugin settings for the suite; the previous values come back at the end. */
     settings: (change: Partial<DesktopSettings>) => Promise<void>
     /**
@@ -433,6 +435,11 @@ export async function createTestContext (): Promise<{ t: TestContext, close: () 
         readFile (file: string) { return ev<string | null>(`try { return require('fs').readFileSync(${JSON.stringify(file)}, 'utf8') } catch { return null }`) },
         /** Runs a command on the remote of `pane` (a page expression, e.g. 'H.pane'), with optional stdin. */
         remote (pane: string, command: string, stdin = '') { return ev<string>(`return RD.execRemote(${pane}, ${JSON.stringify(command)}, ${JSON.stringify(stdin)})`) },
+        async gnomePassword (pane: string) {
+            const password = (await t.remote(pane, 'cat "$HOME/.local/share/tabby-rdp/hosts/$(cat /etc/machine-id)/rdp-password"')).trim()
+            if (!/^[0-9a-f]{36}$/.test(password)) throw new Error('GNOME RDP test credential is missing or invalid')
+            return password
+        },
         /** Changes plugin settings for the suite; the previous values come back at the end. */
         async settings (change: Partial<DesktopSettings>) {
             const before = await ev(`return JSON.stringify(RD.desktop.settings())`)

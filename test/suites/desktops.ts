@@ -42,7 +42,7 @@ await suite('desktops', async t => {
     await ev('await H.inZone(() => RD.desktop.showDesktop(H.pane))')
     check('own desktop connected (account created)', !!(await t.waitFor('return H.connected(H.pane)', 40)))
     await ev('H.inZone(() => RD.desktop.disconnect(H.pane))')
-    const password = (await t.remote('H.pane', 'cat ~/.local/share/tabby-rdp/rdp-password')).trim()
+    const password = await t.gnomePassword('H.pane')
     const key = await ev<string>(`return (await RD.targets.targetOf(H.pane)).key + '#${ID}'`)
     const keychainWorks = await t.keychainWorks()
     if (keychainWorks) {
