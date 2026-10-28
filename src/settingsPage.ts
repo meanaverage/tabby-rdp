@@ -268,6 +268,8 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
                     </select>
                 </div>` + `
                 <h5>Picture</h5>
+                ${this.toggleLine('relaxOrderChecks', 'Relax drawing order checks (FreeRDP)',
+                    'For servers or PAM proxies that send drawing orders they did not announce. Try this if FreeRDP shows a black screen or reports an unannounced order. Applies on the next connection; IronRDP is unaffected. Each desktop can override it.')}
                 <div class="form-line">
                     <div class="header">
                         <div class="title">When the pane is resized</div>

@@ -5,11 +5,11 @@
     "sha256": "9ccb8357bf0188044a460de775c7ea289ca7d2a2a917eca0f0a7c4dc9c8b08ea"
   },
   "opensslSource": null,
-  "version": "tabby-freerdp IPC 2; FreeRDP 3.32.2",
+  "version": "tabby-freerdp IPC 3; FreeRDP 3.32.2",
   "platform": "darwin",
   "arch": "arm64",
   "buildSources": {
-    "native/main.c": "5ae0d6ecc14e775e312863335d1a140c591cd01cbce8381c91c08257506ad6a7",
+    "native/main.c": "79f9e851991f7de0a9e52587f6865f682540eafc69f3a78615e5dd016efaad93",
     "native/options.cmake": "228ae20f83200a8a76a6a05bf73deb2b9aa94487b0ffca023bbb8fefd76cd1b8",
     "native/CMakeLists.txt": "659585c5dc95ef68bb755290be39fa1c517097728e784bb30ec74c616f6708aa",
     "scripts/build-freerdp.mjs": "bee69bc743102493457586fa49b5539fb02c9e1d7b52ef2b6306146a32a65118",
@@ -27,11 +27,11 @@
     },
     {
       "path": "libfreerdp-client3.3.dylib",
-      "sha256": "5094fbe811f4b61ada54e0d8a7a32009cc33bf660431b8be98c639dab30944ef"
+      "sha256": "827d0ab8fea5a0966b518bd06260fdfb4700cfe080f6b0ebfe9250b2297d1cb3"
     },
     {
       "path": "libfreerdp3.3.dylib",
-      "sha256": "b434cf1a8584b7677e06ce4cc1ebbc28f73300f597848d5c97a9c39d3270e612"
+      "sha256": "2e6ed65c32ffc240b03348b73984193db8ce3558637168bf46395dc967269235"
     },
     {
       "path": "libssl.3.dylib",
@@ -39,7 +39,7 @@
     },
     {
       "path": "libwinpr3.3.dylib",
-      "sha256": "179192d2bf8106763fd05245df9d229322b2355eae0db1767120ceaf8502bca8"
+      "sha256": "fa4b4627087a66f7ce93f3e96e80c9344609075b22a2b20d45a1f511c7412151"
     },
     {
       "path": "licenses/FreeRDP-LICENSE",
@@ -63,7 +63,7 @@
     },
     {
       "path": "tabby-freerdp",
-      "sha256": "889d7c3ca09dabb7decd2df884a6ed3bd46f80e1e0c40f58fb96754f4e336890"
+      "sha256": "018a284417b40d6a7c318d96fca5c7fa90d92a6db57fabad774420a35993478f"
     }
   ]
 }

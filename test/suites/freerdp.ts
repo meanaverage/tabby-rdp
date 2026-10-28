@@ -15,7 +15,8 @@ await suite('freerdp', async t => {
         await H.inZone(() => RD.injector.get(require('tabby-core').ProfilesService).openNewTabForProfile({
             id: 'rdp:freerdp-test', type: 'rdp', name: 'FreeRDP test', options: {
                 host: ${JSON.stringify(address.host)}, port: ${address.port}, kind: ${JSON.stringify(t.env.direct.kind)},
-                username: ${JSON.stringify(t.env.direct.user)}, client: 'freerdp', clipboard: 'off', via: '', gateway: '', account: null
+                username: ${JSON.stringify(t.env.direct.user)}, client: 'freerdp', relaxOrderChecks: false,
+                clipboard: 'off', via: '', gateway: '', account: null
             }
         }))
         for (let i = 0; i < 80; i++) {
@@ -124,8 +125,8 @@ await suite('freerdp', async t => {
     await t.ev('H.inZone(() => RD.desktop.disconnect(H.nativePane))')
     t.check('disconnect reaps the native process', !!await t.waitFor(`try { process.kill(H.nativePid, 0); return false } catch { return true }`, 5))
     t.check('disconnect removes the native UI', await t.ev(`return !H.nativePane.element.nativeElement.querySelector('.trd-freerdp')`))
-    await t.ev('H.inZone(() => RD.desktop.showDesktop(H.nativePane))')
-    t.check('FreeRDP reconnects with the remembered certificate/NLA decisions', await settle())
+    await t.ev('H.nativePane.profile.options.relaxOrderChecks = true; H.inZone(() => RD.desktop.showDesktop(H.nativePane))')
+    t.check('FreeRDP reconnects with relaxed drawing-order checks and remembered trust decisions', await settle())
     t.check('reconnect has a new process and fresh pixels', !!await t.waitFor(`return H.session(H.nativePane)?.ui?.native?.child?.pid !== H.nativePid && H.canvas(H.nativePane)?.colors > 2`, 10))
     await t.dump('H.nativePane', 'freerdp-reconnected')
     await t.ev(`
@@ -145,6 +146,7 @@ await suite('freerdp', async t => {
         await t.ev(`
             H.inZone(() => RD.desktop.disconnect(H.nativePane))
             H.nativePane.profile.options.client = '${client}'
+            H.nativePane.profile.options.relaxOrderChecks = false
             H.inZone(() => RD.desktop.showDesktop(H.nativePane))
         `)
         t.check(client + ' connects with Automatic header and reconnect resize', await settle())

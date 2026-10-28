@@ -11,7 +11,7 @@ import { createSecureContext, TLSSocket } from 'node:tls'
 import { selfSigned } from './support/certificates.js'
 
 const require = createRequire(import.meta.url)
-const { FreeRDPFrames, ipcFrame, numbers, decodeNativeFrame, freeRDPRelay, FreeRDPProcess, FreeRDPError, nativeHelperPath, helperEnvironment, freeRDPAuthorities } = require('../../dist/freerdp.js')
+const { FreeRDPFrames, ipcFrame, numbers, freeRDPStart, decodeNativeFrame, freeRDPRelay, FreeRDPProcess, FreeRDPError, nativeHelperPath, helperEnvironment, freeRDPAuthorities } = require('../../dist/freerdp.js')
 const { nativeKey } = require('../../dist/freerdpView.js')
 const { ownRDPClient, rdpClient } = require('../../dist/rdpClient.js')
 const { specOf, sessionKey } = require('../../dist/desktops.js')
@@ -48,7 +48,8 @@ test('each platform package.json names for a FreeRDP package has a build in nati
     const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'))
     // Source-only development checkouts may not have built a helper yet.
     if (!existsSync(join(root, 'native/bin'))) return
-    assert.deepEqual([...pkg.tabbyRdp.freerdpPlatforms].sort(), readdirSync(join(root, 'native/bin')).filter(name => !name.startsWith('.')).sort(),
+    const expected = process.env.TRD_SINGLE_NATIVE_BUILD === '1' ? [`${process.platform}-${process.arch}`] : pkg.tabbyRdp.freerdpPlatforms
+    assert.deepEqual([...expected].sort(), readdirSync(join(root, 'native/bin')).filter(name => !name.startsWith('.')).sort(),
         'scripts/pack.mjs makes a package per platform named, from its build')
 })
 
@@ -109,6 +110,16 @@ test('IPC handles split headers/bodies, coalesced frames and rejects oversized f
     for (const byte of stream) decoder.push(Buffer.from([byte]), (type: string, data: Buffer) => result.push([type, data.toString('hex')]))
     assert.deepEqual(result, [['D', numbers(1280, 720).toString('hex')], ['N', ''], ['X', numbers(0, 0).toString('hex')]])
     assert.throws(() => decoder.push(Buffer.from([70, 127, 255, 255, 255]), () => {}), /oversized/)
+})
+
+test('IPC start carries a per-connection relaxed-order flag, off by default', () => {
+    const options = { host: 'pc', username: 'user', password: 'pass', domain: '', width: 800, height: 600, pipeline: false }
+    const relay = { port: 1234, token: 'a'.repeat(64) }
+    const strict = freeRDPStart(options, relay)
+    const relaxed = freeRDPStart({ ...options, relaxOrderChecks: true }, relay)
+    assert.deepEqual(strict.subarray(-24), numbers(1234, 800, 600, 0, 0, 0))
+    assert.deepEqual(relaxed.subarray(-24), numbers(1234, 800, 600, 0, 0, 1))
+    assert.deepEqual(strict.subarray(0, -24), relaxed.subarray(0, -24))
 })
 
 test('certificate stores can exceed one IPC frame while retaining a bounded total', () => {

@@ -2209,6 +2209,12 @@ test('ending a connection keeps only a pixel copy of its picture, and disposal r
     assert.equal(desktop.host.children.length, 0)
 })
 
+test('relaxed drawing order checks default off and accept only a boolean global setting', () => {
+    assert.equal(service().svc.settings().relaxOrderChecks, false)
+    assert.equal(service({ relaxOrderChecks: true }).svc.settings().relaxOrderChecks, true)
+    assert.equal(service({ relaxOrderChecks: 'true' }).svc.settings().relaxOrderChecks, false)
+})
+
 test('a global FreeRDP default preserves discovered Hyper-V consoles; explicit unsupported overrides fail before credentials', async () => {
     const { svc } = service({ client: 'freerdp' })
     const pane = {}, spec = hyperVSpec('test-vm', 'Test VM')

@@ -75,6 +75,11 @@ export function askDesktop (pane: HTMLElement, options: DesktopFormOptions): Pro
                 </select>
                 <select class="form-control" name="client" aria-label="RDP client" title="RDP client. Applies on the next connection."></select>
                 <div class="text-muted small">FreeRDP preview: display and input; clipboard, sound and shared folders are unavailable.</div>` + `
+                <select class="form-control" name="relaxOrderChecks" aria-label="Relax drawing order checks (FreeRDP)" title="For a black screen or unannounced drawing order from a server or PAM proxy. Applies on the next FreeRDP connection.">
+                    <option value="">Drawing order checks: as in Settings</option>
+                    <option value="on">Relax drawing order checks (FreeRDP)</option>
+                    <option value="off">Keep strict drawing order checks</option>
+                </select>` + `
                 <select class="form-control" name="account" title="Saved accounts are added in Settings › Remote Desktop › Accounts"></select>
                 <input class="form-control" name="username" placeholder="User name (optional; asked when connecting)" spellcheck="false">
                 <input class="form-control" name="domain" placeholder="Domain (optional)" spellcheck="false">` + `
@@ -107,6 +112,7 @@ export function askDesktop (pane: HTMLElement, options: DesktopFormOptions): Pro
     const client = field<HTMLSelectElement>('client')
     client.append(new Option('RDP client: as in Settings', ''), ...Object.entries(RDP_CLIENT_LABELS).map(([id, label]) => new Option(label, id)))
     client.value = ownRDPClient(initial.client) ?? ''
+    field<HTMLSelectElement>('relaxOrderChecks').value = initial.relaxOrderChecks === true ? 'on' : initial.relaxOrderChecks === false ? 'off' : ''
     // A VM saved from the host's list is xrdp on the host's word (see xrdpFromHost), which is a choice of its own here:
     // kept as long as it is chosen, so that the desktop still asks before signing in without NLA. Any kind picked is
     // the user's, xrdp included.
@@ -236,8 +242,10 @@ export function askDesktop (pane: HTMLElement, options: DesktopFormOptions): Pro
                 gatewayAccount: gatewayText && gatewayAccount.value || undefined,
                 clipboard: clipboard.value || undefined,
                 client: ownRDPClient(client.value),
+                relaxOrderChecks: field<HTMLSelectElement>('relaxOrderChecks').value === 'on' ? true
+                    : field<HTMLSelectElement>('relaxOrderChecks').value === 'off' ? false : undefined,
             }
-            for (const key of ['username', 'domain', 'account', 'wake', 'gateway', 'gatewayAccount', 'clipboard', 'client'] as const) {
+            for (const key of ['username', 'domain', 'account', 'wake', 'gateway', 'gatewayAccount', 'clipboard', 'client', 'relaxOrderChecks'] as const) {
                 if (entry[key] === undefined) {
                     delete entry[key]
                 }
