@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.6.0-rc.4 (unreleased)
+## 0.6.0-rc.4
 
 **Added**
 - A default-off **Relax drawing order checks** option for FreeRDP, with overrides in RDP profiles and configured
