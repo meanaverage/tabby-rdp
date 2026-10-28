@@ -1,5 +1,7 @@
 # Changelog
 
+## 0.6.0-rc.5 (unreleased)
+
 ## 0.6.0-rc.4
 
 **Added**
