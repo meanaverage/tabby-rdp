@@ -4,12 +4,12 @@ Read [CONTRIBUTING.md](CONTRIBUTING.md) for implementation, validation and relea
 
 ## Branches, PRs and test builds
 
-- The active development branch is **`0.6.0-rc5`**, for package version **`0.6.0-rc.5`**. All follow-up changes,
+- The active release-preparation branch is **`0.6.0`**, for package version **`0.6.0`**. All follow-up changes,
   including documentation and agent instructions, belong there. `0.6.0-rc.1` through `0.6.0-rc.4` are released.
-- Start feature/fix branches from current `origin/0.6.0-rc5` and target their PRs at `0.6.0-rc5`, not `main`.
+- Start feature/fix branches from current `origin/0.6.0` and target their PRs at `0.6.0`. The stable release-integration PR alone targets `main`.
   Use one PR for a cohesive change and its tests, documentation and packaging. Check an existing checkout's base
   and PR destination before preparing or merging it; preserve newer fixes when moving older work.
-- After publishing a preview, create or select the next preview's branch from the released preview's tag and
+- After publishing a release, create or select the next development version's branch from the released version's tag and
   advance its package version before further changes. Do not accumulate new changes under a released version.
   Update the active branch/version recorded here and each `target-branch` in `.github/dependabot.yml` at that transition.
 - Prepare the PR and a downloadable package for analysis and hands-on testing. Keep the PR as a draft while that
@@ -27,8 +27,8 @@ Read [CONTRIBUTING.md](CONTRIBUTING.md) for implementation, validation and relea
   `npm run pack:release -- --pack-destination <directory>` to create a test package without a tag.
 - `main` holds stable releases only, so that a checkout of it is always a released, stable version. A preview is
   tagged on its version branch and is not merged into `main`. Merge a version branch into `main` only for a stable
-  release, after the required checks pass and the maintainer authorizes that integration. (`main` still holds
-  0.6.0-rc.1, merged before this rule; from 0.6.0 on, it holds stable releases only.)
+  release, after the required checks pass and the maintainer authorizes that integration. The 0.6.0-rc.1 preview
+  predates this rule; from 0.6.0 on, `main` holds stable releases only.
 - **Do not create or push a release tag, stage or approve an npm publication, or publish a GitHub release until the
   maintainer explicitly authorizes that release after testing.** Passing CI or a version bump is not that approval.
 - Once authorized, tag a preview on its version branch, and a stable release on the merged commit on `main`.

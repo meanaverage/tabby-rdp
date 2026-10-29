@@ -1,6 +1,29 @@
 # Changelog
 
-## 0.6.0-rc.5 (unreleased)
+## 0.6.0
+
+**Added**
+- Choose IronRDP or the experimental FreeRDP client globally or for an individual RDP profile or configured desktop. IronRDP remains the default. FreeRDP supports display and input; clipboard, audio, shared folders, Hyper-V consoles and H.264 decoding remain unavailable in that client.
+- Automatically hide the window's title/tab header for a single connected desktop, with optional minimum window dimensions. Never and Always modes are also available. Hover reveals the header without resizing the desktop.
+- Default-off FreeRDP compatibility settings for glyph caching and relaxed drawing-order checks, with independent per-connection overrides. Glyph caching may help missing text on older servers or PAM login screens but can cause display artifacts. Individual PAM proxies remain unverified.
+- Optional PDU traces alongside diagnostic logs, with a viewer for connection, resize and graphics timing. Traces record protocol structure and sizes, omitting credentials, keystrokes, clipboard contents and bitmap data.
+
+**Fixed**
+- Windows' default self-signed RDP certificates connect through IronRDP with forward-secret TLS 1.2 and ECDHE, while retaining certificate authority/fingerprint checks before sign-in ([#102](https://github.com/meanaverage/tabby-rdp/issues/102)). RSA key exchange is no longer offered; servers requiring it cannot connect. Logs show the negotiated TLS version and cipher. RD Gateway HTTPS may use TLS 1.3.
+- Preserve the bitmap cache and Progressive tile state across Windows desktop resizes, preventing stale picture fragments, black bars and taskbar corruption ([#115](https://github.com/meanaverage/tabby-rdp/issues/115)).
+- Tab-switch shortcuts no longer send their digit to the previously active remote desktop. macOS file pastes work when Electron omits native filesystem path resolution.
+- Cancelling RD Gateway setup waits for its transport to close. FreeRDP also handles Unicode shortcuts, international keys, mouse-button chords, display-control resize and bounded input queues; it requires CredSSP version 5 or newer before authentication.
+- Header auto-hide settles after resize reconnects, preserves native menu visibility and keeps revealed controls usable. Remote Desktop settings use Tabby's native toggle controls.
+
+**Changed**
+- Group settings by connection, display, keyboard, sound, sharing, SSH integration, compatibility and diagnostics, with everyday controls first.
+- Run IronRDP connections through the bundled Go network helper on supported macOS, Windows and Linux architectures. Each desktop owns its helper and closes it when the connection ends.
+- Install FreeRDP through optional platform-specific helper packages for macOS ARM64, Linux ARM64/x64 and Windows ARM64/x64. Intel Macs continue to use IronRDP. A synchronized global FreeRDP default falls back to IronRDP when the native helper is unavailable; an explicit per-connection choice reports the missing helper.
+- Update the locked WinRM and QA download dependencies, and add scheduled dependency monitoring. These tools are excluded from plugin installations.
+
+Requires Tabby 1.0.236 or later. Desktop qualification covers macOS, Linux and Windows ARM64 clients against Windows 11, Windows Server 2022/2025, GNOME and xrdp, plus the documented experimental KRDP setup. Additional Windows x64 direct and gateway checks passed. See the [compatibility guide](docs/compatibility.md) for client and server limitations.
+
+## 0.6.0-rc.5 (not published; included in 0.6.0)
 
 **Added**
 - Default-off experimental glyph caching for FreeRDP, with independent overrides in RDP profiles and configured desktops. It can help older RDP servers or PAM login screens with missing text; support for individual proxies still needs validation.
