@@ -1,6 +1,6 @@
 {
   "name": "tabby-rdp",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "Windows and Linux remote desktops in Tabby, through SSH, direct RDP or RD Gateway. IronRDP with an experimental FreeRDP client.",
   "keywords": [
     "tabby-plugin",
@@ -64,7 +64,7 @@
   },
   "devDependencies": {
     "@angular/core": "22.2.3",
-    "@playwright/test": "1.64.0",
+    "@playwright/test": "1.64.1",
     "@types/node": "^20.19.0",
     "@types/semver": "^7.8.0",
     "rxjs": "7.8.2",
@@ -73,7 +73,7 @@
     "tabby-terminal": "1.0.231-nightly.0",
     "tsx": "^4.23.15",
     "typescript": "~5.9.3",
-    "ws": "8.21.3"
+    "ws": "8.22.0"
   },
   "tabbyRdp": {
     "minimumTabbyVersion": "1.0.236",
