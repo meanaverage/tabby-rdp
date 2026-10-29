@@ -1,11 +1,11 @@
-# Version updates target the active preview branch. Update target-branch when that branch advances (AGENTS.md).
+# Version updates target the active development branch. Update target-branch when that branch advances (AGENTS.md).
 # GitHub reads this configuration from the repository's default branch; security updates always target that branch.
 # scripts/electron stays pinned to the Electron in Tabby; change it deliberately with a Tabby host upgrade.
 version: 2
 updates:
   - package-ecosystem: github-actions
     directory: /
-    target-branch: 0.6.0
+    target-branch: 0.6.1
     schedule:
       interval: weekly
     groups:
@@ -14,7 +14,7 @@ updates:
         update-types: [minor, patch]
   - package-ecosystem: npm
     directory: /
-    target-branch: 0.6.0
+    target-branch: 0.6.1
     schedule:
       interval: weekly
     groups:
