@@ -3,7 +3,7 @@
 ## 0.6.1 (unreleased)
 
 **Changed**
-- Start the next development version from stable 0.6.0.
+- Update build and QA dependencies, including Angular and Node declarations, TypeScript 7 with its compiler-API compatibility package, Playwright, WebSocket test fixtures and standalone Electron checks. These development tools are excluded from plugin installations.
 
 ## 0.6.0
 
