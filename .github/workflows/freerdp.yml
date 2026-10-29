@@ -53,6 +53,8 @@ jobs:
           node -e "require('fs').rmSync('native/bin',{recursive:true,force:true})"
           node scripts/build-freerdp-ci.mjs
       - name: Native protocol and security checks
+        env:
+          TRD_SINGLE_NATIVE_BUILD: '1'
         run: |
           npm ci --ignore-scripts
           npm run build

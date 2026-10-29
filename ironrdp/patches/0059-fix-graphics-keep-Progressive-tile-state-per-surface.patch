@@ -1,0 +1,261 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: meanaverage <meanaverage@users.noreply.github.com>
+Date: Sun, 26 Oct 2026 02:20:00 -0700
+Subject: [PATCH] fix(graphics): keep Progressive tile state per surface, not per
+ codec context
+
+The Progressive decoder kept its tile grid and the tiles of the current
+frame per (surface, codec context). Windows moves a surface to a new codec
+context mid-session, deletes the old one with DeleteEncodingContext, and
+keeps refining the same tiles under the new id. A REGION under the new id
+that relied on a tile sent earlier in the same frame under the old one
+painted nothing, and an UPGRADE of such a tile was skipped as a first
+pass: after a live resize, whole 64-pixel tile columns stayed black where
+the server had cleared the surface (tabby-rdp issue #115).
+
+Tile state is now kept under one key per surface, shared by its codec
+contexts, and DeleteEncodingContext releases nothing (delete_surface and
+reset still do), as FreeRDP does. Upstream: Devolutions/IronRDP#2117, cut
+down to the keying change on this base, which carries its own memory
+accounting for the decoder.
+---
+diff --git a/crates/ironrdp-graphics/src/progressive.rs b/crates/ironrdp-graphics/src/progressive.rs
+index 31db313..5a9de26 100644
+--- a/crates/ironrdp-graphics/src/progressive.rs
++++ b/crates/ironrdp-graphics/src/progressive.rs
+@@ -1567,12 +1567,15 @@ impl ProgressiveDecoder {
+         if let Some(flag) = signalled {
+             self.surface_context_flags.insert(surface_id, flag);
+         }
++        // Tile state is kept per surface, under one key for every codec context of it: a progressive tile
++        // context can be shared by several codec contexts (MS-RDPEGFX 3.3.1.2), and Windows opens a new codec
++        // context mid-session, deletes the previous one, and keeps refining the same tiles under the new id.
++        // Keyed per codec context, a REGION under the new id relying on a tile sent under the old one in the
++        // same frame painted nothing, and an UPGRADE of such a tile was skipped as a first pass: whole tile
++        // columns stayed unpainted after a resize (tabby-rdp #115; upstream Devolutions/IronRDP#2117).
++        let state_key = (surface_id, 0u32);
+         let use_reduce_extrapolate = signalled
+-            .or_else(|| {
+-                self.contexts
+-                    .get(&(surface_id, codec_context_id))
+-                    .map(|c| c.surface.use_reduce_extrapolate)
+-            })
++            .or_else(|| self.contexts.get(&state_key).map(|c| c.surface.use_reduce_extrapolate))
+             .or_else(|| self.surface_context_flags.get(&surface_id).copied())
+             .ok_or(ProgressiveDecodeError::MissingBlock("CONTEXT"))?;
+ 
+@@ -1589,8 +1592,8 @@ impl ProgressiveDecoder {
+             &mut self.memory,
+         );
+ 
+-        // Get or create the context for this (surface_id, codec_context_id).
+-        let context = match contexts.entry((surface_id, codec_context_id)) {
++        // Get or create the surface's tile state (see `state_key`).
++        let context = match contexts.entry(state_key) {
+             Entry::Occupied(e) => e.into_mut(),
+             Entry::Vacant(e) => {
+                 let surface = SurfaceTiles::new(surface_width, surface_height, use_reduce_extrapolate)?;
+@@ -1614,7 +1617,7 @@ impl ProgressiveDecoder {
+         }
+         context.surface.use_reduce_extrapolate = use_reduce_extrapolate;
+ 
+-        let frame_tiles = all_frame_tiles.entry((surface_id, codec_context_id)).or_default();
++        let frame_tiles = all_frame_tiles.entry(state_key).or_default();
+         if surface_resized {
+             frame_tiles.clear();
+         }
+@@ -1744,16 +1747,12 @@ impl ProgressiveDecoder {
+         Ok(decoded_tiles)
+     }
+ 
+-    /// Delete a codec context, freeing its progressive tile state.
++    /// Called when the server sends RDPGFX_DELETE_ENCODING_CONTEXT.
+     ///
+-    /// Called when the server sends RDPGFX_DELETE_ENCODING_CONTEXT, which
+-    /// identifies both the surface and codec context.
+-    pub fn delete_context(&mut self, surface_id: u16, codec_context_id: u32) {
+-        if let Some(context) = self.contexts.remove(&(surface_id, codec_context_id)) {
+-            self.memory.release(context.held_bytes());
+-        }
+-        self.frame_tiles.remove(&(surface_id, codec_context_id));
+-    }
++    /// Tile state stays with the surface (see `decode_bitmap`): Windows deletes the previous codec context
++    /// after it has opened the next one, which goes on refining the same tiles, so nothing is released here;
++    /// `delete_surface` and `reset` release it. FreeRDP treats the PDU the same way (`gdi_DeleteEncodingContext`).
++    pub fn delete_context(&mut self, _surface_id: u16, _codec_context_id: u32) {}
+ 
+     /// Delete every codec context associated with a surface.
+     ///
+@@ -2506,13 +2505,16 @@ mod tests {
+         assert!(decoder.decode_bitmap(2, 0, 800, 600, &stream).is_ok());
+         assert_eq!(decoder.contexts.len(), 2);
+ 
++        // Deleting a codec context releases nothing: the tile state is the surface's.
+         decoder.delete_context(1, 0);
+-        assert_eq!(decoder.contexts.len(), 1);
++        assert_eq!(decoder.contexts.len(), 2);
++        assert!(decoder.contexts.contains_key(&(1, 0)));
+         assert!(decoder.contexts.contains_key(&(2, 0)));
+ 
++        // Another codec context on the surface shares its tile state.
+         assert!(decoder.decode_bitmap(1, 0, 640, 480, &stream).is_ok());
+         assert!(decoder.decode_bitmap(1, 1, 640, 480, &stream).is_ok());
+-        assert_eq!(decoder.contexts.len(), 3);
++        assert_eq!(decoder.contexts.len(), 2);
+ 
+         decoder.delete_surface(1);
+         assert_eq!(decoder.contexts.len(), 1);
+@@ -2599,7 +2601,7 @@ mod tests {
+         let frame_tiles = (0..11_000u16).map(|index| (index % 128, index / 128)).collect();
+         let mut decoder = ProgressiveDecoder::new();
+         decoder.begin_frame();
+-        decoder.frame_tiles.insert((1, 1), frame_tiles);
++        decoder.frame_tiles.insert((1, 0), frame_tiles);
+         let error = match decoder.decode_bitmap(1, 1, 8192, 8192, &stream_with_rects(rects)) {
+             Err(error) => error,
+             Ok(_) => panic!("tile intersections must share the clipping work budget"),
+@@ -3707,7 +3709,7 @@ mod tests {
+             .pixels;
+         let reference = decoder
+             .contexts
+-            .get(&(1, 7))
++            .get(&(1, 0))
+             .and_then(|context| context.surface.get(0, 0))
+             .expect("original tile state should be retained")
+             .coefficients;
+@@ -3717,7 +3719,7 @@ mod tests {
+             .expect("other surface tile should decode");
+         let other_reference = decoder
+             .contexts
+-            .get(&(2, 8))
++            .get(&(2, 0))
+             .and_then(|context| context.surface.get(0, 0))
+             .expect("other surface tile state should be retained")
+             .coefficients;
+@@ -3740,7 +3742,7 @@ mod tests {
+ 
+         let updated_tile = decoder
+             .contexts
+-            .get(&(1, 7))
++            .get(&(1, 0))
+             .and_then(|context| context.surface.get(0, 0))
+             .expect("difference tile state should be retained");
+         assert!(updated_tile.is_difference);
+@@ -3762,7 +3764,7 @@ mod tests {
+         assert_eq!(
+             decoder
+                 .contexts
+-                .get(&(2, 8))
++                .get(&(2, 0))
+                 .and_then(|context| context.surface.get(0, 0))
+                 .expect("other surface tile state should remain retained")
+                 .coefficients,
+@@ -3828,7 +3830,7 @@ mod tests {
+         assert!(
+             decoder
+                 .contexts
+-                .get(&(1, 7))
++                .get(&(1, 0))
+                 .and_then(|context| context.surface.get(0, 0))
+                 .expect("difference tile state should be retained")
+                 .is_difference
+@@ -3871,7 +3873,7 @@ mod tests {
+         assert!(
+             !decoder
+                 .contexts
+-                .get(&(1, 7))
++                .get(&(1, 0))
+                 .and_then(|context| context.surface.get(0, 0))
+                 .expect("replacement tile state should be retained")
+                 .is_difference
+@@ -4026,7 +4028,7 @@ mod tests {
+         let expected_delta = decode_full_quality_components(difference_components);
+         let updated = decoder
+             .contexts
+-            .get(&(1, 8))
++            .get(&(1, 0))
+             .and_then(|context| context.surface.get(0, 0))
+             .expect("difference tile state should be retained")
+             .coefficients;
+@@ -4279,7 +4281,8 @@ mod tests {
+                 )
+                 .is_ok()
+         );
+-        // The surface's CONTEXT block serves its later codec contexts: an empty payload opens one.
++        // The surface's CONTEXT block serves its later codec contexts (an empty payload opens one), which
++        // share the surface's tile grid and take no grid of their own.
+         for codec_context_id in 1..4 {
+             assert!(
+                 decoder
+@@ -4287,18 +4290,38 @@ mod tests {
+                     .is_ok()
+             );
+         }
++        assert_eq!(decoder.contexts.len(), 1);
++        // Surfaces at the cap take a grid each, until the limit.
++        for surface_id in 2..5 {
++            assert!(
++                decoder
++                    .decode_bitmap(
++                        surface_id,
++                        0,
++                        MAX_SURFACE_DIM,
++                        MAX_SURFACE_DIM,
++                        &minimal_progressive_stream(true)
++                    )
++                    .is_ok()
++            );
++        }
+         assert!(matches!(
+-            decoder.decode_bitmap(1, 4, MAX_SURFACE_DIM, MAX_SURFACE_DIM, &[]),
++            decoder.decode_bitmap(5, 0, MAX_SURFACE_DIM, MAX_SURFACE_DIM, &minimal_progressive_stream(true)),
+             Err(ProgressiveDecodeError::MemoryLimitExceeded { .. })
+         ));
+         assert_eq!(decoder.contexts.len(), 4);
+         assert_eq!(decoder.memory.used, held_bytes(&decoder));
+ 
+-        // Deleting a codec context makes room for another.
++        // Deleting a codec context frees nothing; deleting a surface makes room for another.
+         decoder.delete_context(1, 0);
++        assert!(matches!(
++            decoder.decode_bitmap(5, 0, MAX_SURFACE_DIM, MAX_SURFACE_DIM, &minimal_progressive_stream(true)),
++            Err(ProgressiveDecodeError::MemoryLimitExceeded { .. })
++        ));
++        decoder.delete_surface(1);
+         assert!(
+             decoder
+-                .decode_bitmap(1, 4, MAX_SURFACE_DIM, MAX_SURFACE_DIM, &[])
++                .decode_bitmap(5, 0, MAX_SURFACE_DIM, MAX_SURFACE_DIM, &minimal_progressive_stream(true))
+                 .is_ok()
+         );
+         assert_eq!(decoder.memory.used, held_bytes(&decoder));
+@@ -4325,22 +4348,13 @@ mod tests {
+         .unwrap();
+         decoder.decode_bitmap(1, 0, 1, 1, &context).unwrap();
+ 
+-        // Empty payloads open more codec contexts on the one-tile surface, until the limit.
+-        let error = (1..)
+-            .find_map(|codec_context_id| decoder.decode_bitmap(1, codec_context_id, 1, 1, &[]).err())
+-            .unwrap();
+-
+-        assert!(
+-            matches!(error, ProgressiveDecodeError::MemoryLimitExceeded { .. }),
+-            "{error}"
+-        );
+-        // Such a codec context takes about 150 bytes on 64-bit targets.
+-        let contexts = decoder.contexts.len();
+-        assert!(
+-            contexts * 150 <= decoder.memory.limit,
+-            "{contexts} codec contexts fit in {} bytes",
+-            decoder.memory.limit
+-        );
++        // Empty payloads open more codec contexts on the one-tile surface: they share its tile state and its
++        // frame tiles, so however many there are, the surface is charged once.
++        for codec_context_id in 1..1_000 {
++            decoder.decode_bitmap(1, codec_context_id, 1, 1, &[]).unwrap();
++        }
++        assert_eq!(decoder.contexts.len(), 1);
++        assert_eq!(decoder.frame_tiles.len(), 1);
+         assert_eq!(decoder.memory.used, held_bytes(&decoder));
+     }
+ 

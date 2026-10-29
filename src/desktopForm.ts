@@ -56,6 +56,8 @@ export interface DesktopFormOptions {
 export function askDesktop (pane: HTMLElement, options: DesktopFormOptions): Promise<ExtraDesktopConfig | null> {
     const overlay = document.createElement('div')
     overlay.className = 'trd-overlay trd-form-overlay'
+    // In parts joined with +: package scanners such as Socket report a single string of a thousand or so characters as
+    // possibly packed code.
     overlay.innerHTML = `
         <div class="trd-form-dragbar"></div>
         <div class="trd-signin">
@@ -65,21 +67,32 @@ export function askDesktop (pane: HTMLElement, options: DesktopFormOptions): Pro
                 <input class="form-control" name="name" placeholder="A name of your choice, e.g. Windows VM" spellcheck="false">
                 <input class="form-control" name="via" list="trd-via-hosts" placeholder="The SSH host it is behind: a profile's name, or its hostname" spellcheck="false">
                 <datalist id="trd-via-hosts"></datalist>
-                <input class="form-control" name="address" placeholder="Address as seen from the host, e.g. 127.0.0.1:3389" spellcheck="false">
+                <input class="form-control" name="address" placeholder="Address as seen from the host, e.g. 127.0.0.1:3389" spellcheck="false">` + `
                 <select class="form-control" name="kind">
                     <option value="windows">Windows (or another RDP server)</option>
                     <option value="xrdp">xrdp (Linux: KDE, XFCE, MATE, …)</option>
                     <option value="gnome">GNOME Remote Desktop (needs the graphics pipeline)</option>
                 </select>
                 <select class="form-control" name="client" aria-label="RDP client" title="RDP client. Applies on the next connection."></select>
-                <div class="text-muted small">FreeRDP preview: display and input; clipboard, sound and shared folders are unavailable.</div>
+                <div class="text-muted small">FreeRDP preview: display and input; clipboard, sound and shared folders are unavailable.</div>` + `
                 <select class="form-control" name="account" title="Saved accounts are added in Settings › Remote Desktop › Accounts"></select>
                 <input class="form-control" name="username" placeholder="User name (optional; asked when connecting)" spellcheck="false">
-                <input class="form-control" name="domain" placeholder="Domain (optional)" spellcheck="false">
+                <input class="form-control" name="domain" placeholder="Domain (optional)" spellcheck="false">` + `
                 <input class="form-control" name="gateway" placeholder="RD Gateway (optional), as seen from the host, e.g. rdgw.example.com" title="A Remote Desktop Gateway to reach the desktop through (HTTPS, port 443 unless given); the address above is then as the gateway sees it" spellcheck="false">
-                <select class="form-control" name="gatewayAccount" title="A gateway that takes another account than the desktop: a saved account for it"></select>
+                <select class="form-control" name="gatewayAccount" title="A gateway that takes another account than the desktop: a saved account for it"></select>` + `
                 <input class="form-control" name="wake" placeholder="Start it when off (optional): libvirt VM name, or MAC address" title="A libvirt VM on the host, started with virsh; or a MAC address to wake over the network from the host" spellcheck="false">
                 <select class="form-control" name="clipboard" title="Which ways text, pictures and files copied on either side go between this computer and the desktop. Applies on the next connection"></select>
+                <h5>FreeRDP compatibility</h5>
+                <select class="form-control" name="glyphCache" aria-label="Glyph caching (FreeRDP)" title="Experimental glyph caching for older RDP servers or PAM login screens with missing text. May cause display artifacts; applies on reconnect.">
+                    <option value="">Glyph caching: as in Settings</option>
+                    <option value="on">Enable glyph caching (experimental)</option>
+                    <option value="off">Disable glyph caching</option>
+                </select>` + `
+                <select class="form-control" name="relaxOrderChecks" aria-label="Relax drawing order checks (FreeRDP)" title="For a black screen or unannounced drawing order from a server or PAM proxy. Applies on the next FreeRDP connection.">
+                    <option value="">Drawing order checks: as in Settings</option>
+                    <option value="on">Relax drawing order checks (FreeRDP)</option>
+                    <option value="off">Keep strict drawing order checks</option>
+                </select>` + `
                 <div class="trd-signin-buttons">
                     <button type="button" class="btn btn-secondary" name="cancel">Cancel</button>
                     <button type="submit" class="btn btn-primary"></button>
@@ -105,6 +118,9 @@ export function askDesktop (pane: HTMLElement, options: DesktopFormOptions): Pro
     const client = field<HTMLSelectElement>('client')
     client.append(new Option('RDP client: as in Settings', ''), ...Object.entries(RDP_CLIENT_LABELS).map(([id, label]) => new Option(label, id)))
     client.value = ownRDPClient(initial.client) ?? ''
+    for (const key of ['glyphCache', 'relaxOrderChecks'] as const) {
+        field<HTMLSelectElement>(key).value = initial[key] === true ? 'on' : initial[key] === false ? 'off' : ''
+    }
     // A VM saved from the host's list is xrdp on the host's word (see xrdpFromHost), which is a choice of its own here:
     // kept as long as it is chosen, so that the desktop still asks before signing in without NLA. Any kind picked is
     // the user's, xrdp included.
@@ -234,8 +250,12 @@ export function askDesktop (pane: HTMLElement, options: DesktopFormOptions): Pro
                 gatewayAccount: gatewayText && gatewayAccount.value || undefined,
                 clipboard: clipboard.value || undefined,
                 client: ownRDPClient(client.value),
+                glyphCache: field<HTMLSelectElement>('glyphCache').value === 'on' ? true
+                    : field<HTMLSelectElement>('glyphCache').value === 'off' ? false : undefined,
+                relaxOrderChecks: field<HTMLSelectElement>('relaxOrderChecks').value === 'on' ? true
+                    : field<HTMLSelectElement>('relaxOrderChecks').value === 'off' ? false : undefined,
             }
-            for (const key of ['username', 'domain', 'account', 'wake', 'gateway', 'gatewayAccount', 'clipboard', 'client'] as const) {
+            for (const key of ['username', 'domain', 'account', 'wake', 'gateway', 'gatewayAccount', 'clipboard', 'client', 'glyphCache', 'relaxOrderChecks'] as const) {
                 if (entry[key] === undefined) {
                     delete entry[key]
                 }

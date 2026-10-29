@@ -5,6 +5,16 @@ desktop form have an override. An empty override follows Settings. Existing conf
 Changes apply on the next connection; use Reconnect to compare clients on the same desktop. Accounts, certificate
 trust and desktop identities are shared between the clients.
 
+**Settings › Remote Desktop › Settings › FreeRDP compatibility** groups two independent options:
+
+| Option | Default | Use |
+|---|---|---|
+| Glyph caching (experimental) | Off | Older RDP servers or PAM login screens that send text as cached glyphs. May cause display artifacts; enable only for connections that need it. |
+| Relax drawing order checks | Off | Servers or PAM proxies that send orders the client did not announce. Useful when the native log reports an unannounced order. |
+
+Each RDP profile or configured desktop can follow Settings, enable either option, or explicitly disable it.
+Changes apply on the next FreeRDP connection. IronRDP uses its own graphics capabilities.
+
 An RDP profile tab's ellipsis/right-click menu also has **RDP client**: **Follow default**, **IronRDP**, or
 **FreeRDP (experimental)**. The checkmark shows the saved next-connection choice; **Current session** names the
 client already running. Changing the choice offers **Reconnect to apply** or **Keep current session**, without
@@ -51,26 +61,30 @@ system ABI; Windows requires the applicable Microsoft C runtime. Builds for othe
 Windows helpers require the matching Microsoft Visual C++ Redistributable, as described in the
 [requirements](../docs/compatibility.md#requirements). The plugin does not install it automatically.
 
-No native executable is downloaded or compiled when Tabby loads the plugin. An explicit FreeRDP choice without the matching
+The plugin's npm package contains no native code. Each platform's helper is published in a package of its own,
+`@tabby-rdp/freerdp-<platform>-<arch>`, which the plugin names as an optional dependency. When Tabby installs or updates
+the plugin, npm installs the package for that computer alongside it and skips the others. No native executable is
+downloaded or compiled when Tabby loads the plugin. A helper built in a checkout's `native/bin` is used ahead of an
+installed package. An explicit FreeRDP choice without the matching
 helper produces an installation message before asking for credentials. A global default can be shared across computers:
 when only that default requests an unavailable helper, the connection uses IronRDP and records the fallback in its log.
 
-`native/bin` is generated and ignored by Git, but included by `npm run pack:release` when present. For a public release, qualify
-each intended platform/architecture and explicitly include the reviewed native outputs in the release commit
-(`git add -f native/bin/<platform>-<arch>`). The existing package checks require distributed files to match the
-release commit. A build on one computer supplies only that computer's platform/architecture.
+`native/bin` is generated and ignored by Git. For a public release, qualify each intended platform/architecture,
+explicitly include the reviewed native outputs in the release commit (`git add -f native/bin/<platform>-<arch>`), and
+list the platform in `package.json`'s `tabbyRdp.freerdpPlatforms`. `npm run pack:release` then makes its package from
+that folder, and the package checks require the published files to match the release commit. A build on one computer
+supplies only that computer's platform/architecture. Publishing a new platform's package for the first time is a
+manual step; see [CONTRIBUTING.md](../CONTRIBUTING.md#releasing).
 
-The PR's **Build and package** CI job uploads **tabby-rdp-test-package**, a ZIP containing the plugin's npm tarball.
-This is a plugin build for an existing Tabby installation. It does not create a release or publish to npm. The
-current PR includes macOS ARM64, Windows ARM64/x64 and Linux ARM64/x64 helpers. Intel Mac FreeRDP builds remain
-pending; IronRDP remains available there. The package version is prepared as `0.6.0-rc.1`; tagging and publication wait
-for further analysis and manual testing.
+Helper packages exist for macOS ARM64, Windows ARM64/x64 and Linux ARM64/x64. FreeRDP helpers for Intel Macs
+are not yet available; IronRDP remains available there.
 
 ## Licensing
 
 The Tabby helper is MIT licensed. FreeRDP and WinPR are Apache-2.0; OpenSSL 3 is Apache-2.0. Their full licenses and
 FreeRDP's bundled attribution notice accompany the generated binaries. WinPR's built-in Unicode converter also
-carries its own full `Unicode-NOTICE`. Keep all these notices in the published package.
+carries its own full `Unicode-NOTICE`. Keep all these notices in each platform's package, whose `package.json` declares
+`MIT AND Apache-2.0`.
 The source/build identity is recorded in `BUILD.json`. New codecs, channels or native dependencies require reviewing
 their own licensing and updating the packaging inventory; changing FreeRDP's top-level license file is insufficient.
 
@@ -82,7 +96,8 @@ npm run test:unit
 npm test -- --hidden visual-smoke
 # With TRD_TEST_DIRECT, TRD_TEST_DIRECT_USER and TRD_TEST_DIRECT_PASSWORD for a dedicated server:
 npm test -- --hidden freerdp
-# Verify the installed tarball as well, including executable permissions and relocated native libraries:
+# Verify the installed packages as well (the plugin's, with this computer's helper package), including executable
+# permissions and relocated native libraries:
 npm test -- --packed --hidden freerdp
 ```
 
@@ -96,7 +111,7 @@ certificate/name/NLA rejection before credentials, the same CredSSP minimum vers
 
 | Client | Live Windows Server 2025 coverage |
 |---|---|
-| macOS ARM64 | Earlier packed-plugin lifecycle passed; latest helper passes protocol/security checks. Final maintainer testing remains pending. |
+| macOS ARM64 | Earlier packed-plugin lifecycle coverage; current native protocol/security checks passed. |
 | Linux ARM64, Ubuntu 24.04 | Packed plugin: pixels, input routing, larger/smaller live resize without reconnecting, fixed-resolution fitting, view only, cleanup, reconnect, switching to IronRDP, input-burst recovery and Automatic header/reconnect stability with both clients. |
 | Windows ARM64, Windows 11 | Same packed-plugin lifecycle coverage as Linux ARM64. |
 | Linux x64 / Windows x64 | Native protocol/security checks in hosted CI; live RDP qualification remains pending. |

@@ -28,6 +28,8 @@ from IronRDP's source and the patches, and the release goes out only if the two 
 | Sync the clipboard only for the desktop that has the focus | Not submitted yet |
 | Drive redirection in the web client, through a JavaScript file system | Not submitted yet |
 | Send chunked static-channel messages without CHANNEL_FLAG_SHOW_PROTOCOL, as Windows' drive redirector expects | Not submitted yet |
+| Keep the bitmap cache across ResetGraphics (a live resize repaints from it) | [Devolutions/IronRDP#2011](https://github.com/Devolutions/IronRDP/pull/2011), merged; taken as a patch until the next base |
+| Keep Progressive tile state per surface across codec contexts | [Devolutions/IronRDP#2117](https://github.com/Devolutions/IronRDP/pull/2117), open; taken as a patch |
 
 The aim is to make IronRDP's browser client work well with both Linux and Windows desktops, for everyone who embeds
 it, not just this plugin.

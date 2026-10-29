@@ -20,7 +20,7 @@ import { npmCommand } from '../scripts/npm-command.mjs'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const LINUX_SUITES = ['e2e', 'desk', 'resize', 'keyboard', 'focus', 'actions', 'clipboard', 'files', 'audio', 'microphone', 'graphics', 'reconnect', 'desktops', 'profiles', 'direct', 'certificates', 'status', 'wake', 'help', 'nested', 'vms', 'headless', 'takeover']
-const ALL_SUITES = [...LINUX_SUITES, 'freerdp', 'wasm-isolation', 'windows', 'winhost', 'hyperv', 'gateway', 'xrdp', 'rds', 'trd-pty', 'screenshots', 'demo', 'smoke-host', 'smoke-rdp', 'smoke-updates', 'visual-host', 'visual-smoke', 'visual-linux', 'visual-windows']
+const ALL_SUITES = [...LINUX_SUITES, 'helper', 'freerdp', 'wasm-isolation', 'windows', 'winhost', 'hyperv', 'gateway', 'xrdp', 'rds', 'pdu-trace', 'fps', 'trd-pty', 'screenshots', 'demo', 'smoke-host', 'smoke-rdp', 'smoke-updates', 'visual-host', 'visual-smoke', 'visual-linux', 'visual-windows']
 
 const args = process.argv.slice(2)
 const flag = (name: string) => args.includes(name)
@@ -38,7 +38,7 @@ for (const s of suites) {
     }
 }
 const selected = suites.length ? suites : LINUX_SUITES
-const smoke = selected.some(s => s === 'freerdp' || s.startsWith('smoke-') || s.startsWith('visual-'))
+const smoke = selected.some(s => s === 'helper' || s === 'freerdp' || s.startsWith('smoke-') || s.startsWith('visual-'))
 if (flag('--require-rdp') && selected.includes('smoke-rdp') && !process.env.TRD_TEST_HOST) {
     console.error('--require-rdp needs TRD_TEST_HOST; live RDP coverage cannot be skipped')
     process.exit(2)
@@ -96,12 +96,17 @@ function makeSandbox (): string {
     fs.mkdirSync(path.join(plugins, 'node_modules'), { recursive: true })
     fs.writeFileSync(path.join(plugins, 'package.json'), '{}')
     if (flag('--packed')) {
-        const tarball = execFileSync(process.execPath, ['scripts/pack.mjs', '--pack-destination', dir], { cwd: ROOT }).toString().trim().split('\n').at(-1)
+        // The plugin's package first, then each platform's FreeRDP package. Installed together, the one for this
+        // computer stands in for the optional dependency npm would otherwise fetch from the registry, which has none
+        // of an unreleased version.
+        const [tarball, ...helpers] = execFileSync(process.execPath, ['scripts/pack.mjs', '--pack-destination', dir], { cwd: ROOT }).toString().trim().split('\n')
         if (!tarball) {
             throw new Error('npm pack printed no file name')
         }
+        const helper = helpers.find(file => file.startsWith(`tabby-rdp-freerdp-${process.platform}-${process.arch}-`))
         const npm = npmCommand()
-        execFileSync(npm.file, [...npm.args, 'install', '--no-audit', '--no-fund', '--silent', path.join(dir, tarball)], { cwd: plugins, stdio: 'inherit' })
+        execFileSync(npm.file, [...npm.args, 'install', '--no-audit', '--no-fund', '--silent', path.join(dir, tarball), ...helper ? [path.join(dir, helper)] : []],
+            { cwd: plugins, stdio: 'inherit' })
     } else {
         fs.symlinkSync(ROOT, path.join(plugins, 'node_modules', 'tabby-rdp'), process.platform === 'win32' ? 'junction' : 'dir')
     }
@@ -249,8 +254,8 @@ for (const name of selected) {
                 : ['--import', import.meta.resolve('tsx'), path.join(ROOT, 'test', 'suites', `${name}.ts`)]
             const child = spawn(process.execPath, command, {
                 env: {
-                    ...process.env, TRD_CDP_PORT: String(port),
-                    ...(name.startsWith('visual-') ? { TRD_QA_TEST: name, TRD_TEST_PACKED: flag('--packed') ? '1' : '0' } : {}),
+                    ...process.env, TRD_CDP_PORT: String(port), TRD_TEST_PACKED: flag('--packed') ? '1' : '0',
+                    ...(name.startsWith('visual-') ? { TRD_QA_TEST: name } : {}),
                     ...(expectedXterm ? { TRD_SMOKE_EXPECT_XTERM: expectedXterm } : {}),
                     ...(flag('--require-rdp') ? { TRD_SMOKE_REQUIRE_RDP: '1' } : {}),
                 },

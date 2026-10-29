@@ -50,7 +50,13 @@ export class SSHChannelStream extends Duplex {
         channel.eof$.subscribe(() => this.channelEnded())
         channel.closed$.subscribe(() => {
             this.channelEnded()
-            this.destroy()
+            // What the reader hasn't taken yet still goes (the last of what the desktop sent: why it ended, say), and
+            // the stream ends after it. A reader that never takes it destroys the stream itself (as the proxy does).
+            if (this.readableEnded) {
+                this.destroy()
+            } else {
+                this.once('end', () => this.destroy())
+            }
         })
     }
 

@@ -98,3 +98,21 @@ test('a key typed while a desktop has the focus in a pane the user isn\'t in goe
     // Only the key typed in front went on to the desktop (and, typing into all, would to the others).
     assert.deepEqual(mirrored, ['keydown KeyA'])
 })
+
+test('a shortcut switching tabs between capture and routing does not reach the previous desktop', t => {
+    const page = installDocument(); t.after(page.restore)
+    const current = pane('rdp'), app = { activeTab: current as unknown }, mirrored: string[] = []
+    const desktop = { isVisible: () => true, isViewOnly: () => false, settings: () => ({ macShortcuts: false }),
+        isBroadcast: () => false, pasteClipboardFiles: () => false,
+        broadcastKey: (_pane: unknown, _type: string, init: { code: string }) => mirrored.push(init.code) }
+    const keyboard = new DesktopKeyboard(app, {}, desktop, {})
+    const event = Object.assign(key('keydown', 'Digit3'), { key: '3', ctrlKey: true })
+    current.desktop.focus()
+    keyboard.startedOn.set(event, current)
+    // The host's document listener has switched tabs, while the previous desktop still has DOM focus.
+    app.activeTab = { title: 'Settings' }
+    keyboard.route(event)
+    assert.equal(event.stopped, true)
+    assert.equal(event.prevented, true)
+    assert.deepEqual(mirrored, [])
+})

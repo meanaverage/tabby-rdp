@@ -88,6 +88,9 @@ await suite('focus', async t => {
     }
 
     // 4. Leaving the desktop's tab for Settings, which takes no focus, the way a keyboard shortcut does (no click).
+    // Keep another top-level tab so the shortcut exercises a higher digit; Ctrl+3 is Escape in a remote terminal.
+    check('another host tab connected before the shortcut test', await ev('H.spare = await H.openSSH(); return !!H.spare'))
+    await ev('H.inZone(() => RD.app.selectTab(H.top)); H.inZone(() => H.top.focus(H.pane))')
     await t.clickDesktop('H.pane')
     check('the desktop has the keyboard before the switch', !!await waitFor(onDesktop, 5))
     await ev(`RD.help.open('settings')`)
@@ -157,5 +160,7 @@ await suite('focus', async t => {
     await t.enter()
     check(`${tabKey}: the modifier was let go of on the remote (what is typed next comes out as typed)`,
         !!await waitFor(`return /^letgo-42\\s*$/m.test(H.screen(H.pane))`, 6),
-        (await ev<string>('return H.screen(H.pane)')).split('\n').filter(Boolean).slice(-4))
+        await ev(`return { screen: H.screen(H.pane).split('\\n').filter(Boolean).slice(-20),
+            heldKeys: [...H.session(H.pane).keysDown.keys()],
+            pressedHotkey: RD.injector.get(require('tabby-core').HotkeysService).pressedHotkey ?? null }`))
 })
