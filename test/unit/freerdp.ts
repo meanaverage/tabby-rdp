@@ -366,7 +366,7 @@ for (const version of [0, 2, 3, 4, 5, 6, -1, 'overflow', 'missing'] as const) {
                         if (at >= 0 && reply.length >= at + 12) tls.destroy()
                         return
                     }
-                    initial = Buffer.concat([initial, data])
+                    initial = Buffer.concat([initial, Buffer.from(data)])
                     const ntlm = initial.indexOf(Buffer.from('NTLMSSP\0', 'latin1'))
                     if (ntlm < 0 || initial.length < ntlm + 12) return
                     assert.equal(initial.readUInt32LE(ntlm + 8), 1)

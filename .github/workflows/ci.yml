@@ -108,7 +108,8 @@ jobs:
       - run: npm run build
       - run: npm run build:helper
       - name: Electron
-        # Tabby 1.0.238 ships Electron 43.7.0. The separate manifest and lock pin the complete download toolchain.
+        # Test a patched standalone Electron; Native Tabby QA also checks the host's bundled runtime.
+        # The separate manifest and lock pin the complete download toolchain.
         run: |
           mkdir -p "$RUNNER_TEMP/electron"
           cp scripts/electron/package.json scripts/electron/package-lock.json "$RUNNER_TEMP/electron/"

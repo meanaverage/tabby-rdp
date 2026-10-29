@@ -40,12 +40,12 @@
     "node": ">=18"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "node node_modules/typescript/bin/tsc -p tsconfig.json",
     "build:helper": "node scripts/build-helper.mjs",
     "build:helpers": "node scripts/build-helper.mjs --all",
-    "watch": "tsc -p tsconfig.json --watch --sourceMap",
-    "typecheck": "tsc -p tsconfig.json --noEmit && npm run typecheck:test",
-    "typecheck:test": "tsc -p tsconfig.test.json",
+    "watch": "node node_modules/typescript/bin/tsc -p tsconfig.json --watch --sourceMap",
+    "typecheck": "node node_modules/typescript/bin/tsc -p tsconfig.json --noEmit && npm run typecheck:test",
+    "typecheck:test": "node node_modules/typescript/bin/tsc -p tsconfig.test.json",
     "test": "tsx test/run.ts",
     "test:smoke": "tsx test/run.ts --packed --hidden smoke-host smoke-rdp direct",
     "test:unit": "tsx --test test/unit/*.ts",
@@ -63,16 +63,17 @@
     "semver": "7.8.5"
   },
   "devDependencies": {
-    "@angular/core": "21.2.25",
+    "@angular/core": "22.2.3",
     "@playwright/test": "1.64.1",
-    "@types/node": "^20.19.0",
+    "@types/node": "^26.6.5",
     "@types/semver": "^7.8.0",
+    "@typescript/typescript6": "6.0.2",
     "rxjs": "7.8.2",
     "tabby-core": "1.0.231-nightly.0",
     "tabby-settings": "1.0.231-nightly.0",
     "tabby-terminal": "1.0.231-nightly.0",
     "tsx": "^4.23.15",
-    "typescript": "~5.9.3",
+    "typescript": "~7.0.2",
     "ws": "8.22.0"
   },
   "tabbyRdp": {
