@@ -40,7 +40,19 @@ test(hostedSmoke ? 'Native Tabby settings smoke (no baseline qualification)' : '
         await expect(settings).toBeVisible()
         await settings.locator('[data-tab=settings]').click()
         const soundToggle = settings.locator('[data-setting=sound]')
-        await expect(settings.locator('trd-settings-toggle toggle input[type=checkbox]')).toHaveCount(process.platform === 'darwin' ? 9 : 8)
+        await expect(settings.locator('trd-settings-toggle toggle input[type=checkbox]')).toHaveCount(client.platform === 'darwin' ? 10 : 9)
+        await expect(settings.locator('[data-topic=settings] > h5')).toHaveText([
+            'Connection', 'Display', 'Keyboard', 'Sound', 'Clipboard', 'Shared folders',
+            'SSH hosts', 'FreeRDP compatibility', 'Diagnostics',
+        ])
+        const glyphCache = settings.locator('[data-setting=glyphCache]')
+        await expect(glyphCache).toHaveAccessibleName('Glyph caching (experimental)')
+        await expect(glyphCache).not.toBeChecked()
+        await glyphCache.click()
+        await expect.poll(() => page.evaluate(() => (window as any).__remoteDesktop.desktop.settings().glyphCache)).toBe(true)
+        await expect(settings.locator('[data-setting=relaxOrderChecks]')).not.toBeChecked()
+        await glyphCache.click()
+        await expect.poll(() => page.evaluate(() => (window as any).__remoteDesktop.desktop.settings().glyphCache)).toBe(false)
         const orderChecks = settings.locator('[data-setting=relaxOrderChecks]')
         await expect(orderChecks).toHaveAccessibleName('Relax drawing order checks (FreeRDP)')
         await expect(orderChecks).not.toBeChecked()
@@ -76,7 +88,7 @@ test(hostedSmoke ? 'Native Tabby settings smoke (no baseline qualification)' : '
         await expect(settings.locator('[data-setting=resize]')).toBeVisible()
         const headerChoice = settings.locator('[data-setting=headerAutoHide]')
         await expect(headerChoice.locator('option')).toHaveText(['Automatic', 'Never', 'Always'])
-        expect(await settings.locator('[data-setting=resize]').evaluate(el => !!el.closest('.form-line')?.nextElementSibling?.querySelector('[data-setting=headerAutoHide]'))).toBe(true)
+        expect(await settings.locator('[data-setting=resize]').evaluate(el => !!(el.compareDocumentPosition(document.querySelector('[data-setting=sharpness]')!) & Node.DOCUMENT_POSITION_FOLLOWING))).toBe(true)
         await headerChoice.selectOption('automatic')
         await expect(settings.locator('[data-header-size]')).toBeVisible()
         await settings.locator('[data-setting=headerMinWidth]').fill('1100')
@@ -91,13 +103,13 @@ test(hostedSmoke ? 'Native Tabby settings smoke (no baseline qualification)' : '
         await expect(headerChoice).toHaveValue('never')
         await expect(settings.locator('[data-header-size]')).toBeHidden()
         await clientChoice.focus()
-        await expect(settings.locator('h3')).toBeInViewport({ ratio: 1 })
         await page.evaluate(() => document.fonts.ready)
         // Persistent clients retain settings scroll after other tests use the page.
         // Establish the top-of-page precondition without changing styles or the reviewed baseline.
         const content = page.locator('settings-tab .tab-content')
         await content.evaluate(el => el.scrollTo({ top: 0, left: 0, behavior: 'instant' }))
         await expect.poll(() => content.evaluate(el => el.scrollTop)).toBe(0)
+        await expect(settings.locator('h3')).toBeInViewport({ ratio: 1 })
         // Baselines are specific to OS/architecture and the actual host runtime; never cross-compare hosts.
         const key = `${client.platform}-${client.arch}-tabby-${host.version}-electron-${host.electron}`.replace(/[^a-zA-Z0-9.-]/g, '_')
         const name = `${key}/settings-viewport.png`
@@ -132,7 +144,7 @@ test('Windowed header auto-hide reveals without resizing content or changing nat
             const win = (globalThis as any).require('@electron/remote').getCurrentWindow()
             const visible = win.isVisible()
             win.show(); win.focus()
-            return { mode: (window as any).__remoteDesktop.desktop.settings().headerAutoHide, visible,
+            return { platform: process.platform, mode: (window as any).__remoteDesktop.desktop.settings().headerAutoHide, visible,
                 menuVisible: process.platform === 'darwin' ? null : win.isMenuBarVisible(),
                 autoHideMenu: process.platform === 'darwin' ? null : win.isMenuBarAutoHide() }
         })
@@ -140,12 +152,22 @@ test('Windowed header auto-hide reveals without resizing content or changing nat
         const cdp = await browser.contexts()[0].newCDPSession(page)
         await cdp.send('Emulation.setDeviceMetricsOverride', { width: 1100, height: 800, deviceScaleFactor: 1, mobile: false })
         await cdp.send('Emulation.setFocusEmulationEnabled', { enabled: true })
-        if (process.platform === 'darwin') await expect.poll(() => page.evaluate(() => {
+        if (state.platform === 'darwin') await expect.poll(() => page.evaluate(() => {
             const menu = (globalThis as any).require('@electron/remote').Menu.getApplicationMenu()
             return menu?.getMenuItemById('tabby-rdp-hide-header-always')?.label
         })).toBe('Always')
         const body = page.locator('app-root .content-tab-active').first()
         const before = (await body.boundingBox())!.height
+        const focusMenuOwner = async () => {
+            if (state.platform !== 'darwin') return
+            await page.evaluate(() => {
+                const remote = (globalThis as any).require('@electron/remote')
+                remote.app.focus({ steal: true })
+                remote.getCurrentWindow().focus()
+            })
+            await expect.poll(() => page.evaluate(() => (globalThis as any).require('@electron/remote').getCurrentWindow().isFocused())).toBe(true)
+        }
+        await focusMenuOwner()
         await page.evaluate(() => {
             if (process.platform === 'darwin') (globalThis as any).require('@electron/remote').Menu.getApplicationMenu().getMenuItemById('tabby-rdp-hide-header-always').click()
             else (window as any).__remoteDesktop.desktop.updateSettings({ headerAutoHide: 'always' })
@@ -164,13 +186,14 @@ test('Windowed header auto-hide reveals without resizing content or changing nat
         expect([revealedSize.width, revealedSize.height]).toEqual([hiddenSize.width, hiddenSize.height])
         await page.mouse.move(500, 700)
         await expect(bar).toHaveCSS('visibility', 'hidden')
+        await focusMenuOwner()
         await page.evaluate(() => {
             if (process.platform === 'darwin') (globalThis as any).require('@electron/remote').Menu.getApplicationMenu().getMenuItemById('tabby-rdp-hide-header-never').click()
             else (window as any).__remoteDesktop.desktop.updateSettings({ headerAutoHide: 'never' })
         })
         await expect(root).not.toHaveClass(/trd-auto-hide-header/)
         await expect(bar).toHaveCSS('visibility', 'visible')
-        if (process.platform !== 'darwin') expect(await page.evaluate(() => {
+        if (state.platform !== 'darwin') expect(await page.evaluate(() => {
             const win = (globalThis as any).require('@electron/remote').getCurrentWindow()
             return [win.isMenuBarVisible(), win.isMenuBarAutoHide()]
         })).toEqual([state.menuVisible, state.autoHideMenu])

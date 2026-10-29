@@ -5,9 +5,15 @@ desktop form have an override. An empty override follows Settings. Existing conf
 Changes apply on the next connection; use Reconnect to compare clients on the same desktop. Accounts, certificate
 trust and desktop identities are shared between the clients.
 
-**Relax drawing order checks** in Remote Desktop settings lets FreeRDP accept drawing orders a server or PAM proxy
-did not announce. It is off by default; RDP profiles and configured desktops can override it. Try it when FreeRDP
-shows a black screen or its log reports an unannounced order. It applies on reconnect and does not affect IronRDP.
+**Settings › Remote Desktop › Settings › FreeRDP compatibility** groups two independent options:
+
+| Option | Default | Use |
+|---|---|---|
+| Glyph caching (experimental) | Off | Older RDP servers or PAM login screens that send text as cached glyphs. May cause display artifacts; enable only for connections that need it. |
+| Relax drawing order checks | Off | Servers or PAM proxies that send orders the client did not announce. Useful when the native log reports an unannounced order. |
+
+Each RDP profile or configured desktop can follow Settings, enable either option, or explicitly disable it.
+Changes apply on the next FreeRDP connection. IronRDP uses its own graphics capabilities.
 
 An RDP profile tab's ellipsis/right-click menu also has **RDP client**: **Follow default**, **IronRDP**, or
 **FreeRDP (experimental)**. The checkmark shows the saved next-connection choice; **Current session** names the
