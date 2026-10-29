@@ -594,6 +594,24 @@ func (c *trackedConn) Close() error {
 	return c.Conn.Close()
 }
 
+// Hold the transport's close so cancellation and Open's error return can overlap deterministically.
+type heldCloseConn struct {
+	net.Conn
+	started chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (c *heldCloseConn) Close() error {
+	var err error
+	c.once.Do(func() {
+		close(c.started)
+		<-c.release
+		err = c.Conn.Close()
+	})
+	return err
+}
+
 func dial(t *testing.T, at Endpoint) *trackedConn {
 	t.Helper()
 	raw, err := net.Dial("tcp", at.String())
@@ -1427,6 +1445,47 @@ func TestADesktopClosedDuringTheSetUpEndsIt(t *testing.T) {
 			t.Errorf("asked for %v; closed %v", c.calls, raw.closed.Load())
 		}
 	})
+}
+
+func TestCancelledSetupWaitsForTheTransportToClose(t *testing.T) {
+	gateway := newStandIn(t, "Secret1", nil)
+	raw := dial(t, gateway.endpoint())
+	held := &heldCloseConn{Conn: raw, started: make(chan struct{}), release: make(chan struct{})}
+	release := sync.OnceFunc(func() { close(held.release) })
+	defer release()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	opts := (&client{password: "Secret1"}).options()
+	decision := errors.New("certificate decision cancelled")
+	opts.CheckCertificate = func(context.Context, []*x509.Certificate, bool, string) error {
+		cancel()
+		<-held.started
+		return decision
+	}
+	failed := make(chan error, 1)
+	go func() {
+		_, err := Open(ctx, held, gateway.endpoint(), pcCorp, opts)
+		failed <- err
+	}()
+	select {
+	case <-held.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("cancellation did not close the transport")
+	}
+	select {
+	case err := <-failed:
+		t.Fatalf("setup returned before the transport closed: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	release()
+	select {
+	case err := <-failed:
+		if !errors.Is(err, decision) || !raw.closed.Load() {
+			t.Fatalf("error %v, transport closed %v", err, raw.closed.Load())
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("setup did not finish after the transport closed")
+	}
 }
 
 // ---- the parts -----------------------------------------------------------------------------------------
