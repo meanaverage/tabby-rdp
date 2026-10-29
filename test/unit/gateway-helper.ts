@@ -234,7 +234,8 @@ function standIn (refuse: Record<number, number> = {}) {
             }
         })
         const frames = clientFrames((opcode, payload) => opcode === 0x8 ? socket.end() : opcode <= 0x2 && packets(payload))
-        socket.on('data', chunk => {
+        socket.on('data', data => {
+            const chunk = Buffer.from(data)
             seen.afterTls += chunk.length
             if (upgraded) {
                 return frames(chunk)

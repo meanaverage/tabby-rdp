@@ -1,7 +1,7 @@
 import { Injectable } from '@angular/core'
 import { execFile, spawn } from 'child_process'
 import * as net from 'net'
-import { Duplex } from 'stream'
+import { Duplex, Readable, Writable } from 'stream'
 import { BaseTabComponent, ConfigService, ProfilesService, SplitTabComponent } from 'tabby-core'
 import { DesktopSpec, DIRECT_KEY, isTargetKey, keyFromConfig, legacyKeyFromConfig, nestedKey, rekeyed, specOf } from './desktops'
 import { formatAddress } from './desktopForm'
@@ -155,7 +155,9 @@ export class SystemSSHTarget implements RemoteTarget {
         // signing in (its banners), for as long as the tunnel lasts, and the server decides how much.
         let stderr = ''
         child.stderr.on('data', d => { stderr = (stderr + d).slice(-4096) })
-        const stream = Duplex.from({ readable: child.stdout, writable: child.stdin })
+        // @types/node 26.6.5 omits the documented Node stream-pair overload; the runtime API is unchanged.
+        const fromPair = Duplex.from as typeof Duplex.from & ((pair: { readable: Readable, writable: Writable }) => Duplex)
+        const stream = fromPair({ readable: child.stdout, writable: child.stdin })
         stream.on('close', () => child.kill())
         child.on('exit', () => stream.destroy())
         // Fail fast if ssh can't connect (e.g. it would need a password).
