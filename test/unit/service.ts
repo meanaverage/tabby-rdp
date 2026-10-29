@@ -2246,6 +2246,15 @@ test('relaxed drawing order checks default off and accept only a boolean global 
     assert.equal(service({ relaxOrderChecks: 'true' }).svc.settings().relaxOrderChecks, false)
 })
 
+test('glyph caching is opt-in and independent of relaxed drawing order checks', () => {
+    assert.equal(service().svc.settings().glyphCache, false)
+    assert.equal(service({ glyphCache: 'true' }).svc.settings().glyphCache, false)
+    const settings = service({ glyphCache: true }).svc.settings()
+    assert.equal(settings.glyphCache, true)
+    assert.equal(settings.relaxOrderChecks, false)
+    assert.equal(service({ relaxOrderChecks: true }).svc.settings().glyphCache, false)
+})
+
 test('a global FreeRDP default preserves discovered Hyper-V consoles; explicit unsupported overrides fail before credentials', async () => {
     const { svc } = service({ client: 'freerdp' })
     const pane = {}, spec = hyperVSpec('test-vm', 'Test VM')

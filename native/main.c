@@ -321,7 +321,7 @@ static BOOL process_input(Context* c) {
     return !ended;
 }
 int main(int argc, char** argv) {
-    if (argc == 2 && strcmp(argv[1], "--version") == 0) { printf("tabby-freerdp IPC 3; FreeRDP %s\n", FREERDP_VERSION_FULL); return 0; }
+    if (argc == 2 && strcmp(argv[1], "--version") == 0) { printf("tabby-freerdp IPC 4; FreeRDP %s\n", FREERDP_VERSION_FULL); return 0; }
     if (argc != 1) return 2;
 #ifdef _WIN32
     _setmode(_fileno(stdin), _O_BINARY); _setmode(_fileno(stdout), _O_BINARY);
@@ -357,11 +357,12 @@ int main(int argc, char** argv) {
     const BYTE* p = start->data; UINT32 left = start->length;
     char* fields[6] = { 0 };
     for (int i = 0; i < 6; i++) if (!(fields[i] = string_field(&p, &left))) return 2;
-    if (left != 24) return 2;
+    if (left != 28) return 2;
     if (authorities && *fields[4]) return 2;
     c->name = fields[0]; c->authorities = authorities ? authorities : fields[4]; c->token = fields[5]; c->port = read32(p);
     if (authorities) free(fields[4]);
     UINT32 w = read32(p + 4), h = read32(p + 8), gfx = read32(p + 12), autologon = read32(p + 16), relaxOrderChecks = read32(p + 20);
+    UINT32 glyphCache = read32(p + 24);
     if (!c->inputEvent || !c->port || c->port > 65535 || strlen(c->token) != 64 || w < 200 || w > 7680 || h < 200 || h > 4320) return 2;
     rdpSettings* s = instance->context->settings;
 #define STR(key, value) if (!freerdp_settings_set_string(s, FreeRDP_##key, value)) return 2
@@ -376,6 +377,8 @@ int main(int argc, char** argv) {
     BOOLSET(RdpSecurity, FALSE); BOOLSET(NegotiateSecurityLayer, TRUE); BOOLSET(Authentication, TRUE);
     BOOLSET(AutoLogonEnabled, autologon != 0);
     BOOLSET(AllowUnanouncedOrdersFromServer, relaxOrderChecks != 0);
+    /* Glyph decoding is independent of accepting orders the client did not announce. */
+    NUM(GlyphSupportLevel, glyphCache ? GLYPH_SUPPORT_FULL : GLYPH_SUPPORT_NONE);
     BOOLSET(AutoReconnectionEnabled, FALSE); /* The parent owns retries and their fresh native processes. */
     BOOLSET(SupportDisplayControl, TRUE); BOOLSET(DynamicResolutionUpdate, TRUE);
     BOOLSET(SupportGraphicsPipeline, gfx != 0); BOOLSET(GfxH264, FALSE); BOOLSET(GfxAVC444, FALSE);
