@@ -423,12 +423,15 @@ func Open(ctx context.Context, raw net.Conn, gateway, target Endpoint, opts Opti
 	targetName := target.String()
 	socket := tls.Client(raw, certs.ClientTLS(gateway.Host))
 	// Until the tunnel is up, the desktop going away ends the connection, and with it whatever waits on it.
-	stop := context.AfterFunc(ctx, func() { _ = socket.Close() })
+	// Abort the transport directly: concurrent TLS Close calls can return while the first still sends close_notify.
+	// Once also waits for an already-running close before a failed setup returns ownership to its caller.
+	closeTransport := sync.OnceFunc(func() { _ = raw.Close() })
+	stop := context.AfterFunc(ctx, closeTransport)
 	ok := false
 	defer func() {
 		stop()
 		if !ok {
-			_ = socket.Close()
+			closeTransport()
 		}
 	}()
 	closedErr := func(err error) error {
@@ -561,6 +564,10 @@ func Open(ctx context.Context, raw net.Conn, gateway, target Endpoint, opts Opti
 		return nil, refused(status(channel, 0), "the channel")
 	}
 	log(fmt.Sprintf("gateway: channel to %s through %s", targetName, gateway.Host))
+	stop()
+	if ctx.Err() != nil {
+		return nil, closedErr(ctx.Err())
+	}
 	ok = true
 	return t, nil
 }
