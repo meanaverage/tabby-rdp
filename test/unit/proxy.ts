@@ -1485,6 +1485,8 @@ test('a server that asks again and again and reads nothing: what the client answ
     await ended
     assert.ok(gone, `${sent / MB} MB sent, and the connection still up`)
     assert.ok(waited <= SERVER_BACKLOG + answer.length, `${waited / MB} MB waited in the proxy`)
+    // WebSocket close and the helper's failure report arrive on separate channels; wait for both.
+    for (let i = 0; i < 80 && !proxy.failure; i++) await soon(25)
     assert.match(proxy.failure, /^more than \d+ MB sent to the server waited for it to take them \(\d+ MB\)/)
     assert.ok(log.some(l => /relay ended/.test(l)), log.join('\n'))
     // What the connection took went with it.
