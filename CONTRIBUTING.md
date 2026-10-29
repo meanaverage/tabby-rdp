@@ -71,7 +71,9 @@ Electron binary that may run as Node (an app's with that fuse on, such as Visual
 or the `electron` npm package's: `node -p "require('electron')"` in a folder where it is installed); without it, they
 are skipped. CI runs them on Linux in the Electron of the Tabby release the plugin is qualified on.
 
-The compatibility job uses `scripts/electron/package.json` and its own committed lockfile. Upgrade Electron there
+The compatibility job uses a standalone patched Electron in `scripts/electron/package.json` and its own committed
+lockfile, in addition to native smoke checks using Tabby's bundled runtime. This QA dependency does not update
+Tabby or become a plugin dependency. Upgrade Electron there
 with `npm install --package-lock-only --ignore-scripts --prefix scripts/electron electron@<exact-version> --save-exact`,
 review all dependency and integrity changes, and run the proxy tests with that binary. CI installs this tree using
 `npm ci --ignore-scripts`, then explicitly runs only Electron's locked binary installer, which checks the downloaded
@@ -248,7 +250,8 @@ depend on them. Checkouts don't keep the job's token in git's configuration, and
 token npm trusts; it runs none of the dependencies' code.
 
 The Dependabot config also defines npm updates for the plugin. The Electron compatibility test's separate dependency
-tree stays pinned to the version shipped by Tabby and changes only during a reviewed Tabby host upgrade. GitHub reads
+tree stays pinned to an explicitly reviewed version. Validate changes with its proxy tests and the native Tabby smoke
+checks; a standalone Electron result does not qualify a different Tabby host. GitHub reads
 this config from the default branch; once it is there, version-update PRs target the active preview branch. Advance
 `target-branch` when that branch changes. GitHub always sends security-update PRs to the default branch. A security
 fix found on `main` must be carried through the active preview and the release process above rather than merged
