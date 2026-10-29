@@ -4,6 +4,7 @@
 
 **Fixed**
 - Pasting files copied on macOS works when Electron's filesystem wrapper omits native path resolution. Links inside a copied folder remain restricted to that folder.
+- A Tabby shortcut that switches tabs no longer sends its key to the desktop being left while that desktop still has DOM focus.
 - Windows' default self-signed RDP certificate now connects with forward-secret TLS in IronRDP ([#102](https://github.com/meanaverage/tabby-rdp/issues/102)). The RDP connection runs in the plugin's Go network helper, which accepts that certificate's key usage while still checking its fingerprint or authority before sign-in. RDP uses TLS 1.2 with ECDHE; RD Gateway HTTPS may use TLS 1.3. RSA key exchange is no longer offered, so a server that only offers it cannot connect. The negotiated version and cipher are shown in the connection log.
 
 **Changed**

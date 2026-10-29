@@ -123,7 +123,7 @@ export class DesktopKeyboard {
         if (!isRDPElement(focused)) {
             return
         }
-        if (!pane || !pane.element.nativeElement.contains(focused)) {
+        if (!pane || pane !== this.coveredPane() || !pane.element.nativeElement.contains(focused)) {
             // A desktop has the focus though its pane isn't the one the user is in (see
             // RemoteDesktopService.letGoUnlessInFront, which takes it back a moment after the pane is left): IronRDP,
             // whose listener comes after this one and only looks at the focus, would send it the key, view only or not.
