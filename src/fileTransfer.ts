@@ -283,10 +283,12 @@ function bounded (files: any[]): any[] {
  * A path's real path, links all resolved, for the walk of copied folders. The system's own resolves a link that leads
  * through others (up to the 32 or 40 a system follows) several times quicker than Node's, which counts where a copied
  * folder is full of such links. Not on Windows, where it can name a folder otherwise than Node's (a mapped drive by its
- * share); the walk's paths must all be named one way.
+ * share); the walk's paths must all be named one way. Electron can wrap realpathSync without its native method;
+ * in that case Node's regular implementation still resolves links and preserves the copied-root boundary.
  */
 function realpath (file: string): string {
-    return process.platform === 'win32' ? fs.realpathSync(file) : fs.realpathSync.native(file)
+    const native = fs.realpathSync.native
+    return process.platform !== 'win32' && typeof native === 'function' ? native(file) : fs.realpathSync(file)
 }
 
 /** Where a link leads, links all resolved; null if nowhere (it dangles, or goes round). */
