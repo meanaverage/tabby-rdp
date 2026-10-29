@@ -4,7 +4,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createRequire } from 'node:module'
-import { Duplex } from 'node:stream'
+import { Duplex, Readable, Writable } from 'node:stream'
 import { execFileSync, spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import * as fs from 'node:fs'
@@ -1514,7 +1514,9 @@ test('a server that fails TLS over a stream like the system ssh\'s leaves no err
             socket.pipe(readable)
             writable.pipe(socket)
             socket.on('error', e => readable.destroy(e))
-            resolve(Duplex.from({ readable, writable }))
+            // @types/node 26.6.5 omits Duplex.from's documented Node stream-pair overload.
+            const fromPair = Duplex.from as typeof Duplex.from & ((pair: { readable: Readable, writable: Writable }) => Duplex)
+            resolve(fromPair({ readable, writable }))
         })
     })
     const unheard: Error[] = []
@@ -1610,7 +1612,10 @@ test('the last of what a server sends over an SSH channel before closing it reac
                 eof: async () => { socket.end() },
                 close: async () => { socket.destroy() },
             }
-            socket.on('data', d => channel.data$.next(new Uint8Array(d.buffer, d.byteOffset, d.byteLength)))
+            socket.on('data', d => {
+                const data = typeof d === 'string' ? Buffer.from(d) : d
+                channel.data$.next(new Uint8Array(data.buffer, data.byteOffset, data.byteLength))
+            })
             socket.on('end', () => channel.eof$.next())
             socket.on('close', () => channel.closed$.next())
             socket.on('error', () => { })
@@ -1685,7 +1690,7 @@ test('a stream that hands over megabytes at once (an SSH channel catching up aft
                     held = []
                 }
             }, 100)
-            socket.on('data', d => held.push(d))
+            socket.on('data', d => held.push(Buffer.from(d)))
             socket.on('error', e => stream.destroy(e))
             resolve(stream)
         })
