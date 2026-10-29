@@ -246,8 +246,9 @@ other bytes served under the same one: the check of a staged package before appr
 depend on them. Checkouts don't keep the job's token in git's configuration, and only the publish job can get the
 token npm trusts; it runs none of the dependencies' code.
 
-The Dependabot config also defines npm updates for the plugin and the Electron compatibility test. GitHub reads this
-config from the default branch; once it is there, version-update PRs target the active preview branch. Advance
+The Dependabot config also defines npm updates for the plugin. The Electron compatibility test's separate dependency
+tree stays pinned to the version shipped by Tabby and changes only during a reviewed Tabby host upgrade. GitHub reads
+this config from the default branch; once it is there, version-update PRs target the active preview branch. Advance
 `target-branch` when that branch changes. GitHub always sends security-update PRs to the default branch. A security
 fix found on `main` must be carried through the active preview and the release process above rather than merged
 directly into stable `main` between releases.
