@@ -70,18 +70,18 @@ test('a desktop can select either client, retain it through edits, and return to
     assert.ok(!('client' in await submitted(free, field => { field('client').value = '' })))
 })
 
-test('a desktop can override relaxed drawing order checks in either direction or follow Settings', async () => {
-    const relaxed = await submitted(legacy, field => { field('relaxOrderChecks').value = 'on' })
-    assert.equal(relaxed.relaxOrderChecks, true)
-    assert.equal(specOf(relaxed).relaxOrderChecks, true)
-    assert.equal((await submitted(relaxed)).relaxOrderChecks, true)
-    const strict = await submitted(relaxed, field => { field('relaxOrderChecks').value = 'off' })
-    assert.equal(strict.relaxOrderChecks, false)
-    assert.equal(specOf(strict).relaxOrderChecks, false)
-    const defaulted = await submitted(strict, field => { field('relaxOrderChecks').value = '' })
-    assert.ok(!('relaxOrderChecks' in defaulted))
-    assert.equal(specOf(defaulted).relaxOrderChecks, undefined)
-    assert.equal(specOf({ host: 'pc', relaxOrderChecks: 'true' as any }).relaxOrderChecks, undefined)
+for (const key of ['relaxOrderChecks', 'glyphCache']) test(`a desktop can override ${key} in either direction or follow Settings`, async () => {
+    const enabled = await submitted(legacy, field => { field(key).value = 'on' })
+    assert.equal(enabled[key], true)
+    assert.equal(specOf(enabled)[key], true)
+    assert.equal((await submitted(enabled))[key], true)
+    const disabled = await submitted(enabled, field => { field(key).value = 'off' })
+    assert.equal(disabled[key], false)
+    assert.equal(specOf(disabled)[key], false)
+    const defaulted = await submitted(disabled, field => { field(key).value = '' })
+    assert.ok(!(key in defaulted))
+    assert.equal(specOf(defaulted)[key], undefined)
+    assert.equal(specOf({ host: 'pc', [key]: 'true' })[key], undefined)
 })
 
 test('a VM saved from a host\'s list shows its kind as the host\'s, and keeps it so when saved unchanged', async () => {
