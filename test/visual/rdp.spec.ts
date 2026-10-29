@@ -302,6 +302,8 @@ PYFIXTURE`)
         await control({ reset: true }); await expect.poll(async () => (await readState())?.sequence).toBe(0)
         await test.step('Tab switch restores the same real framebuffer', async () => {
             await ev("RD.help.openSettings('remote-desktop')")
+            // Tabby may first show its default Settings page while opening the tab. Select the plugin page explicitly.
+            await page.getByRole('tab', { name: /Remote Desktop/ }).click()
             await expect(page.locator('.trd-settings')).toBeVisible()
             await ev('H.inZone(() => RD.app.selectTab(H.topOf(H.pane)))')
             await setSize(800, 600)

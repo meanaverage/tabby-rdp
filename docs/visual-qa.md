@@ -197,6 +197,11 @@ ARM64 guest, build 26300.9457, secure AAVMF, TPM 2 and signed virtio-win 0.1.285
 installation on this ARM host needed manual WinPE image application plus driver injection and the existing
 specialize/OOBE answer file; the repository's x86 Windows libvirt script is not claimed to automate ARM installation.
 
+The Windows guest now reports build **26300.9711**. Its reviewed baselines cover macOS ARM64, Linux ARM64 and Windows
+ARM64 clients on Tabby 1.0.236 / Electron 43.7.0. All twelve captures (initial desktop, tab return, resize and reconnect
+for each client) have the same decoded pixels as the 26300.9457 captures. Both build identities remain in the baseline
+set; future Windows updates still require capture and review under their observed build number.
+
 The reused Microsoft installer remains `.UNVERIFIED`: its SHA256
 `8992f2d2cfd2fa647e579e9eb31fc21f34da8333c29b6170fde17d2ed6623e9c` matches the published Arabic row despite
 English API/WIM identification, and differs from the published English row. This disclosed inherited provenance
