@@ -34,6 +34,8 @@ export class RemoteDesktopConfig extends ConfigProvider {
             headerMinWidth: 0,
             headerMinHeight: 0,
             client: 'ironrdp',
+            // FreeRDP only: experimental legacy text rendering, enabled only for connections that need it.
+            glyphCache: false,
             // FreeRDP only: accept drawing orders a server did not announce. Off unless a connection needs it.
             relaxOrderChecks: false,
             // Shareable session for SSH logins ('desk'): 'native' (trd-pty) or 'tmux' (earlier setup).

@@ -27,6 +27,7 @@ export interface RDPProfile extends ConnectableProfile {
         client?: '' | RDPClient
         /** Null follows Settings even through group defaults; applies to FreeRDP on reconnect. */
         relaxOrderChecks?: boolean | null
+        glyphCache?: boolean | null
         /** The RDP server: as this computer sees it, or as the `via` host sees it. */
         host: string
         port: number
@@ -210,16 +211,6 @@ export class RDPProfileSettingsComponent implements ProfileSettingsComponent<RDP
                     clipboard, sound and shared folders are unavailable.</div>
             </div>` + `
             <div class="mb-3">
-                <label>Drawing order checks (FreeRDP)</label>
-                <select class="form-control" name="relaxOrderChecks" aria-label="Drawing order checks (FreeRDP)">
-                    <option value="">As in Settings › Remote Desktop</option>
-                    <option value="on">Relax checks</option>
-                    <option value="off">Keep strict checks</option>
-                </select>
-                <div class="text-muted small">Try relaxing checks if a server or PAM proxy causes a black screen or sends an unannounced drawing order.
-                    Applies on the next FreeRDP connection; IronRDP is unaffected.</div>
-            </div>` + `
-            <div class="mb-3">
                 <label>Account</label>
                 <select class="form-control" name="account"></select>
                 <div class="text-muted small">A saved account's password is kept once, for every desktop that signs in with it.
@@ -249,6 +240,27 @@ export class RDPProfileSettingsComponent implements ProfileSettingsComponent<RDP
                 <select class="form-control" name="clipboard"></select>
                 <div class="text-muted small">Which ways text, pictures and files copied on either side go between this computer and the desktop.
                     Applies on the next connection.</div>
+            </div>` + `
+            <h5>FreeRDP compatibility</h5>
+            <div class="mb-3">
+                <label>Glyph caching (experimental)</label>
+                <select class="form-control" name="glyphCache" aria-label="Glyph caching (FreeRDP)">
+                    <option value="">As in Settings › Remote Desktop</option>
+                    <option value="on">Enable glyph caching</option>
+                    <option value="off">Disable glyph caching</option>
+                </select>
+                <div class="text-muted small">For older RDP servers or PAM login screens with missing text. May cause display artifacts.
+                    Applies on the next FreeRDP connection.</div>
+            </div>` + `
+            <div class="mb-3">
+                <label>Drawing order checks (FreeRDP)</label>
+                <select class="form-control" name="relaxOrderChecks" aria-label="Drawing order checks (FreeRDP)">
+                    <option value="">As in Settings › Remote Desktop</option>
+                    <option value="on">Relax checks</option>
+                    <option value="off">Keep strict checks</option>
+                </select>
+                <div class="text-muted small">Try relaxing checks if a server or PAM proxy causes a black screen or sends an unannounced drawing order.
+                    Applies on the next FreeRDP connection; IronRDP is unaffected.</div>
             </div>`
         const field = <T extends HTMLInputElement | HTMLSelectElement = HTMLInputElement>(name: string) => root.querySelector(`[name="${name}"]`) as T
         this.connectionInputs = { address: field('address'), gateway: field('gateway') }
@@ -272,11 +284,13 @@ export class RDPProfileSettingsComponent implements ProfileSettingsComponent<RDP
             ...Object.entries(RDP_CLIENT_LABELS).map(([id, label]) => new Option(label, id)))
         client.value = ownRDPClient(o.client) ?? ''
         client.addEventListener('change', () => { o.client = ownRDPClient(client.value) ?? '' })
-        const relaxOrderChecks = field<HTMLSelectElement>('relaxOrderChecks')
-        relaxOrderChecks.value = o.relaxOrderChecks === true ? 'on' : o.relaxOrderChecks === false ? 'off' : ''
-        relaxOrderChecks.addEventListener('change', () => {
-            o.relaxOrderChecks = relaxOrderChecks.value === 'on' ? true : relaxOrderChecks.value === 'off' ? false : null
-        })
+        for (const key of ['glyphCache', 'relaxOrderChecks'] as const) {
+            const choice = field<HTMLSelectElement>(key)
+            choice.value = o[key] === true ? 'on' : o[key] === false ? 'off' : ''
+            choice.addEventListener('change', () => {
+                o[key] = choice.value === 'on' ? true : choice.value === 'off' ? false : null
+            })
+        }
         const accounts = desktop.accounts()
         const saved = field<HTMLSelectElement>('account')
         const label = (a: { name: string, username: string, domain?: string }) => `${a.name} (${signInName(a)})`
@@ -401,7 +415,7 @@ export class RDPProfilesService extends QuickConnectProfileProvider<RDPProfile> 
     override name = 'Remote desktop (RDP)'
     override settingsComponent = RDPProfileSettingsComponent
     override configDefaults = {
-        options: { host: '', port: 3389, kind: 'windows', username: '', domain: '', account: '', via: '', gateway: '', gatewayAccount: '', clipboard: '', client: '', relaxOrderChecks: null },
+        options: { host: '', port: 3389, kind: 'windows', username: '', domain: '', account: '', via: '', gateway: '', gatewayAccount: '', clipboard: '', client: '', glyphCache: null, relaxOrderChecks: null },
         clearServiceMessagesOnConnect: false,
     }
 
