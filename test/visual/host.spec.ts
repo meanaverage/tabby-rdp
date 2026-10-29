@@ -11,10 +11,17 @@ test(hostedSmoke ? 'Native Tabby settings smoke (no baseline qualification)' : '
     await context.tracing.start({ screenshots: true, snapshots: true, sources: true })
     const page = context.pages().find(p => !p.url().startsWith('devtools:'))!
     const errors: string[] = []
+    let wasVisible: boolean | undefined
     page.on('pageerror', error => errors.push(error.message))
     try {
         // Use the same real plugin handle as the existing CDP suites; no duplicate or mocked UI.
         await page.waitForFunction(() => !!(window as any).__remoteDesktop)
+        wasVisible = await page.evaluate(() => {
+            const win = (globalThis as any).require('@electron/remote').getCurrentWindow()
+            const visible = win.isVisible()
+            win.show()
+            return visible
+        })
         expect(await page.evaluate(() => (globalThis as any).__trdSmokeCredentials)).toBe(true)
         const client = await clientIdentity(script => page.evaluate(`(async () => {${script}})()`))
         info.annotations.splice(info.annotations.findIndex(a => a.type === 'infrastructure'), 1)
@@ -38,6 +45,8 @@ test(hostedSmoke ? 'Native Tabby settings smoke (no baseline qualification)' : '
         await page.evaluate(() => (window as any).__remoteDesktop.help.openSettings('remote-desktop'))
         const settings = page.locator('.trd-settings')
         await expect(settings).toBeVisible()
+        await expect(settings.locator('.trd-lead > span').first()).toHaveText(
+            'tabby-rdp ' + JSON.parse(fs.readFileSync(new URL('../../package.json', import.meta.url), 'utf8')).version)
         await settings.locator('[data-tab=settings]').click()
         const soundToggle = settings.locator('[data-setting=sound]')
         await expect(settings.locator('trd-settings-toggle toggle input[type=checkbox]')).toHaveCount(client.platform === 'darwin' ? 10 : 9)
@@ -128,6 +137,7 @@ test(hostedSmoke ? 'Native Tabby settings smoke (no baseline qualification)' : '
         const trace = info.outputPath('trace.zip')
         await context.tracing.stop({ path: trace })
         await info.attach('trace', { path: trace, contentType: 'application/zip' })
+        if (wasVisible === false && !page.isClosed()) await page.evaluate(() => (globalThis as any).require('@electron/remote').getCurrentWindow().hide())
         await browser.close() // disconnect CDP; the existing runner owns Tabby's lifecycle
     }
 })

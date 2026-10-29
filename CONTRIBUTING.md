@@ -87,8 +87,8 @@ to require the live desktop checks. See [the host smoke instructions](test/READM
 coverage and the release/nightly test matrix.
 
 For release controls, run `npm test -- --packed --hidden --tabby <binary> smoke-updates`.
-It exercises cancellation, progress and failures, then installs a real published package in the runner's disposable
-profile and verifies its version. See [test/README.md](test/README.md#package-change-smoke-tests).
+It exercises cancellation, progress, failures and verified success using a simulated compatible release and disk
+result, retaining the installed test package. See [test/README.md](test/README.md#package-change-smoke-tests).
 
 ## Host compatibility
 
