@@ -40,6 +40,8 @@ test(`Real RDP visual checkpoints: ${kind}`, async ({}, info) => {
         expect(await ev('return globalThis.__trdSmokeCredentials')).toBe(true)
         metadata.client = await clientIdentity(ev)
         metadata.host = await ev('return RD.compat.snapshot()')
+        // Keep Playwright's viewport state in sync so element screenshots restore this size, rather than native window bounds.
+        await page.setViewportSize({ width: 1100, height: 850 })
         const cdp = await context.newCDPSession(page)
         await cdp.send('Emulation.setDeviceMetricsOverride', { width: 1100, height: 850, deviceScaleFactor: 1, mobile: false })
         await t.settings({ desk: false, resize: krdp ? 'off' : 'live', zoom: 'fit', sharpness: 'standard', clipboard: 'off', sound: false, microphone: false, h264: krdp, connectionStatus: false })

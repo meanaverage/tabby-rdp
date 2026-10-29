@@ -283,6 +283,10 @@ interactive-token scheduled task. A WinRM service session cannot supply that des
 a `netsh interface portproxy` can forward the guest address to loopback CDP: firewall that port to the libvirt host alone,
 then SSH-forward it from that host. Remove the firewall rule, portproxy and task at teardown. Never publish CDP to a LAN.
 
+Windows client and server VMs need unique machine SIDs. Generalize Windows images with Sysprep before duplicating them.
+An ungeneralized clone can make native Windows SSPI reject valid RDP credentials with event 6167 even when IronRDP or a
+Linux client connects successfully; see [Microsoft's duplicate-SID authentication guidance](https://support.microsoft.com/en-us/servicing/os/windows/docs/2025/10/kerberos-and-ntlm-authentication-failures-due-to-duplicate-sids).
+
 ```sh
 TRD_QA_TARGETS_FILE=/private/targets.json node scripts/qa/baseline.mjs visual-linux-fedora44
 # Review new baseline PNGs, then use the dashboard (baseline updates always disabled):
