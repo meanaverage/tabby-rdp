@@ -257,6 +257,7 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
 
             <section data-topic="settings">
                 <h4>Settings</h4>
+                <h5>Connection</h5>
                 <div class="form-line">
                     <div class="header">
                         <div class="title">RDP client</div>
@@ -267,9 +268,7 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
                         ${Object.entries(RDP_CLIENT_LABELS).map(([id, label]) => `<option value="${id}">${esc(label)}</option>`).join('')}
                     </select>
                 </div>` + `
-                <h5>Picture</h5>
-                ${this.toggleLine('relaxOrderChecks', 'Relax drawing order checks (FreeRDP)',
-                    'For servers or PAM proxies that send drawing orders they did not announce. Try this if FreeRDP shows a black screen or reports an unannounced order. Applies on the next connection; IronRDP is unaffected. Each desktop can override it.')}
+                <h5>Display</h5>
                 <div class="form-line">
                     <div class="header">
                         <div class="title">When the pane is resized</div>
@@ -282,6 +281,17 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
                         <option value="actual">Keep the size, 1:1</option>
                     </select>
                 </div>` + `
+                <div class="form-line">
+                    <div class="header">
+                        <div class="title">Sharpness</div>
+                        <div class="description">Retina uses your screen's pixel density and matching remote scaling.</div>
+                    </div>
+                    <select class="form-control" data-setting="sharpness">
+                        <option value="standard">Standard</option>
+                        <option value="retina">Retina</option>
+                    </select>
+                </div>
+                ${this.toggleLine('h264', 'Video decoding (H.264)', 'Hardware acceleration where available. Applies on the next connection.')}
                 <div class="form-line">
                     <div class="header">
                         <div class="title">Auto-hide header</div>
@@ -306,18 +316,18 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
                         <input class="form-control" type="number" min="0" max="32768" step="1" placeholder="Height" aria-label="Minimum window height" data-setting="headerMinHeight">
                     </div>
                 </div>` + `
+                ${this.toggleLine('connectionStatus', 'Show connection status', 'Show throughput, frame rate, latency and connection details.')}
+
+                <h5>Keyboard</h5>
+                ${this.toggleLine('unicodeKeys', 'Send text as typed', `Send characters instead of physical keys. Modifier shortcuts still use key positions. ${this.info('Useful for dead keys or mismatched keyboard layouts. GNOME is limited to characters in its own layout. Chinese, Japanese and Korean input methods are not supported.')}`)}
+                ${mac ? this.toggleLine('macShortcuts', 'Mac-style shortcuts', '⌘C copies and ⌘V pastes. Tap ⌘ for the Windows key; when disabled, ⌘ always sends the Windows key.') : ''}` + `
                 <div class="form-line">
                     <div class="header">
-                        <div class="title">Sharpness</div>
-                        <div class="description">Retina uses your screen's pixel density and matching remote scaling.</div>
+                        <div class="title">Shortcuts</div>
+                        <div class="description">Manage in <a data-action="shortcuts">Getting started</a> or Tabby's Hotkeys.</div>
                     </div>
-                    <select class="form-control" data-setting="sharpness">
-                        <option value="standard">Standard</option>
-                        <option value="retina">Retina</option>
-                    </select>
+                    <div><span data-hotkey></span></div>
                 </div>
-                ${this.toggleLine('h264', 'Video decoding (H.264)', 'Hardware acceleration where available. Applies on the next connection.')}
-                ${this.toggleLine('connectionStatus', 'Show connection status', 'Show throughput, frame rate, latency and connection details.')}
 
                 <h5>Sound</h5>
                 ${this.toggleLine('sound', 'Sound', 'Play remote audio. Applies on the next connection.')}
@@ -342,17 +352,6 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
                 <div class="trd-list" data-list="folders"></div>
                 <div class="trd-add"><button class="btn btn-secondary btn-sm" data-action="folder">Share a folder…</button></div>
 
-                <h5>Keyboard</h5>
-                ${this.toggleLine('unicodeKeys', 'Send text as typed', `Send characters instead of physical keys. Modifier shortcuts still use key positions. ${this.info('Useful for dead keys or mismatched keyboard layouts. GNOME is limited to characters in its own layout. Chinese, Japanese and Korean input methods are not supported.')}`)}
-                ${mac ? this.toggleLine('macShortcuts', 'Mac-style shortcuts', '⌘C copies and ⌘V pastes. Tap ⌘ for the Windows key; when disabled, ⌘ always sends the Windows key.') : ''}` + `
-                <div class="form-line">
-                    <div class="header">
-                        <div class="title">Shortcuts</div>
-                        <div class="description">Manage in <a data-action="shortcuts">Getting started</a> or Tabby's Hotkeys.</div>
-                    </div>
-                    <div><span data-hotkey></span></div>
-                </div>
-
                 <h5>SSH hosts</h5>
                 ${this.toggleLine('desk', 'desk integration', `Type <code>desk</code> to open your current SSH shell on the desktop. Installs a helper on GNOME hosts on the next desktop connection; disabling removes it.`)}
                 ${this.toggleLine('discoverVMs', 'Find virtual machines on SSH hosts', 'List libvirt and Hyper-V VMs in the SSH tab menu. Discovery is read-only and runs at most once a minute.')}` + `
@@ -369,6 +368,12 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
                         <option value="60">After an hour</option>
                     </select>
                 </div>` + `
+
+                <h5>FreeRDP compatibility</h5>
+                ${this.toggleLine('glyphCache', 'Glyph caching (experimental)',
+                    'For older RDP servers or PAM login screens with missing text. May cause display artifacts. Leave off unless a connection needs it; applies on reconnect. Each desktop can override it.')}
+                ${this.toggleLine('relaxOrderChecks', 'Relax drawing order checks (FreeRDP)',
+                    'For servers or PAM proxies that send drawing orders they did not announce. Try this if FreeRDP shows a black screen or reports an unannounced order. Applies on the next connection; IronRDP is unaffected. Each desktop can override it.')}
 
                 <h5>Diagnostics</h5>
                 <div class="form-line">
