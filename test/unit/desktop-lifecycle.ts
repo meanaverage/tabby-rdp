@@ -6,7 +6,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import Module, { createRequire } from 'node:module'
-import { PassThrough } from 'node:stream'
 
 const require = createRequire(import.meta.url)
 
@@ -161,7 +160,8 @@ test('a desktop closed while its proxy starts gets the proxy closed, and doesn\'
     assert.ok(started, 'a proxy was started')
     assert.equal(ran, false)
     assert.equal(s.proxy, undefined)
-    // Its port is closed: nothing can connect there any more.
+    // Its port is closed once its helper has stopped: nothing can connect there any more.
+    await started.stopped
     const ws = new WebSocket(started.url)
     assert.equal(await new Promise(resolve => { ws.once('open', () => { ws.terminate(); resolve('open') }); ws.once('error', () => resolve('refused')) }), 'refused')
 })
@@ -531,8 +531,6 @@ for (const store of ['keychain', 'vault']) {
     for (const route of ['desktop', 'gateway']) {
         test(`${route} shared-account persistence (${store}) honors newer edits, names, removal and cancelled forms`, async t => {
             const signin = require('../../dist/signin.js')
-            const gateway = require('../../dist/gateway.js')
-            const open = gateway.openThroughGateway
             const ask = signin.askCredentials
             const saved = new Map<string, string>()
             const extraKeychain = new Map<string, string>()
@@ -550,7 +548,7 @@ for (const store of ['keychain', 'vault']) {
                 addSecret: async (secret: any) => { saved.set(secret.key.key, secret.value) },
                 removeSecret: async (_: string, key: any) => { saved.delete(key.key) },
             } : null)
-            t.after(() => { signin.useVault(null); gateway.openThroughGateway = open; signin.askCredentials = ask; delete stubs.keytar })
+            t.after(() => { signin.useVault(null); signin.askCredentials = ask; delete stubs.keytar })
             for (const action of ['unchanged', 'password', 'rename', 'remove', 'cancel', 'stale']) {
                 saved.clear(); extraKeychain.clear()
                 const svc = service()
@@ -581,9 +579,16 @@ for (const store of ['keychain', 'vault']) {
                     else { assert.equal(action, 'cancel') }
                 } else {
                     const own = await svc.gatewayAccountFor(s.spec, s, gw)
-                    gateway.openThroughGateway = async () => { await between(); return new PassThrough() }
-                    if (own) { (await svc.throughGateway(target, s.spec, s, gw, { ...endpoint, gatewayAccount: own })).destroy() }
-                    else { assert.equal(action, 'cancel') }
+                    if (own) {
+                        // As the helper uses the way through the gateway: the account once the gateway's certificate
+                        // is accepted, the sign-in (meanwhile the account may change), then the tunnel up.
+                        const way = await svc.throughGateway(target, s.spec, s, gw, { ...endpoint, gatewayAccount: own })
+                        await way.account()
+                        await between()
+                        way.opened?.()
+                    } else {
+                        assert.equal(action, 'cancel')
+                    }
                 }
                 for (let i = 0; i < 12; i++) { await new Promise(resolve => setImmediate(resolve)) }
                 assert.equal(options[0].canRemember, action !== 'stale')

@@ -2,7 +2,7 @@ import { spawn, ChildProcessWithoutNullStreams } from 'child_process'
 import { randomBytes, timingSafeEqual, X509Certificate } from 'crypto'
 import { existsSync } from 'fs'
 import { createServer, Socket } from 'net'
-import { dirname, join } from 'path'
+import { basename, dirname, join } from 'path'
 import { Duplex } from 'stream'
 import { rootCertificates } from 'tls'
 import { ByteQueue } from './byteQueue'
@@ -19,19 +19,46 @@ export function freeRDPAuthorities (authorities: readonly string[]): Buffer {
 
 export function helperEnvironment (): NodeJS.ProcessEnv {
     // The helper needs OS paths/locale, not the parent app's API keys or the test runner's passwords.
+    // WLOG_*: FreeRDP's own logging, for a diagnosis (see tools/pdu-trace/README.md): the helper keeps its log off
+    // unless these ask for a channel's log into a file (WLOG_APPENDER=FILE); its console stays the IPC's.
     const keys = ['PATH', 'HOME', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'SystemRoot', 'WINDIR', 'TEMP', 'TMP', 'TMPDIR',
-        'LANG', 'LC_ALL', 'TZ', 'OPENSSL_CONF']
+        'LANG', 'LC_ALL', 'TZ', 'OPENSSL_CONF', 'WLOG_FILTER', 'WLOG_APPENDER', 'WLOG_FILEAPPENDER_OUTPUT_FILE_PATH',
+        'WLOG_FILEAPPENDER_OUTPUT_FILE_NAME', 'WLOG_PREFIX']
     return { ...Object.fromEntries(keys.filter(key => process.env[key] !== undefined).map(key => [key, process.env[key]])),
         OPENSSL_MODULES: dirname(nativeHelperPath()) }
 }
 
+/** The npm package with the FreeRDP helper for a platform (scripts/package-metadata.mjs names it the same). */
+export function freeRDPPackage (platform = `${process.platform}-${process.arch}`): string {
+    return `@tabby-rdp/freerdp-${platform}`
+}
+
+/**
+ * Where the helper is: `own`, a build of one's own in native/bin (npm run build:freerdp, in a checkout), or else in the
+ * platform's package, which npm installs beside the published plugin as one of its optional dependencies (a checkout
+ * has none). `resolve` finds a package's file as require.resolve does. `own` when neither has it.
+ */
+export function helperPath (platform: string, own: string, resolve: (id: string) => string): string {
+    if (existsSync(own)) { return own }
+    try {
+        return join(dirname(resolve(`${freeRDPPackage(platform)}/package.json`)), basename(own))
+    } catch {
+        return own
+    }
+}
+
 export function nativeHelperPath (): string {
-    return join(__dirname, '..', 'native', 'bin', `${process.platform}-${process.arch}`, `tabby-freerdp${process.platform === 'win32' ? '.exe' : ''}`)
+    const platform = `${process.platform}-${process.arch}`
+    return helperPath(platform, join(__dirname, '..', 'native', 'bin', platform, `tabby-freerdp${process.platform === 'win32' ? '.exe' : ''}`), require.resolve)
 }
 
 export function requireFreeRDP (): void {
     if (!hasFreeRDP()) {
-        throw new Error(`FreeRDP is not installed for ${process.platform}-${process.arch}. Build the native helper as described in native/README.md, or choose IronRDP in this desktop's settings.`)
+        const platform = `${process.platform}-${process.arch}`
+        const platforms: unknown = require('../package.json').tabbyRdp?.freerdpPlatforms
+        throw new Error(Array.isArray(platforms) && platforms.includes(platform)
+            ? `FreeRDP's helper for ${platform} is not installed. npm installs it with the plugin, as ${freeRDPPackage(platform)}: reinstall tabby-rdp, or choose IronRDP in this desktop's settings.`
+            : `FreeRDP is not available for ${platform}. Choose IronRDP in this desktop's settings.`)
     }
 }
 
@@ -74,6 +101,19 @@ export function numbers (...values: number[]): Buffer {
     const out = Buffer.alloc(values.length * 4)
     values.forEach((v, i) => out.writeUInt32BE(v >>> 0, i * 4))
     return out
+}
+
+/** The native helper's IPC 3 start message: six strings followed by six uint32 fields. */
+export function freeRDPStart (options: Pick<FreeRDPOptions, 'host' | 'username' | 'password' | 'domain' | 'width' | 'height' | 'pipeline' | 'autologon' | 'relaxOrderChecks'>,
+    relay: { port: number, token: string }): Buffer {
+    const strings = [options.host, options.username, options.password, options.domain, '', relay.token]
+    const fields = strings.map(value => {
+        if (value.includes('\0')) { throw new Error('FreeRDP settings cannot contain a null character') }
+        const text = Buffer.from(value)
+        return Buffer.concat([numbers(text.length), text])
+    })
+    return Buffer.concat([...fields, numbers(relay.port, options.width, options.height, +options.pipeline,
+        +!!options.autologon, +!!options.relaxOrderChecks)])
 }
 
 /** Only a process holding the per-attempt token can open the SSH channel or gateway connection. */
@@ -161,6 +201,7 @@ interface FreeRDPOptions {
     height: number
     pipeline: boolean
     autologon?: boolean
+    relaxOrderChecks?: boolean
     open: (signal: AbortSignal) => Promise<Duplex>
     certificate: (fingerprint: string, valid: boolean, reason: string, details?: CertificateDetails) => void
     withoutNla: () => void
@@ -228,13 +269,7 @@ export class FreeRDPProcess {
                 if (this.closed) { throw new Error('FreeRDP connection cancelled') }
                 await new Promise<void>((resolve, reject) => child.stdin.write(ipcFrame('A', authorities.subarray(at, at + 64 * 1024)), error => error ? reject(error) : resolve()))
             }
-            const strings = [options.host, options.username, options.password, options.domain, '', this.relay.token]
-            const fields = strings.map(value => {
-                if (value.includes('\0')) { throw new Error('FreeRDP settings cannot contain a null character') }
-                const text = Buffer.from(value)
-                return Buffer.concat([numbers(text.length), text])
-            })
-            this.send('S', Buffer.concat([...fields, numbers(this.relay.port, options.width, options.height, +options.pipeline, +!!options.autologon)]))
+            this.send('S', freeRDPStart(options, this.relay))
         } catch (error) { this.fail(error as Error) }
         return started
     }

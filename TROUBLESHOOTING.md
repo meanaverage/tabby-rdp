@@ -38,6 +38,18 @@ After sleep or a network change the desktop reconnects by itself, with growing p
 
 **Sharpness › Retina** renders at your screen's device pixels, with the remote's scale set to match. Video (H.264) is used when the remote sends it: Windows does, GNOME only with a hardware encoder (VA-API or NVENC). **Show connection status** shows the frame rate, the round trip and how the picture comes.
 
+<a id="performance"></a>
+
+## The picture is slow, or the frame rate is low
+
+Start with the server. A Windows session renders at about 30 frames a second by default, and no client shows more than the session renders: open [testufo.com](https://testufo.com) in a browser inside the session and read its own frame-rate readout. To raise the cap, set `DWMFRAMEINTERVAL` (DWORD, 15 for 60 fps) under `HKLM\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations` on the server and start a new session. With H.264 on the server (Group Policy "Prioritize H.264/AVC 444 graphics mode for Remote Desktop Connections") IronRDP hands each frame to the browser's hardware decoder, which takes a few milliseconds; without it the server sends ClearCodec and RemoteFX Progressive, which cost more per frame. **Show connection status** (Settings › Remote Desktop) shows the frame rate and the bytes as they arrive. Its frame rate counts server frames for IronRDP and paint batches for FreeRDP, so the two numbers aren't comparable with each other; compare each with the readout inside the session instead. If it still feels slow, the PDU trace (below) shows per frame whether the time goes to the decoder, the canvas or waiting for the server.
+
+<a id="trace"></a>
+
+## Reporting a picture problem (tearing, a stale picture after a resize)
+
+Turn on **Settings › Remote Desktop › Settings › Diagnostics › Write a log file** (Debug), reproduce the problem, then open the log folder: next to the desktop's `.log` is a `.otlp.json`, the PDU trace: every RDP PDU of the connection with its time, what the browser's H.264 decoder did with each picture, and when the canvas was resized and drawn, grouped by resize and by frame. Open it in the viewer at `tools/pdu-trace/index.html` from the repository (drop the file on it) to see the flow of a resize and the checks on it, and attach it to a report along with the log. Neither file holds passwords, keystrokes, clipboard or picture data; both hold the desktop's name and address. See [tools/pdu-trace/README.md](tools/pdu-trace/README.md).
+
 <a id="sound"></a>
 
 ## No sound, or the microphone isn't heard
@@ -55,6 +67,12 @@ In an SSH tab (or a split pane) where you typed `ssh` on to another machine, **D
 ## The desktop is open somewhere else
 
 GNOME Remote Desktop's headless mode gives each connection a screen of its own: a second computer, or another Tabby window, connected to the same account gets an empty extra screen rather than the same one. So when the desktop is open somewhere else already, you choose. **Take it over** disconnects the other connection, as Windows does; the session and its apps carry on, on this screen. **Open a second screen** keeps both, each with a screen of its own. A desktop taken over from here doesn't take itself back: it says so, and offers the same two choices.
+
+<a id="helper"></a>
+
+## "The network helper …" in a desktop's error
+
+From 0.6.0, connections run in a small program of the plugin's own, `tabby-rdp-proxy` (in the plugin's folder, under `bin/`), which Tabby starts for each open desktop and stops with it. It needs no installation of its own: it comes in the package, for macOS, Windows and Linux on x64 and ARM. "No network helper for …" means the package lacks this computer's (a system or processor it doesn't ship for, or a copy that lost it): reinstall the plugin. "Stopped unexpectedly" names how it ended and its last words, in the desktop's log; the desktop's next try starts a new one. Security software that blocks programs it doesn't know can stop it starting, or close its connections: allow `tabby-rdp-proxy` from Tabby's plugins folder. It listens on 127.0.0.1 only, for the desktop's own client, and connects to the desktops and gateways you open (through SSH, its bytes go through Tabby's own connection instead).
 
 <a id="recovery"></a>
 

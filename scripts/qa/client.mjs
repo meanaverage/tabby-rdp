@@ -10,7 +10,18 @@ if (!binary || !bundle || !/^[1-9]\d{0,4}$/.test(port || '') || Number(port) > 6
 const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'tabby-visual-client-'))
 const modules = path.join(profile, 'plugins/node_modules')
 fs.mkdirSync(modules, { recursive: true })
-fs.writeFileSync(path.join(profile, 'config.yaml'), 'enableWelcomeTab: false\nenableAnalytics: false\nrecoverTabs: false\nenableAutomaticUpdates: false\nremoteDesktop:\n  tipShown: true\n  checkUpdates: false\n')
+fs.writeFileSync(path.join(profile, 'config.yaml'), [
+    'enableWelcomeTab: false',
+    'enableAnalytics: false',
+    'recoverTabs: false',
+    'enableAutomaticUpdates: false',
+    // The portable Windows host can retain an obsolete shell profile; avoid opening it at startup.
+    ...(process.platform === 'win32' ? ['terminal:', '  profile: local:cmd', '  autoOpen: false'] : []),
+    'remoteDesktop:',
+    '  tipShown: true',
+    '  checkUpdates: false',
+    '',
+].join('\n'))
 fs.writeFileSync(path.join(profile, 'plugins/package.json'), '{}')
 fs.cpSync(path.resolve(bundle), path.join(modules, 'tabby-rdp'), { recursive: true })
 const guard = path.join(modules, 'tabby-aaa-smoke-credentials')

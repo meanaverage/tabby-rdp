@@ -252,7 +252,7 @@ JSON files mode 0600; restart the dashboard after changing them. HTTP callers ca
 ### Dedicated native clients
 
 Run `node scripts/qa/bundle-client.mjs` to build an installation directory containing only the plugin, its runtime
-dependencies, the launcher and credential guard. Copy that directory to each dedicated client VM. Install a checksum-verified
+dependencies (every platform's FreeRDP helper package among them), the launcher and credential guard. Copy that directory to each dedicated client VM. Install a checksum-verified
 Tabby release there, plus Node 18 or newer. The initial Linux/Windows clients use checksum-verified official 1.0.236
 ARM64 binaries (xterm ^5); the existing macOS installation reports 1.0.236 with xterm ^6.0.0. All report Electron 43.7.0.
 Those are separate observed builds, not a claim that the same version label means identical host contents. Start:

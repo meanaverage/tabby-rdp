@@ -99,6 +99,31 @@ test('what was copied itself is taken as it is, a link included: the user picked
     assert.equal(leftOut, 0)
 })
 
+test('Electron realpath without native still offers copied files and keeps folder links inside the copied root', { skip: process.platform === 'win32' }, async () => {
+    const { home, folder } = sandbox()
+    fs.symlinkSync('README.txt', path.join(folder, 'readme-link.txt'))
+    fs.symlinkSync('../../.ssh', path.join(folder, 'attachments'))
+    const original = nodeFs.realpathSync
+    // Electron can wrap realpathSync without exposing Node's optional native method on that function.
+    nodeFs.realpathSync = (...args: unknown[]) => original(...args)
+    let result: ReturnType<typeof entriesFor>
+    try {
+        result = entriesFor([path.join(home, '.netrc'), folder])
+    } finally {
+        nodeFs.realpathSync = original
+    }
+    assert.deepEqual(await offered(result.entries), {
+        '.netrc': 'password',
+        'report\\': '',
+        'report\\README.txt': 'readme',
+        'report\\readme-link.txt': 'readme',
+        'report\\sub\\': '',
+        'report\\sub\\deep.txt': 'deep',
+    })
+    assert.equal(result.leftOut, 1)
+    assert.equal(result.cut, false)
+})
+
 test('the remote gets a file a bounded range at a time: asked for more, an error, not a short answer', async () => {
     const { folder } = sandbox()
     const big = path.join(folder, 'big.bin')

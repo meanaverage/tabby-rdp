@@ -34,8 +34,14 @@ jobs:
         with:
           node-version: 22
           cache: npm
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          # helper/go.mod's toolchain: the packed plugin has every platform's network helper, built with it.
+          go-version: 1.27.1
+          cache: false
       - run: npm ci
       - run: npm run build
+      - run: npm run build:helpers
       - run: npm run typecheck:test
       # The full unit suite remains required in ci.yml; these jobs qualify actual native hosts.
       - name: Install pinned official Tabby

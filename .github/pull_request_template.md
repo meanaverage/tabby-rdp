@@ -1,4 +1,6 @@
 <!-- What this changes and why, in a few sentences. Link the issue if there is one. -->
+<!-- Write for reviewers: behavior, limitations and validation. Keep maintainer-directed progress, approval
+     history, personal VM/profile instructions and agent handoffs in the development conversation. -->
 
 **Tested with:** <!-- which suites you ran (npm test -- <suites>), and against what (GNOME, xrdp, Windows; Tabby on macOS, Windows, Linux) -->
 

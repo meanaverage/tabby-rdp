@@ -6,6 +6,7 @@
 // - one going through a saved SSH profile: it opens that profile's SSH tab and shows the desktop over it;
 // - .rdp files: the parser, and importing one as a profile.
 import { suite, type CanvasInfo, type StatusInfo } from '../lib/harness.js'
+import { userScope } from '../../src/desktops.js'
 
 const DIRECT = 'Direct (test)'
 const VIA = 'Through SSH (test)'
@@ -58,13 +59,14 @@ await suite('profiles', async t => {
     await ev('await H.inZone(() => RD.desktop.showDesktop(H.pane))')
     check('own desktop connected (account created)', !!(await t.waitFor('return H.connected(H.pane)', 40)))
     await ev('H.inZone(() => RD.desktop.disconnect(H.pane))')
-    const password = (await t.remote('H.pane', 'cat ~/.local/share/tabby-rdp/rdp-password')).trim()
+    const password = await t.gnomePassword('H.pane')
     const sshKey = await ev('return (await RD.targets.targetOf(H.pane)).key')
     const keychainWorks = await t.keychainWorks()
     const directKey = `rdp#${host}:3389`
+    const directCredentialKey = directKey + userScope('tabby')
     const viaKey = `${sshKey}#127.0.0.1:3389`
     if (keychainWorks) {
-        for (const k of [directKey, viaKey]) {
+        for (const k of [directKey, directCredentialKey, viaKey]) {
             await t.keychain(`deletePassword('tabby-rdp', ${JSON.stringify(k)})`)
             t.onCleanup(() => t.keychain(`deletePassword('tabby-rdp', ${JSON.stringify(k)})`))
         }
@@ -115,7 +117,7 @@ await suite('profiles', async t => {
         await sleep(100)
         check('the header offers no console switch', await ev(`return document.querySelector('.trd-header-toggle')?.style.display === 'none'`))
         if (keychainWorks) {
-            check('the account is saved under rdp#<address>', !!(await t.waitFor(`return await require('keytar').getPassword('tabby-rdp', ${JSON.stringify(directKey)})`, 5)))
+            check('the account is saved for this user under rdp#<address>', !!(await t.waitFor(`return await require('keytar').getPassword('tabby-rdp', ${JSON.stringify(directCredentialKey)})`, 5)))
         }
         const token = await ev<{ type: string, profile?: { options?: { host?: string } } } | null>('return await H.rdp.getRecoveryToken()')
         check('the tab can be restored (recovery token)', token?.type === 'app:rdp-tab' && token.profile?.options?.host === host, token)

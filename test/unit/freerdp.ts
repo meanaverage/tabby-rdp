@@ -11,7 +11,7 @@ import { createSecureContext, TLSSocket } from 'node:tls'
 import { selfSigned } from './support/certificates.js'
 
 const require = createRequire(import.meta.url)
-const { FreeRDPFrames, ipcFrame, numbers, decodeNativeFrame, freeRDPRelay, FreeRDPProcess, FreeRDPError, nativeHelperPath, helperEnvironment, freeRDPAuthorities } = require('../../dist/freerdp.js')
+const { FreeRDPFrames, ipcFrame, numbers, freeRDPStart, decodeNativeFrame, freeRDPRelay, FreeRDPProcess, FreeRDPError, nativeHelperPath, helperEnvironment, freeRDPAuthorities } = require('../../dist/freerdp.js')
 const { nativeKey } = require('../../dist/freerdpView.js')
 const { ownRDPClient, rdpClient } = require('../../dist/rdpClient.js')
 const { specOf, sessionKey } = require('../../dist/desktops.js')
@@ -43,6 +43,44 @@ test('distributed native helpers retain their recorded source, artifact hashes a
     }
 })
 
+test('each platform package.json names for a FreeRDP package has a build in native/bin, and each build is named', () => {
+    const root = fileURLToPath(new URL('../../', import.meta.url))
+    const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'))
+    // Source-only development checkouts may not have built a helper yet.
+    if (!existsSync(join(root, 'native/bin'))) return
+    const expected = process.env.TRD_SINGLE_NATIVE_BUILD === '1' ? [`${process.platform}-${process.arch}`] : pkg.tabbyRdp.freerdpPlatforms
+    assert.deepEqual([...expected].sort(), readdirSync(join(root, 'native/bin')).filter(name => !name.startsWith('.')).sort(),
+        'scripts/pack.mjs makes a package per platform named, from its build')
+})
+
+test('the helper is a build in native/bin, or else the one in its platform\'s package, named as the packaging names it', async t => {
+    const { freeRDPPackage, helperPath } = require('../../dist/freerdp.js')
+    const scripts = await import('../../scripts/package-metadata.mjs')
+    assert.equal(freeRDPPackage('linux-x64'), scripts.freeRDPPackage('linux-x64'))
+    const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = require('node:fs')
+    const scratch = mkdtempSync(join(require('node:os').tmpdir(), 'trd-helper-'))
+    t.after(() => rmSync(scratch, { recursive: true, force: true }))
+    const own = join(scratch, 'plugin/native/bin/linux-x64/tabby-freerdp')
+    const installed = join(scratch, 'node_modules/@tabby-rdp/freerdp-linux-x64')
+    mkdirSync(installed, { recursive: true })
+    writeFileSync(join(installed, 'package.json'), '{}')
+    const asked: string[] = []
+    const resolve = (id: string) => {
+        asked.push(id)
+        if (id !== '@tabby-rdp/freerdp-linux-x64/package.json') throw new Error(`Cannot find module '${id}'`)
+        return join(installed, 'package.json')
+    }
+    // The plugin as npm installs it: no native/bin, the platform's package beside it.
+    assert.equal(helperPath('linux-x64', own, resolve), join(installed, 'tabby-freerdp'))
+    assert.deepEqual(asked, ['@tabby-rdp/freerdp-linux-x64/package.json'])
+    // Neither: the path in native/bin, which hasFreeRDP finds missing.
+    assert.equal(helperPath('linux-x64', own, () => { throw new Error('Cannot find module') }), own)
+    // A build of one's own wins.
+    mkdirSync(join(scratch, 'plugin/native/bin/linux-x64'), { recursive: true })
+    writeFileSync(own, '')
+    assert.equal(helperPath('linux-x64', own, resolve), own)
+})
+
 test('client choice defaults to IronRDP; invalid config never runs an arbitrary backend', () => {
     for (const value of [undefined, null, '', 'auto', 'FreeRDP', 'toString', {}, { toString () { throw new Error('not text') } }]) {
         assert.equal(rdpClient(value), 'ironrdp')
@@ -72,6 +110,16 @@ test('IPC handles split headers/bodies, coalesced frames and rejects oversized f
     for (const byte of stream) decoder.push(Buffer.from([byte]), (type: string, data: Buffer) => result.push([type, data.toString('hex')]))
     assert.deepEqual(result, [['D', numbers(1280, 720).toString('hex')], ['N', ''], ['X', numbers(0, 0).toString('hex')]])
     assert.throws(() => decoder.push(Buffer.from([70, 127, 255, 255, 255]), () => {}), /oversized/)
+})
+
+test('IPC start carries a per-connection relaxed-order flag, off by default', () => {
+    const options = { host: 'pc', username: 'user', password: 'pass', domain: '', width: 800, height: 600, pipeline: false }
+    const relay = { port: 1234, token: 'a'.repeat(64) }
+    const strict = freeRDPStart(options, relay)
+    const relaxed = freeRDPStart({ ...options, relaxOrderChecks: true }, relay)
+    assert.deepEqual(strict.subarray(-24), numbers(1234, 800, 600, 0, 0, 0))
+    assert.deepEqual(relaxed.subarray(-24), numbers(1234, 800, 600, 0, 0, 1))
+    assert.deepEqual(strict.subarray(0, -24), relaxed.subarray(0, -24))
 })
 
 test('certificate stores can exceed one IPC frame while retaining a bounded total', () => {

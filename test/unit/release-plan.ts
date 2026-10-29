@@ -31,22 +31,26 @@ test('draft notes require an exact nonempty changelog and do not promise staged 
     const { releasePlan, releaseNotes } = await script
     const plan = releasePlan('v0.6.0-rc.1', pkg('0.6.0-rc.1'))
     const notes = releaseNotes(plan, '## Unreleased\n\nLater\n\n## 0.6.0-rc.1\n\nTested change\n\n## 0.5.1\n\nOlder\n')
-    assert.match(notes, /Draft: awaiting npm approval/)
+    assert.match(notes, /Unpublished draft/)
     assert.match(notes, /not available until/)
     assert.match(notes, /choose Preview/)
     assert.match(notes, /npm install tabby-rdp@0.6.0-rc.1/)
     assert.match(notes, /Tested change/)
     assert.doesNotMatch(notes, /Later|Older/)
+    assert.doesNotMatch(notes, /Publish this|maintainer|After approval|replacing this paragraph/)
     assert.throws(() => releaseNotes(plan, '## 0.6.0\n\nWrong release'))
     assert.throws(() => releaseNotes(plan, '## 0.6.0-rc.1\n\n## 0.5.1\nOld'))
 })
 
 test('publishing workflow keeps every staging gate, explicit tags and draft availability boundary', () => {
     const workflow = readFileSync(new URL('../../.github/workflows/publish.yml', import.meta.url), 'utf8')
-    assert.match(workflow, /needs: \[ironrdp, package\]/)
+    assert.match(workflow, /needs: \[ironrdp, package, helpers\]/)
     assert.match(workflow, /id-token: write/)
     assert.match(workflow, /sha256sum --strict -c -/)
     assert.match(workflow, /check-vendor\.mjs package/)
+    // The package's network helpers are another system's build of them, byte for byte (their list's hash).
+    assert.match(workflow, /check-vendor\.mjs package [^\n]*--helpers-sha256 "\$HELPERS"/)
+    assert.match(workflow, /HELPERS: \$\{\{ needs\.helpers\.outputs\.sha256 \}\}/)
     assert.match(workflow, /npm stage publish[^\n]*--tag "\$npm_tag"[^\n]*--provenance --access public --ignore-scripts/)
     const creates = workflow.split('\n').filter(line => /gh release create/.test(line))
     assert.equal(creates.length, 2)
@@ -60,6 +64,24 @@ test('publishing workflow keeps every staging gate, explicit tags and draft avai
     assert.doesNotMatch(workflow.split('\n').filter(line => !line.trim().startsWith('#')).join('\n'), /npm (?:publish|stage approve)|gh release edit/)
 })
 
+
+test("a release stages each platform's FreeRDP package before the plugin, which names them, each from its pack", async () => {
+    const { releasePackages } = await script
+    const format4 = { ...pkg('0.6.0-rc.2'), tabbyRdp: { ...pkg('0.6.0-rc.2').tabbyRdp, packageFormat: 4, freerdpPlatforms: ['linux-x64', 'win32-arm64'] } }
+    assert.deepEqual(releasePackages(format4), [
+        { name: '@tabby-rdp/freerdp-linux-x64', file: 'tabby-rdp-freerdp-linux-x64-0.6.0-rc.2.tgz' },
+        { name: '@tabby-rdp/freerdp-win32-arm64', file: 'tabby-rdp-freerdp-win32-arm64-0.6.0-rc.2.tgz' },
+        { name: 'tabby-rdp', file: 'tabby-rdp-0.6.0-rc.2.tgz' },
+    ])
+    // Before format 4, the plugin alone.
+    assert.deepEqual(releasePackages(pkg('0.5.7')), [{ name: 'tabby-rdp', file: 'tabby-rdp-0.5.7.tgz' }])
+    const committed = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8'))
+    assert.equal(releasePackages(committed).length, committed.tabbyRdp.freerdpPlatforms.length + 1)
+    // The workflow takes exactly these by hash, checks each, and stages them in this order.
+    const workflow = readFileSync(new URL('../../.github/workflows/publish.yml', import.meta.url), 'utf8')
+    assert.equal(workflow.match(/node scripts\/release-plan\.mjs packages/g)?.length, 3)
+    assert.match(workflow, /diff "\$RUNNER_TEMP\/expected" "\$RUNNER_TEMP\/listed"/)
+})
 
 test('preview migrations may set preview floors, but no floor may exceed its package', async () => {
     const { releasePlan } = await script

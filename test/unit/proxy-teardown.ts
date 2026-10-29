@@ -1,12 +1,14 @@
-// How the loopback proxy (src/rdcleanpath.ts) ends a connection to a desktop reached directly, over a socket of its
-// own: every way it can end once TLS runs over that socket. TLS over a socket works inside the socket's own handle
-// (Node's TLSWrap); the socket destroyed under it while TLS still uses it crashed Tabby's window, on the first
-// connection to a desktop whose certificate the check refused (issue #69). The tests over the plugin's other streams
-// (an SSH channel, a gateway's tunnel) are in proxy.ts: TLS over a stream of JavaScript has no handle to share.
+// How a connection to a desktop reached directly ends: every way it can end once TLS runs over the connection the
+// proxy made. In Node's TLS, the socket destroyed under TLS while TLS still used it crashed Tabby's window, on the first
+// connection to a desktop whose certificate the check refused (issue #69). The proxy now runs in the network helper
+// (helper/), whose own TCP connection and TLS these are: what must hold is that neither the window's process (here,
+// the plugin's side of the proxy, in a process of its own) nor the helper stops, that the client hears the end, and
+// that the helper lets the server's connection go. The tests over the plugin's other streams (an SSH channel, a
+// gateway's tunnel) are in proxy.ts.
 //
-// Each case runs in a process of its own, since a crash ends the process it happens in: in Node, and in Electron as
-// Tabby has it when TRD_ELECTRON names an Electron binary that may run as Node (see CONTRIBUTING.md). Needs the openssl
-// command for the stand-in server's certificate. Runs against the built plugin: npm run build && npm run test:unit
+// Each case runs in a process of its own: in Node, and in Electron as Tabby has it when TRD_ELECTRON names an
+// Electron binary that may run as Node (see CONTRIBUTING.md). Needs the openssl command for the stand-in server's
+// certificate. Runs against the built plugin and helper: npm run build && npm run build:helper && npm run test:unit
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
@@ -16,9 +18,8 @@ import * as path from 'node:path'
 import { selfSigned } from './support/certificates.js'
 
 /**
- * The proxy, with a client sending one request through it to a stand-in RDP server over a socket (as a desktop tab's
- * direct connection reaches its desktop), then `scenario`. Records the order the proxy's streams to the server are
- * destroyed in: the socket it was given ('socket') and TLS over it ('tls'). Prints what happened as JSON, and exits on
+ * The proxy, with a client sending one request through it to a stand-in RDP server the helper connects to itself (as
+ * a desktop tab's direct connection reaches its desktop), then `scenario`. Prints what happened as JSON, and exits on
  * its own only if nothing crashed.
  */
 const CLIENT = String.raw`
@@ -27,22 +28,6 @@ const net = require('net')
 const tls = require('tls')
 const fs = require('fs')
 const { createRequire } = require('module')
-
-// Before the plugin is loaded: the proxy's socket to the server is marked by the factory below, TLS over it here.
-const destroyed = []
-const destroy = net.Socket.prototype.destroy
-net.Socket.prototype.destroy = function (...args) {
-    if (this.trdUpstream && !this.destroyed) {
-        destroyed.push(this.trdUpstream)
-    }
-    return destroy.apply(this, args)
-}
-const connect = tls.connect
-tls.connect = function (...args) {
-    const socket = connect.apply(this, args)
-    socket.trdUpstream = 'tls'
-    return socket
-}
 
 const { startRDCleanPathProxy } = require(dist + '/rdcleanpath.js')
 const WebSocket = createRequire(dist + '/rdcleanpath.js')('ws')
@@ -62,8 +47,11 @@ const withoutNla = scenario === 'refused without NLA'
 
 const secureContext = tls.createSecureContext({ key: fs.readFileSync(keyFile), cert: fs.readFileSync(certFile) })
 const serverSockets = new Set()
+// The server's connections the helper has let go of.
+let serverClosed = 0
 const server = net.createServer(socket => {
     serverSockets.add(socket)
+    socket.on('close', () => { serverClosed++ })
     socket.on('error', () => { })
     socket.once('data', () => {
         socket.write(confirm(withoutNla ? 1 : 2))
@@ -86,10 +74,8 @@ server.listen(0, '127.0.0.1', async () => {
     const log = []
     let ws
     let checked = false
-    const open = () => new Promise(resolve => {
-        const socket = net.connect(port, '127.0.0.1', () => resolve(socket))
-        socket.trdUpstream = 'socket'
-    })
+    // The helper's own connection, as a desktop tab's.
+    const open = async () => ({ direct: { host: '127.0.0.1', port } })
     const check = () => {
         checked = true
         switch (scenario) {
@@ -119,10 +105,18 @@ server.listen(0, '127.0.0.1', async () => {
     for (let i = 0; i < 200 && !clientClosed; i++) {
         await new Promise(resolve => setTimeout(resolve, 25))
     }
-    // Long enough for what a crash would follow (the TLS library's next look at its socket) to have happened.
+    // Long enough for what a crash would follow (TLS's next look at its connection) to have happened.
     await new Promise(resolve => setTimeout(resolve, 300))
-    process.stdout.write(JSON.stringify({ electron: process.versions.electron ?? null, log, failure: proxy.failure, checked, clientClosed, relayUp: relayUp(), destroyed }))
+    for (let i = 0; i < 80 && serverClosed < serverSockets.size; i++) {
+        await new Promise(resolve => setTimeout(resolve, 25))
+    }
+    const helperRunning = !proxy.ended
     proxy.close()
+    await proxy.stopped
+    process.stdout.write(JSON.stringify({
+        electron: process.versions.electron ?? null, log, failure: proxy.failure, checked, clientClosed, relayUp: relayUp(), helperRunning,
+        serverConnections: serverSockets.size, serverClosed,
+    }))
     for (const socket of serverSockets) socket.destroy()
     server.close()
     process.exit(0)
@@ -136,7 +130,11 @@ interface Outcome {
     checked: boolean
     clientClosed: boolean
     relayUp: boolean
-    destroyed: string[]
+    /** The helper was still running once the connection had ended (it is stopped after). */
+    helperRunning: boolean
+    /** How many connections the stand-in server got, and how many of them were let go. */
+    serverConnections: number
+    serverClosed: number
     code: number | null
     signal: string | null
     stderr: string
@@ -163,7 +161,9 @@ async function run (scenario: string, runtime = process.execPath): Promise<Outco
     child.stdout.on('data', d => { out += d })
     child.stderr.on('data', d => { stderr += d })
     const [code, signal] = await new Promise<[number | null, string | null]>(resolve => child.once('exit', (c, s) => resolve([c, s])))
-    let reported: Omit<Outcome, 'code' | 'signal' | 'stderr'> = { electron: null, log: [], failure: null, checked: false, clientClosed: false, relayUp: false, destroyed: [] }
+    let reported: Omit<Outcome, 'code' | 'signal' | 'stderr'> = {
+        electron: null, log: [], failure: null, checked: false, clientClosed: false, relayUp: false, helperRunning: false, serverConnections: 0, serverClosed: 0,
+    }
     try {
         reported = JSON.parse(out)
     } catch { }
@@ -194,20 +194,19 @@ function assertEnded (scenario: typeof SCENARIOS[number], outcome: Outcome, wher
     if (scenario.failure) {
         assert.match(outcome.failure ?? '', scenario.failure, what)
     }
-    // TLS goes before the socket under it, every time the proxy ends them both. (Where the server hangs up or TLS
-    // fails, TLS may end itself first; it never ends after its socket.)
-    const tlsAt = outcome.destroyed.indexOf('tls')
-    const socketAt = outcome.destroyed.indexOf('socket')
-    assert.ok(socketAt === -1 || tlsAt !== -1 && tlsAt < socketAt, `TLS destroyed before the socket under it: ${what}`)
+    assert.doesNotMatch(outcome.failure ?? '', /stopped unexpectedly/, what)
+    assert.equal(outcome.helperRunning, true, `the helper kept running: ${what}`)
+    // The helper let the server's connection go, whichever side ended it.
+    assert.equal(outcome.serverConnections, 1, what)
+    assert.equal(outcome.serverClosed, outcome.serverConnections, `the server's connection was let go: ${what}`)
 }
 
 for (const scenario of SCENARIOS) {
-    test(`a direct connection that ends this way leaves the process running, TLS destroyed before its socket: ${scenario.name}`, { skip: !certificate }, async () => {
+    test(`a direct connection that ends this way leaves the process and the helper running, and the server's connection let go: ${scenario.name}`, { skip: !certificate }, async () => {
         const outcome = await run(scenario.name)
         assertEnded(scenario, outcome, 'in Node')
         if (scenario.name.startsWith('refused') || scenario.name.startsWith('client leaves')) {
             assert.equal(outcome.checked, true, 'the certificate was checked')
-            assert.deepEqual(outcome.destroyed, ['tls', 'socket'], 'the proxy ended both itself, TLS first')
         }
     })
 }

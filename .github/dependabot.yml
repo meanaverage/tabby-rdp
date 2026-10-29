@@ -1,13 +1,23 @@
-# Proposes updates to the actions the workflows use, as pull requests that change each pinned commit and the version
-# in its comment together (CONTRIBUTING.md, "Actions"). They go through review and CI like any other change; a new
-# major version comes in a pull request of its own.
+# Version updates target the active preview branch. Update target-branch when that branch advances (AGENTS.md).
+# GitHub reads this configuration from the repository's default branch; security updates always target that branch.
+# scripts/electron stays pinned to the Electron in Tabby; change it deliberately with a Tabby host upgrade.
 version: 2
 updates:
   - package-ecosystem: github-actions
     directory: /
+    target-branch: 0.6.0-rc5
     schedule:
       interval: weekly
     groups:
       actions:
+        patterns: ['*']
+        update-types: [minor, patch]
+  - package-ecosystem: npm
+    directory: /
+    target-branch: 0.6.0-rc5
+    schedule:
+      interval: weekly
+    groups:
+      npm:
         patterns: ['*']
         update-types: [minor, patch]

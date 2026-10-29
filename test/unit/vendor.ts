@@ -12,7 +12,8 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { gunzipSync, gzipSync } from 'node:zlib'
-import { runtimeMetadata } from '../../scripts/package-metadata.mjs'
+import { freeRDPFiles, freeRDPMetadata, freeRDPPackage, runtimeMetadata } from '../../scripts/package-metadata.mjs'
+import { helperFile, SUMS, TARGETS } from '../../scripts/build-helper.mjs'
 import { MANIFEST, checkBase, checkPackage, checkTree, compareRebuilt, sha256 } from '../../scripts/check-vendor.mjs'
 
 const root = fileURLToPath(new URL('../../', import.meta.url))
@@ -192,18 +193,18 @@ test("CI's rebuild comparison refuses a link in vendor/, committed or rebuilt", 
     assert.deepEqual(result.odd, ['vendor/linked.js (rebuilt, not a file)'])
 })
 
-type Entry = { path: string, data?: string | Buffer, type?: string, link?: string, prefix?: string, magic?: string }
+type Entry = { path: string, data?: string | Buffer, type?: string, link?: string, prefix?: string, magic?: string, mode?: string }
 
 /** A gzipped tar of the entries, as npm pack writes one (ustar headers), then its end: two empty blocks, or `end`. A
  * type of 2 is a link, 5 a folder; a prefix is the folder part of a long name, which ustar keeps apart. Entries in more
  * come after a single empty block, where npm's tar reader reads on. */
 function tarball (entries: Entry[], more: Entry[] = [], end = Buffer.alloc(1024)): string {
     const blocks: Buffer[] = []
-    const add = ({ path: name, data = '', type = '0', link = '', prefix = '', magic = 'ustar\u000000' }: Entry) => {
+    const add = ({ path: name, data = '', type = '0', link = '', prefix = '', magic = 'ustar\u000000', mode = '0000644' }: Entry) => {
         const body = Buffer.from(data)
         const header = Buffer.alloc(512)
         header.write(name, 0, 100, 'utf8')
-        header.write('0000644\0', 100, 'latin1')
+        header.write(`${mode}\0`, 100, 'latin1')
         header.write('0000000\0', 108, 'latin1')
         header.write('0000000\0', 116, 'latin1')
         header.write(`${body.length.toString(8).padStart(11, '0')}\0`, 124, 'latin1')
@@ -446,7 +447,7 @@ test('the publish check fails a tarball npm would read otherwise, rather than ch
  * exit code, what it printed, and what it added to the run's summary. */
 function command (dir: string, ...args: string[]): { status: number | null, output: string, summary: string } {
     fs.mkdirSync(path.join(dir, 'scripts'), { recursive: true })
-    for (const script of ['check-vendor.mjs', 'package-metadata.mjs']) {
+    for (const script of ['check-vendor.mjs', 'package-metadata.mjs', 'build-helper.mjs']) {
         fs.copyFileSync(path.join(root, 'scripts', script), path.join(dir, 'scripts', script))
     }
     const summary = `${fresh('summary')}.md`
@@ -558,7 +559,7 @@ test('format 1 (0.5.5): runtime publication excludes development tools and prese
     assert.ok(verify(contents.map(([name, data]) => [name, name === 'npm-shrinkwrap.json' ? JSON.stringify(altered) : data])).length,
         'a changed runtime dependency must fail publication')
     assert.throws(() => runtimeMetadata(manifest, { ...lock, version: '9.9.9' }), /disagree/)
-    assert.throws(() => runtimeMetadata({ ...manifest, tabbyRdp: { packageFormat: 4 } }, lock), /packageFormat/)
+    assert.throws(() => runtimeMetadata({ ...manifest, tabbyRdp: { packageFormat: 6 } }, lock), /packageFormat/)
 })
 
 test('format 3: as format 2, and package.json publishes its test script, the only script it publishes', () => {
@@ -617,4 +618,122 @@ test('format 2: no shrinkwrap, package.json alone, its runtime dependencies pinn
     assert.match(verify([...contents, ['npm-shrinkwrap.json', JSON.stringify(lock)]]).join('\n'), /npm-shrinkwrap\.json: in the package, which publishes none/)
     assert.ok(verify(contents.map(([name, data]) => [name, name === 'package.json' ? JSON.stringify(manifest) : data])).length,
         'unfiltered development metadata must fail publication')
+})
+
+/** A format 4 plugin: its manifest and lock, with the FreeRDP helper built for two platforms. */
+const FORMAT_4 = {
+    name: 'tabby-rdp', version: '1.2.3', repository: { type: 'git', url: 'git+https://github.com/meanaverage/tabby-rdp.git' },
+    dependencies: { runtime: '1.0.0' }, devDependencies: { browserTester: '2.0.0' }, scripts: { test: 'runner' },
+    tabbyRdp: { packageFormat: 4, freerdpPlatforms: ['linux-x64', 'win32-arm64'] },
+}
+const FORMAT_4_LOCK = { name: 'tabby-rdp', version: '1.2.3', lockfileVersion: 3,
+    packages: { '': { ...FORMAT_4 }, 'node_modules/runtime': { version: '1.0.0' }, 'node_modules/browserTester': { version: '2.0.0', dev: true } } }
+/** native/bin/linux-x64 as a build leaves it: the helper, a library it loads, a license and its record. */
+const HELPER: Record<string, string | Buffer> = {
+    'tabby-freerdp': Buffer.from('\x7fELF helper'),
+    'libfreerdp3.so.3': Buffer.from('\x7fELF library'),
+    'licenses/FreeRDP-LICENSE': 'Apache License\n',
+    'BUILD.json': '{"files":[]}\n',
+}
+
+/** A repository with a format 4 plugin's files, tagged with its version. */
+function releasedWithHelpers (): string {
+    const dir = repository(BUILD, {
+        'package.json': JSON.stringify(FORMAT_4), 'package-lock.json': JSON.stringify(FORMAT_4_LOCK), 'README.md': '# tabby-rdp\n',
+        LICENSE: 'MIT License\n', 'native/package/README.md': "# tabby-rdp's FreeRDP helper\n",
+        ...Object.fromEntries(Object.entries(HELPER).map(([file, data]) => [`native/bin/linux-x64/${file}`, data])),
+    })
+    git(dir, 'tag', 'v1.2.3')
+    return dir
+}
+
+/** The FreeRDP package for linux-x64 as scripts/pack.mjs makes it from that repository. */
+const helperPackage = (): (readonly [string, string | Buffer])[] => [
+    ['package.json', freeRDPMetadata(FORMAT_4, 'linux-x64')],
+    ['README.md', "# tabby-rdp's FreeRDP helper\n"],
+    ['LICENSE', 'MIT License\n'],
+    ...Object.entries(HELPER),
+]
+
+test('format 4: the published package.json names a FreeRDP package per platform, pinned to the plugin\'s version', () => {
+    const published = JSON.parse(runtimeMetadata(FORMAT_4, FORMAT_4_LOCK)['package.json'].toString())
+    assert.deepEqual(published.optionalDependencies, { '@tabby-rdp/freerdp-linux-x64': '1.2.3', '@tabby-rdp/freerdp-win32-arm64': '1.2.3' })
+    // Right after the runtime dependencies; otherwise as format 3 publishes it.
+    assert.deepEqual(Object.keys(published), ['name', 'version', 'repository', 'dependencies', 'optionalDependencies', 'scripts', 'tabbyRdp'])
+    assert.deepEqual(published.scripts, { test: 'runner' })
+    // The committed package.json names none: the lock would have to resolve packages that are published with the release.
+    assert.throws(() => runtimeMetadata({ ...FORMAT_4, optionalDependencies: { other: '1.0.0' } }, FORMAT_4_LOCK), /derives them/)
+    for (const freerdpPlatforms of [undefined, [], ['linux-x64', 'linux-x64'], ['darwin-x86'], ['linux-x64; rm -rf /']]) {
+        assert.throws(() => runtimeMetadata({ ...FORMAT_4, tabbyRdp: { packageFormat: 4, freerdpPlatforms } }, FORMAT_4_LOCK), /freerdpPlatforms/)
+    }
+})
+
+test("format 4: a FreeRDP package's package.json says which computers npm installs it on, and it is not a Tabby plugin", () => {
+    const linux = JSON.parse(freeRDPMetadata(FORMAT_4, 'linux-x64').toString())
+    assert.deepEqual([linux.name, linux.version, linux.os, linux.cpu, linux.libc, linux.license], [freeRDPPackage('linux-x64'), '1.2.3', ['linux'], ['x64'], ['glibc'], 'MIT AND Apache-2.0'])
+    // npm's provenance check compares the repository with the one the workflow ran in.
+    assert.deepEqual(linux.repository, FORMAT_4.repository)
+    assert.equal(linux.keywords, undefined, 'without tabby-plugin, Tabby never loads it')
+    assert.equal(linux.scripts, undefined)
+    const windows = JSON.parse(freeRDPMetadata(FORMAT_4, 'win32-arm64').toString())
+    assert.deepEqual([windows.os, windows.cpu, windows.libc], [['win32'], ['arm64'], undefined])
+    assert.throws(() => freeRDPMetadata(FORMAT_4, 'darwin-arm64'), /not in tabbyRdp\.freerdpPlatforms/)
+    // The package's own files can't come from the build's folder.
+    assert.throws(() => freeRDPFiles('linux-x64', ['tabby-freerdp', 'readme.md']), /keeps for its own/)
+    assert.throws(() => freeRDPFiles('linux-x64', ['package.json']), /keeps for its own/)
+})
+
+test("format 4: the publish check passes a FreeRDP package of the tag's build, and fails anything else in it", () => {
+    const dir = releasedWithHelpers()
+    const check = (files: (readonly [string, string | Buffer])[]) => checkPackage(dir, tarball(entries(files))).problems
+    assert.deepEqual(checkPackage(dir, tarball(entries(helperPackage()))), {
+        problems: [], revision: 'v1.2.3', commit: git(dir, 'rev-parse', 'v1.2.3').trim(), version: '1.2.3', files: 7, vendor: 0, built: 0, platform: 'linux-x64',
+    })
+    assert.deepEqual(check(helperPackage().map(([file, data]) => [file, file === 'tabby-freerdp' ? '\x7fELF backdoor' : data])),
+        ['tabby-freerdp: not as native/bin/linux-x64/tabby-freerdp in v1.2.3'])
+    assert.deepEqual(check([...helperPackage(), ['preinstall.js', 'pwned()\n']]), ["preinstall.js: not in v1.2.3's package for linux-x64"])
+    assert.deepEqual(check(helperPackage().filter(([file]) => file !== 'libfreerdp3.so.3')), ['libfreerdp3.so.3: missing from the package'])
+    // package.json as derived, not another one: install scripts, or other computers to install on.
+    const scripted = { ...JSON.parse(freeRDPMetadata(FORMAT_4, 'linux-x64').toString()), scripts: { install: 'node pwned.js' } }
+    assert.deepEqual(check(helperPackage().map(([file, data]) => [file, file === 'package.json' ? JSON.stringify(scripted, null, 2) + '\n' : data])),
+        ['package.json: not as derived from v1.2.3'])
+    // A platform the tag doesn't publish (none built), or doesn't name.
+    const windows = [['package.json', freeRDPMetadata(FORMAT_4, 'win32-arm64')] as const, ...helperPackage().filter(([file]) => file !== 'package.json')]
+    assert.deepEqual(check(windows), ['tabby-freerdp: not in v1.2.3\'s package for win32-arm64', 'libfreerdp3.so.3: not in v1.2.3\'s package for win32-arm64',
+        'licenses/FreeRDP-LICENSE: not in v1.2.3\'s package for win32-arm64', 'BUILD.json: not in v1.2.3\'s package for win32-arm64'])
+    const unnamed = JSON.stringify({ ...JSON.parse(freeRDPMetadata(FORMAT_4, 'linux-x64').toString()), name: '@tabby-rdp/freerdp-darwin-arm64' })
+    assert.match(check(helperPackage().map(([file, data]) => [file, file === 'package.json' ? unnamed : data])).join('\n'), /darwin-arm64 is not in tabbyRdp\.freerdpPlatforms/)
+})
+
+test("format 4: the plugin's package holds no native code, and a revision before format 4 publishes no FreeRDP package", () => {
+    const dir = releasedWithHelpers()
+    const plugin = [...packaged().filter(([file]) => file !== 'package.json'), ['LICENSE', 'MIT License\n'] as const,
+        ...Object.entries(runtimeMetadata(FORMAT_4, FORMAT_4_LOCK)), ...Object.entries(DIST)]
+    assert.deepEqual(checkPackage(dir, tarball(entries(plugin))).problems, [])
+    assert.deepEqual(checkPackage(dir, tarball(entries([...plugin, ['native/bin/linux-x64/tabby-freerdp', HELPER['tabby-freerdp']]]))).problems,
+        ['native/bin/linux-x64/tabby-freerdp: in the plugin\'s package, where format 4 publishes no native code (it is in its platform\'s FreeRDP package)'])
+    const old = released()
+    assert.match(checkPackage(old, tarball(entries(helperPackage()))).problems.join('\n'), /a FreeRDP package, which v1\.2\.3 doesn't publish/)
+})
+
+test('format 5: the plugin carries only the seven executable network helpers verified by an independent build', () => {
+    const manifest = { ...FORMAT_4, tabbyRdp: { ...FORMAT_4.tabbyRdp, packageFormat: 5 } }
+    const lock = { ...FORMAT_4_LOCK, packages: { ...FORMAT_4_LOCK.packages, '': { ...FORMAT_4_LOCK.packages[''], tabbyRdp: manifest.tabbyRdp } } }
+    const dir = repository(BUILD, { 'package.json': JSON.stringify(manifest), 'package-lock.json': JSON.stringify(lock) })
+    const metadata = runtimeMetadata(manifest, lock)
+    const helpers = Object.fromEntries(TARGETS.map(target => [helperFile(target), `helper for ${target.platform}-${target.arch}\n`]))
+    const sums = `# built\n${Object.entries(helpers).map(([file, data]) => `${sha256(Buffer.from(data))}  ${file}`).join('\n')}\n`
+    const contents = [...packaged().filter(([file]) => file !== 'package.json' && file !== 'README.md'), ...Object.entries(metadata), ...Object.entries(DIST)]
+    const pack = (bin: Record<string, string>, executable = true) => tarball([...entries(contents),
+        ...Object.entries(bin).map(([file, data]) => ({ path: `package/${file}`, data,
+            mode: file === SUMS || file.endsWith('.exe') || !executable ? '0000644' : '0000755' }))])
+    const good = { ...helpers, [SUMS]: sums }
+    assert.deepEqual(checkPackage(dir, pack(good), { revision: 'HEAD', helpersSha256: sha256(Buffer.from(sums)) }).problems, [])
+    const first = helperFile(TARGETS[0])
+    const { [first]: _missing, ...withoutOne } = good
+    assert.match(checkPackage(dir, pack(withoutOne), { revision: 'HEAD' }).problems.join('\n'), /missing from the package/)
+    assert.match(checkPackage(dir, pack({ ...good, [first]: 'changed' }), { revision: 'HEAD' }).problems.join('\n'), /not what bin\/SHA256SUMS records/)
+    assert.match(checkPackage(dir, pack(good, false), { revision: 'HEAD' }).problems.join('\n'), /not executable/)
+    assert.match(checkPackage(dir, pack({ ...good, 'bin/other': 'x' }), { revision: 'HEAD' }).problems.join('\n'), /unexpected file in bin/)
+    assert.match(checkPackage(dir, pack(good), { revision: 'HEAD', helpersSha256: '0'.repeat(64) }).problems.join('\n'), /differs from an independent helper build/)
 })

@@ -1,5 +1,62 @@
 # Changelog
 
+## 0.6.0-rc.5 (unreleased)
+
+**Fixed**
+- Pasting files copied on macOS works when Electron's filesystem wrapper omits native path resolution. Links inside a copied folder remain restricted to that folder.
+- Windows' default self-signed RDP certificate now connects with forward-secret TLS in IronRDP ([#102](https://github.com/meanaverage/tabby-rdp/issues/102)). The RDP connection runs in the plugin's Go network helper, which accepts that certificate's key usage while still checking its fingerprint or authority before sign-in. RDP uses TLS 1.2 with ECDHE; RD Gateway HTTPS may use TLS 1.3. RSA key exchange is no longer offered, so a server that only offers it cannot connect. The negotiated version and cipher are shown in the connection log.
+
+**Changed**
+- The plugin package includes the network helper for supported macOS, Windows and Linux architectures. Tabby starts one per open IronRDP desktop and stops it when the desktop closes. FreeRDP remains an optional, experimental client with its own helper package.
+
+## 0.6.0-rc.4
+
+**Added**
+- A default-off **Relax drawing order checks** option for FreeRDP, with overrides in RDP profiles and configured
+  desktops. It accepts drawing orders a server or PAM proxy did not announce, which may help diagnose black screens.
+  The option applies on reconnect and does not change IronRDP.
+
+## 0.6.0-rc.3
+
+**Added**
+- A PDU trace for diagnosing picture problems (issue #115): while the diagnostic log is on, each desktop also writes
+  `<log name>.otlp.json`, an OpenTelemetry trace of every RDP PDU that passed the plugin's proxy (X.224, MCS, share
+  control and data, fast-path updates, the static channels, and inside drdynvc the display control and graphics
+  pipeline commands, ZGFX-decompressed), with what this side did with them (H.264 access units handed to the browser's
+  decoder and their latency, the canvas resized and drawn, resize requests), grouped into spans: the connection, each
+  activation, each resize until a frame at the new size is acknowledged, each graphics frame until its acknowledgement,
+  each H.264 access unit. Structure and sizes only: no credentials, keystrokes, clipboard or bitmap data. A D3 viewer
+  (`tools/pdu-trace/index.html`) lays the flow out in lanes and checks each resize; `tools/pdu-trace/from-log.mjs`
+  converts an older debug log. New suites: `test/unit/pdu-trace.ts`, `test/unit/zgfx.ts`, `npm test -- pdu-trace`.
+- The same resizes with the FreeRDP client, for comparison: `TRD_TEST_CLIENT=freerdp npm test -- pdu-trace` reads
+  the graphics commands from FreeRDP's own log (`tools/pdu-trace/from-freerdp-log.mjs`), which the helper now writes
+  when `WLOG_*` is set in Tabby's environment, and `TRD_FREERDP_PIPELINE=1` puts FreeRDP on the graphics pipeline
+  for Windows desktops too (it uses bitmaps there otherwise).
+- `npm test -- fps`: frame pacing under motion (testufo.com in Edge on a Windows desktop): the server's frame rate,
+  the client's, and with IronRDP where each frame's time goes (decoder, canvas, acknowledgement) from the trace.
+
+**Fixed**
+- Tearing after a live resize with IronRDP on Windows (issue #115): stale pieces of the old picture, black bars at the
+  old edge and a garbled taskbar. The trace shows Windows repainting a resized desktop from the bitmap cache, which
+  IronRDP cleared on `ResetGraphics` (IronRDP patch 58, upstream [#2011](https://github.com/Devolutions/IronRDP/pull/2011)),
+  and a tile column that its Progressive decoder never painted because the server had moved the tiles to a new codec
+  context (patch 59, upstream [#2117](https://github.com/Devolutions/IronRDP/pull/2117)). Six resizes in three runs
+  against Windows Server 2025 now settle without any of it; the `pdu-trace` suite checks the flow and the picture.
+
+## 0.6.0-rc.2
+
+**Changed**
+- Publish the FreeRDP helper in a package per platform (`@tabby-rdp/freerdp-<platform>-<arch>`), which npm installs
+  with the plugin for the computer it runs on. The plugin's own package no longer contains native code, and an
+  installation downloads one platform's helper rather than all five (about 2 MB for the plugin, 4–6 MB for the helper,
+  instead of 25 MB).
+- Build the settings page, the profile editor, the desktop form and the auto-hide header styles from shorter strings,
+  which package scanners such as Socket no longer report as possibly packed code. Nothing visible changes.
+- Clarify Preview-channel installation and client test coverage in the documentation.
+- Keep pull request descriptions and generated release notes focused on behavior, limitations and validation.
+- Keep `main` for stable releases: previews are tagged on their version branch, so a checkout of `main` is always a
+  released, stable version.
+
 ## 0.6.0-rc.1
 
 **Added**
