@@ -40,12 +40,12 @@
     "node": ">=18"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "node node_modules/typescript/bin/tsc -p tsconfig.json",
     "build:helper": "node scripts/build-helper.mjs",
     "build:helpers": "node scripts/build-helper.mjs --all",
-    "watch": "tsc -p tsconfig.json --watch --sourceMap",
-    "typecheck": "tsc -p tsconfig.json --noEmit && npm run typecheck:test",
-    "typecheck:test": "tsc -p tsconfig.test.json",
+    "watch": "node node_modules/typescript/bin/tsc -p tsconfig.json --watch --sourceMap",
+    "typecheck": "node node_modules/typescript/bin/tsc -p tsconfig.json --noEmit && npm run typecheck:test",
+    "typecheck:test": "node node_modules/typescript/bin/tsc -p tsconfig.test.json",
     "test": "tsx test/run.ts",
     "test:smoke": "tsx test/run.ts --packed --hidden smoke-host smoke-rdp direct",
     "test:unit": "tsx --test test/unit/*.ts",
