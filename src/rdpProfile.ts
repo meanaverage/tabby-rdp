@@ -25,6 +25,9 @@ export interface RDPProfile extends ConnectableProfile {
     options: {
         /** Empty/absent follows Settings › Remote Desktop. Applies on reconnect. */
         client?: '' | RDPClient
+        /** Null follows Settings even through group defaults; applies to FreeRDP on reconnect. */
+        relaxOrderChecks?: boolean | null
+        glyphCache?: boolean | null
         /** The RDP server: as this computer sees it, or as the `via` host sees it. */
         host: string
         port: number
@@ -180,6 +183,8 @@ export class RDPProfileSettingsComponent implements ProfileSettingsComponent<RDP
         // No id for a new profile (no address yet): it has nothing saved to take along.
         this.before = { id: o.host ? desktopIdOf(o) : '', account: account(), user: signsInAs(o), via: o.via ?? '', gateway: o.gateway ?? '' }
         const root = this.element.nativeElement
+        // In parts joined with +: package scanners such as Socket report a single string of a thousand or so characters
+        // as possibly packed code.
         root.innerHTML = `
             <div class="mb-3">
                 <label>Address</label>
@@ -190,7 +195,7 @@ export class RDPProfileSettingsComponent implements ProfileSettingsComponent<RDP
                 <label>Connect</label>
                 <select class="form-control" name="via"><option value="">Directly from this computer</option></select>
                 <div class="text-muted small">Through an SSH profile, the address is as that host sees it, and the desktop opens over its SSH tab.</div>
-            </div>
+            </div>` + `
             <div class="mb-3">
                 <label>Kind</label>
                 <select class="form-control" name="kind">
@@ -198,19 +203,19 @@ export class RDPProfileSettingsComponent implements ProfileSettingsComponent<RDP
                     <option value="xrdp">xrdp (Linux: KDE, XFCE, MATE, …)</option>
                     <option value="gnome">GNOME Remote Desktop (needs the graphics pipeline)</option>
                 </select>
-            </div>
+            </div>` + `
             <div class="mb-3">
                 <label>RDP client</label>
                 <select class="form-control" name="client" aria-label="RDP client"></select>
                 <div class="text-muted small">Applies on the next connection. FreeRDP preview supports display and input;
                     clipboard, sound and shared folders are unavailable.</div>
-            </div>
+            </div>` + `
             <div class="mb-3">
                 <label>Account</label>
                 <select class="form-control" name="account"></select>
                 <div class="text-muted small">A saved account's password is kept once, for every desktop that signs in with it.
                     Add one here with "New account…", or in Settings › Remote Desktop › Accounts.</div>
-            </div>
+            </div>` + `
             <div class="mb-3" data-own-account>
                 <label>User name</label>
                 <input class="form-control" name="username" spellcheck="false" placeholder="Optional; asked when connecting. DOMAIN\\user works too">
@@ -218,13 +223,13 @@ export class RDPProfileSettingsComponent implements ProfileSettingsComponent<RDP
             <div class="mb-3" data-own-account>
                 <label>Domain</label>
                 <input class="form-control" name="domain" spellcheck="false" placeholder="Optional">
-            </div>
+            </div>` + `
             <div class="mb-3">
                 <label>RD Gateway</label>
                 <input class="form-control" name="gateway" spellcheck="false" placeholder="Optional: a Remote Desktop Gateway, e.g. rdgw.example.com">
                 <div class="text-danger small" data-for="gateway"></div>
                 <div class="text-muted small">The desktop is then reached through the gateway (HTTPS, port 443 unless given), and the address above is as the gateway sees it.</div>
-            </div>
+            </div>` + `
             <div class="mb-3" data-gateway-account>
                 <label>Gateway account</label>
                 <select class="form-control" name="gatewayAccount"></select>
@@ -235,6 +240,27 @@ export class RDPProfileSettingsComponent implements ProfileSettingsComponent<RDP
                 <select class="form-control" name="clipboard"></select>
                 <div class="text-muted small">Which ways text, pictures and files copied on either side go between this computer and the desktop.
                     Applies on the next connection.</div>
+            </div>` + `
+            <h5>FreeRDP compatibility</h5>
+            <div class="mb-3">
+                <label>Glyph caching (experimental)</label>
+                <select class="form-control" name="glyphCache" aria-label="Glyph caching (FreeRDP)">
+                    <option value="">As in Settings › Remote Desktop</option>
+                    <option value="on">Enable glyph caching</option>
+                    <option value="off">Disable glyph caching</option>
+                </select>
+                <div class="text-muted small">For older RDP servers or PAM login screens with missing text. May cause display artifacts.
+                    Applies on the next FreeRDP connection.</div>
+            </div>` + `
+            <div class="mb-3">
+                <label>Drawing order checks (FreeRDP)</label>
+                <select class="form-control" name="relaxOrderChecks" aria-label="Drawing order checks (FreeRDP)">
+                    <option value="">As in Settings › Remote Desktop</option>
+                    <option value="on">Relax checks</option>
+                    <option value="off">Keep strict checks</option>
+                </select>
+                <div class="text-muted small">Try relaxing checks if a server or PAM proxy causes a black screen or sends an unannounced drawing order.
+                    Applies on the next FreeRDP connection; IronRDP is unaffected.</div>
             </div>`
         const field = <T extends HTMLInputElement | HTMLSelectElement = HTMLInputElement>(name: string) => root.querySelector(`[name="${name}"]`) as T
         this.connectionInputs = { address: field('address'), gateway: field('gateway') }
@@ -258,6 +284,13 @@ export class RDPProfileSettingsComponent implements ProfileSettingsComponent<RDP
             ...Object.entries(RDP_CLIENT_LABELS).map(([id, label]) => new Option(label, id)))
         client.value = ownRDPClient(o.client) ?? ''
         client.addEventListener('change', () => { o.client = ownRDPClient(client.value) ?? '' })
+        for (const key of ['glyphCache', 'relaxOrderChecks'] as const) {
+            const choice = field<HTMLSelectElement>(key)
+            choice.value = o[key] === true ? 'on' : o[key] === false ? 'off' : ''
+            choice.addEventListener('change', () => {
+                o[key] = choice.value === 'on' ? true : choice.value === 'off' ? false : null
+            })
+        }
         const accounts = desktop.accounts()
         const saved = field<HTMLSelectElement>('account')
         const label = (a: { name: string, username: string, domain?: string }) => `${a.name} (${signInName(a)})`
@@ -382,7 +415,7 @@ export class RDPProfilesService extends QuickConnectProfileProvider<RDPProfile> 
     override name = 'Remote desktop (RDP)'
     override settingsComponent = RDPProfileSettingsComponent
     override configDefaults = {
-        options: { host: '', port: 3389, kind: 'windows', username: '', domain: '', account: '', via: '', gateway: '', gatewayAccount: '', clipboard: '', client: '' },
+        options: { host: '', port: 3389, kind: 'windows', username: '', domain: '', account: '', via: '', gateway: '', gatewayAccount: '', clipboard: '', client: '', glyphCache: null, relaxOrderChecks: null },
         clearServiceMessagesOnConnect: false,
     }
 
@@ -392,8 +425,8 @@ export class RDPProfilesService extends QuickConnectProfileProvider<RDPProfile> 
     }
 
     async getBuiltinProfiles (): Promise<PartialProfile<RDPProfile>[]> {
-        // No clipboard or client here: a new profile is made from a copy of this, and a value saved with it (even '', the
-        // setting's) would hide the clipboard its group's or the type's defaults give it, which may well be narrower.
+        // No clipboard, client or drawing-order choice here: a new profile is made from a copy of this, and a value
+        // saved with it (even a "follow Settings" value) would hide what its group's or the type's defaults give it.
         // Left out, the profile follows those defaults (configDefaults has the key) until it is given one of its own.
         return [{
             id: `${RDP_PROFILE_TYPE}:template`,

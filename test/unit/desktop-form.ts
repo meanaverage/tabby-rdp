@@ -12,6 +12,7 @@ const g = globalThis as any
 /** A form field, a label or a list, as the form uses them. */
 class Element {
     value = ''
+    checked = false
     hidden = false
     readOnly = false
     title = ''
@@ -67,6 +68,20 @@ test('a desktop can select either client, retain it through edits, and return to
     assert.equal((await submitted(free)).client, 'freerdp')
     assert.equal((await submitted(free, field => { field('client').value = 'ironrdp' })).client, 'ironrdp')
     assert.ok(!('client' in await submitted(free, field => { field('client').value = '' })))
+})
+
+for (const key of ['relaxOrderChecks', 'glyphCache']) test(`a desktop can override ${key} in either direction or follow Settings`, async () => {
+    const enabled = await submitted(legacy, field => { field(key).value = 'on' })
+    assert.equal(enabled[key], true)
+    assert.equal(specOf(enabled)[key], true)
+    assert.equal((await submitted(enabled))[key], true)
+    const disabled = await submitted(enabled, field => { field(key).value = 'off' })
+    assert.equal(disabled[key], false)
+    assert.equal(specOf(disabled)[key], false)
+    const defaulted = await submitted(disabled, field => { field(key).value = '' })
+    assert.ok(!(key in defaulted))
+    assert.equal(specOf(defaulted)[key], undefined)
+    assert.equal(specOf({ host: 'pc', [key]: 'true' })[key], undefined)
 })
 
 test('a VM saved from a host\'s list shows its kind as the host\'s, and keeps it so when saved unchanged', async () => {

@@ -15,9 +15,9 @@ export function compareRebuilt (root: string, revision?: string): {
     listDifferences: string[]
     same: boolean
 }
-export function readTarball (file: string): { path: string, type: string, data: Buffer }[]
-export function packageFiles (tarball: string, problems: string[]): Map<string, Buffer>
-export function checkPackage (root: string, tarball: string, options?: { revision?: string, sameAs?: string }): {
+export function readTarball (file: string): { path: string, type: string, data: Buffer, mode: number }[]
+export function packageFiles (tarball: string, problems: string[], modes?: Map<string, number>): Map<string, Buffer>
+export function checkPackage (root: string, tarball: string, options?: { revision?: string, sameAs?: string, helpersSha256?: string }): {
     problems: string[]
     revision: string
     commit: string
@@ -25,5 +25,8 @@ export function checkPackage (root: string, tarball: string, options?: { revisio
     files: number
     vendor: number
     built: number
+    helpers?: number
+    /** A platform's FreeRDP package's platform; the plugin's package has none. */
+    platform?: string
 }
 export function checkBase (root: string, options?: { upstream?: string, branch?: string }): { commit: string, upstream: boolean }

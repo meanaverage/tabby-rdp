@@ -239,24 +239,15 @@ certificate there). The edit form is the add form, filled in (`wake` included).
 - **Graphics:** Windows with H.264 (see [Graphics](#graphics)) gets the graphics pipeline, as GNOME does. Without
   H.264, and always for xrdp, IronRDP's bitmap path: with only the basic EGFX capability set advertised, Windows does
   better with bitmaps than with the pipeline, and xrdp encodes H.264 only in some builds.
-- **TLS:** Windows' self-signed RDP certificate only allows key encipherment, and the TLS library in Electron
-  (BoringSSL) enforces that, which rules out every ECDHE and TLS 1.3 handshake. When a handshake fails for that reason,
-  the proxy repeats the X.224 exchange on a fresh tunnel and uses TLS 1.2 with RSA key exchange for that desktop. The
-  connection is still encrypted, without forward secrecy. A certificate with the digital-signature usage on the
-  Windows side avoids the fallback. The reason is the TLS library's own (its error code,
-  `ERR_SSL_KEY_USAGE_BIT_INCORRECT`), never an error's text, which a gateway or an SSH host can word; and only as the
-  TLS socket raises it itself: an error the stream under it (an SSH channel, a gateway's tunnel) failed with reaches
-  the TLS socket as it is, code and all, and doesn't count (BoringSSL's own refusal leaves that stream as it was, so
-  its `errored` is unset; seen with Electron 43). The certificate the fallback handshake gets must also show that it
-  leaves digital signatures out of its key usage: one that allows them, has none, or whose key usage can't be read
-  means the first handshake failed for some other reason (something on the way can make it fail on purpose), and the
-  connection stops, saying so. The proxy remembers the fallback for later attempts of the same desktop's connection
-  only once a connection with it worked and its certificate was accepted, and each later one with it has to show that
-  again: one that doesn't get that far, whatever stops it (a failure, the server not answering within the 45 s it has,
-  the client leaving), or that finds a certificate that doesn't need it, has the next start with modern TLS again. The
-  unit tests simulate the refusal (plain Node doesn't check key usage), and one runs the proxy against BoringSSL's real
-  one in Electron (`TRD_ELECTRON`, see CONTRIBUTING.md), over a socket, an SSH channel's stream and a stream like a
-  gateway's tunnel.
+- **TLS:** IronRDP's proxy and its TLS connection run in the plugin's Go network helper (`helper/`), one process per
+  desktop. Go accepts Windows' default self-signed RDP certificate with key-encipherment-only usage for a modern
+  handshake, where Electron's BoringSSL refused it. RDP uses TLS 1.2 ECDHE: Windows Server 2025 RDS accepted TLS 1.3
+  but sent an internal-error alert as CredSSP began in live testing. RD Gateway HTTPS can use TLS 1.3. The helper does
+  not offer RSA key exchange or retry a failed handshake with weaker ciphers. A server offering only RSA key exchange
+  cannot connect. The negotiated version and cipher are logged. The certificate still has to pass the plugin's
+  authority or fingerprint check before CredSSP sends any sign-in data. The helper carries SSH streams through a
+  bounded channel to Tabby's window and owns direct TCP and RD Gateway connections. The experimental FreeRDP client
+  retains its own OpenSSL-based TLS path.
 - **Starting it (`wake`, `src/wake.ts`):** before connecting, a short script on the SSH host checks that the RDP
   server answers: an X.224 connection request must get a reply (with `python3`; else an open port will do, with `nc`
   or bash), since a port can be open before the server behind it is, as with QEMU's user-mode port forwarding. If
@@ -755,15 +746,15 @@ remote setup; cleanup is documented in [the troubleshooting guide](../TROUBLESHO
   - The update check reads npm's answer for 15 s and 4 MB at most: the package's whole version catalog, which grows with
     every release (`publishedVersions`).
 - **Server certificates:** most RDP servers make their own certificates, so upstream TLS accepts any certificate and
-  the proxy decides itself: after the handshake (the legacy TLS 1.2 retry included), and before the RDCleanPath
+  the plugin decides itself: after the helper's handshake, and before the RDCleanPath
   response that the client waits for to start CredSSP. A refused server gets nothing of the account: before the check,
   it has had only the X.224 connection request, which the proxy sends without the routing cookie IronRDP fills in with
   the user name (`Cookie: mstshash=<user>`, in the clear; only load balancers that route by user name use it, and the
   plugin doesn't support those). A request that still has the cookie after that, in a form the proxy doesn't know,
   isn't sent at all. The check gets the SHA-256 fingerprint and, for a desktop connected to directly, whether the
   certificate is valid for the desktop's name by this computer's certificate authorities, and why not: the proxy is
-  given that name (`serverName`: a host name as it resolves, punycode, or an address), and Node's TLS checks the
-  chain, the dates and the name (a host name also goes as SNI; an address is matched to the certificate's addresses,
+  given that name (`serverName`: a host name as it resolves, punycode, or an address); the helper checks the chain and
+  dates against the authorities, and Node checks the name (a host name also goes as SNI; an address is matched to the certificate's addresses,
   and goes without SNI). The authorities (`src/authorities.ts`) are Node's own list and, where Node can read
   it (`tls.getCACertificates('system')`, Node 22.15 and later, as in Tabby's Electron), the system's store, read once;
   without it the question says that an organisation's own authority counts as unknown. Without a name nothing is
@@ -779,9 +770,8 @@ remote setup; cleanup is documented in [the troubleshooting guide](../TROUBLESHO
     another name, expired, …), its fingerprint, and what it says of itself (`CertificateDetails`: its subject's name,
     the names and addresses it is for, its issuer, its dates; the server's word, shown as an .rdp file's names are,
     with what could reorder or hide part of it as U+FFFD, and logged too), Cancel being what Enter picks; it is
-    remembered with `authority: false` once trusted. Why it isn't valid is the plugin's own reading, since Node's code
-    (`authorizationError`) is the last of the TLS library's checks that failed (OpenSSL's in Node, BoringSSL's in
-    Tabby's Electron) and whoever makes the certificate chooses which: one marked for Remote Desktop use only reports
+    remembered with `authority: false` once trusted. Why it isn't valid is the plugin's own reading, since a chain
+    failure can hide a name failure and whoever makes the certificate chooses which: one marked for Remote Desktop use only reports
     `INVALID_PURPOSE`, whatever issued it, and Node checks the name only once the chain checked out. The proxy and the
     gateway check it themselves (`certificateDetails`), against the name and the authorities the connection used: where
     its chain stands (`chainStanding`: each certificate signed with the next one's key, and each issuer an authority by

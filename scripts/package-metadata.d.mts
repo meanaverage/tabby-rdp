@@ -5,3 +5,7 @@ export function runtimeMetadata (manifest: Record<string, unknown>, lock: Record
     /** Format 1 only. */
     'npm-shrinkwrap.json'?: Buffer
 }
+export function freeRDPPackage (platform: string): string
+export function freeRDPPlatforms (manifest: Record<string, unknown>): string[]
+export function freeRDPMetadata (manifest: Record<string, unknown>, platform: string): Buffer
+export function freeRDPFiles (platform: string, built: string[]): [string, string][]

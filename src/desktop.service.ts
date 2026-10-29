@@ -29,7 +29,7 @@ import { RemoteDesktopHelp } from './help'
 import { configNumber, OSD_STYLE, OsdSettings, osdSettings, renderOsd } from './osd'
 import { MAX_RDP_FILE, MICROPHONE_NOTE, parseRdpFile } from './rdpFile'
 import { prepareRemoteDesktop, RemoteDesktopEndpoint } from './remoteSetup'
-import { normalizeFingerprint, RDCleanPathProxy, startRDCleanPathProxy, withoutToken } from './rdcleanpath'
+import { GatewayUpstream, normalizeFingerprint, RDCleanPathProxy, startRDCleanPathProxy, Upstream, withoutToken } from './rdcleanpath'
 import {
     adoptCredentials, askCredentials, Credentials, forgetCredentials, forgetCredentialsFor, forgetCredentialsIf, forgetCredentialsOrFail, forgetMark, forgetOnce, forgottenSince, gatewayScope, hasCredentials,
     isFor, loadCredentials, moveCredentialsFor, saveCredentials, saveCredentialsIf, Store, storeName, STYLE as SIGNIN_STYLE,
@@ -43,6 +43,7 @@ import { scanVMs, vmSpec } from './vms'
 import { SessionLog } from './sessionLog'
 import { installedVersion } from './updates'
 import { DiagnosticLevel, diagnosticLevel, DiagnosticLog, logDirectory } from './diagnosticLog'
+import { PduTrace } from './pduTrace'
 import { HeaderAutoHide, headerAutoHide, terminalInputs } from './hostCompat'
 import { UNSHOWABLE, withoutWordJoiners } from './unshowable'
 
@@ -235,6 +236,10 @@ export interface DesktopSettings {
     headerMinHeight: number
     /** Default client for desktops without their own choice; applies on the next connection. */
     client: RDPClient
+    /** FreeRDP only: experimental legacy glyph caching; a desktop may override this. Applies on reconnect. */
+    glyphCache: boolean
+    /** FreeRDP only: accept unannounced drawing orders; a desktop may override this. Applies on reconnect. */
+    relaxOrderChecks: boolean
     /** When the pane changes size: 'live' resizes the remote monitor in place, 'reconnect' reconnects at the new size, 'off' keeps the size. */
     resize: 'live' | 'reconnect' | 'off'
     /** 'standard': one remote pixel per CSS pixel. 'retina': device pixels with matching remote scaling (sharper). */
@@ -355,6 +360,14 @@ export class DesktopSession {
     readonly log = new SessionLog()
     /** The log file written for a bug report, while the diagnostic log setting is on (see diagnosticLog.ts). */
     diagnostics: DiagnosticLog | null = null
+    /** The PDU trace of the connection, while the diagnostic log is on (see pduTrace.ts): written as traceFile. */
+    trace: PduTrace | null = null
+    traceFile: string | null = null
+    /** Where this connection went (host:port), for the trace's resource attributes. */
+    traceDestination = ''
+    /** Stops watching the canvas for the trace. */
+    traceStop: (() => void) | null = null
+    private traceSaving: Promise<void> = Promise.resolve()
     /** What the remote display was last set to. */
     remoteSize: RemoteSize | null = null
     /** A resize reconnect retains its requested layout while connecting temporarily restores the header. */
@@ -682,6 +695,10 @@ export class DesktopSession {
                 picture = copy
             }
         })
+        clean(() => this.traceStop?.())
+        this.traceStop = null
+        this.trace?.local('plugin', 'Connection.Ended')
+        clean(() => { void this.saveTrace() })
         this.connectionDisposers.splice(0).forEach(clean)
         clean(() => this.indicator?.setActive(false))
         clean(() => this.ui?.shutdown())
@@ -738,6 +755,35 @@ export class DesktopSession {
         this.proxy?.close()
         this.overlay.remove()
         void this.diagnostics?.close()
+        void this.saveTrace()
+    }
+
+    /**
+     * Writes the PDU trace next to the diagnostic log file, as OTLP/JSON (see PduTrace.toOtlp), for the user alone:
+     * at the end of each connection, when the desktop closes, and every two minutes meanwhile (see watchTrace).
+     * Writes go one after another.
+     */
+    saveTrace (): Promise<void> {
+        const trace = this.trace
+        const file = this.traceFile
+        if (!trace || !file) {
+            return Promise.resolve()
+        }
+        const versions = process.versions as Record<string, string | undefined>
+        const meta = {
+            pluginVersion: installedVersion(), desktop: this.spec.name, destination: this.traceDestination, client: this.client ?? '',
+            graphics: this.graphics, platform: `${process.platform} ${os.release()}`, electron: versions.electron,
+        }
+        this.traceSaving = this.traceSaving.then(async () => {
+            try {
+                const json = JSON.stringify(trace.toOtlp(meta))
+                await fs.promises.mkdir(path.dirname(file), { recursive: true, mode: 0o700 })
+                await fs.promises.writeFile(file, json, { mode: 0o600 })
+            } catch (error: any) {
+                this.log.push(`pdu trace: not written: ${error?.message ?? error}`)
+            }
+        })
+        return this.traceSaving
     }
 }
 
@@ -2576,6 +2622,8 @@ export class RemoteDesktopService {
             headerMinWidth: this.headerSize(store.headerMinWidth),
             headerMinHeight: this.headerSize(store.headerMinHeight),
             client: rdpClient(store.client),
+            glyphCache: store.glyphCache === true,
+            relaxOrderChecks: store.relaxOrderChecks === true,
             resize: ['live', 'reconnect', 'off'].includes(store.resize) ? store.resize : 'live',
             sharpness: store.sharpness === 'retina' ? 'retina' : 'standard',
             desk: store.desk === true,
@@ -2815,6 +2863,7 @@ export class RemoteDesktopService {
 
     private applySize (session: DesktopSession, size: RemoteSize): void {
         session.log.push(`resize: ${size.width}x${size.height} @${size.scale}%`)
+        session.trace?.local('plugin', 'Resize.Requested', { width: size.width, height: size.height, scale: size.scale, mode: this.settingsFor(session).resize })
         const before = session.remoteSize
         session.remoteSize = size
         if (session.spec.kind !== 'gnome') {
@@ -3319,6 +3368,35 @@ export class RemoteDesktopService {
         // The status lines carry a stamp of their own already.
         session.log.tee = line => diagnostics.line('plugin', line.replace(/^\d{4}-\d\d-\d\dT[\d:.]+Z /, ''))
         session.log.push(`diagnostics: writing ${diagnostics.file}`)
+        // The PDU trace goes with the log, as OTLP/JSON (see pduTrace.ts and tools/pdu-trace).
+        session.trace = new PduTrace()
+        session.traceFile = diagnostics.file.replace(/\.log$/, '') + '.otlp.json'
+        session.log.push(`pdu trace: writing ${session.traceFile}`)
+    }
+
+    /**
+     * The PDU trace's view of this side while the connection lasts: the canvas (its size and each region drawn),
+     * and a save of the trace every two minutes, so that a crash keeps most of it.
+     */
+    private watchTrace (session: DesktopSession): void {
+        const trace = session.trace
+        if (!trace) {
+            return
+        }
+        // IronRDP reveals its canvas asynchronously: look again for a moment.
+        let attempts = 20
+        const watch = () => {
+            const canvas = session.state === 'connected' ? session.canvas() : null
+            if (canvas) {
+                session.traceStop?.()
+                session.traceStop = trace.watchCanvas(canvas)
+            } else if (attempts-- > 0) {
+                setTimeout(watch, 100)
+            }
+        }
+        watch()
+        const timer = setInterval(() => { void session.saveTrace() }, 120_000)
+        session.onConnectionEnd(() => clearInterval(timer))
     }
 
     /** Where the diagnostic log files go (see diagnosticLog.ts). */
@@ -3553,10 +3631,19 @@ export class RemoteDesktopService {
                     }
                     asked.gatewayAccount = signIn
                 }
-                // The proxy outlives an attempt: it reads the sign-in of the attempt it serves.
+                // The proxy outlives an attempt: it reads the sign-in of the attempt it serves. One whose network helper
+                // stopped (it failed, or was killed) is replaced: nothing connects there any more.
+                if (session.proxy?.ended) {
+                    session.log.push('proxy: its network helper has stopped; starting another')
+                    session.proxy.close()
+                    session.proxy = null
+                }
                 if (!session.proxy && client !== 'freerdp') {
                     const proxy = await startRDCleanPathProxy(
-                        (_destination, signal) => gateway ? this.throughGateway(target, spec, session, gateway, endpoint!, signal) : target.openTcp(asked.host, asked.port),
+                        // A desktop connected to directly is reached by the proxy's own connection; one behind an SSH host
+                        // through a channel of the SSH connection, carried to the proxy.
+                        async (_destination, signal): Promise<Upstream> => gateway ? this.throughGateway(target, spec, session, gateway, endpoint!, signal)
+                            : target.direct ? { direct: { host: asked.host, port: asked.port } } : target.openTcp(asked.host, asked.port),
                         (fingerprint, valid, reason, details) => this.checkCertificate(session, fingerprint, valid, reason, details),
                         m => session.log.push(m),
                         {
@@ -3568,6 +3655,14 @@ export class RemoteDesktopService {
                             // certificate authorities (see checkTrusted). One behind an SSH host goes by that host's
                             // names, which its certificate can't be checked against: trusted on first use.
                             serverName: target.direct ? serverNameOf(asked.host) : undefined,
+                            // The PDU trace reads the relayed stream (see pduTrace.ts), while the diagnostic log is on.
+                            tap: session.trace ? (direction, data, kind) => {
+                                if (kind === 'x224') {
+                                    session.trace?.x224(direction, data)
+                                } else {
+                                    session.trace?.stream(direction, data)
+                                }
+                            } : undefined,
                         })
                     // The desktop was closed while the proxy started: closing it found no proxy, and nothing else would.
                     if (!alive()) {
@@ -3671,38 +3766,55 @@ export class RemoteDesktopService {
     }
 
     /**
-     * The proxy's stream to a desktop behind an RD Gateway (see gateway.ts): to the gateway as the SSH host (or this
-     * computer) reaches it, signed in with the gateway's own account or else the desktop's, then on to the desktop.
+     * The proxy's way to a desktop behind an RD Gateway (see GatewayUpstream): to the gateway as the SSH host (or this
+     * computer) reaches it, signed in with the gateway's own account or else the desktop's, then on to the desktop. The
+     * account goes to the proxy only once the gateway's certificate is accepted.
      */
-    private async throughGateway (target: RemoteTarget, spec: DesktopSpec, session: DesktopSession, gateway: Gateway, endpoint: Endpoint, signal?: AbortSignal): Promise<Duplex> {
+    private async throughGateway (target: RemoteTarget, spec: DesktopSpec, session: DesktopSession, gateway: Gateway, endpoint: Endpoint, signal?: AbortSignal): Promise<GatewayUpstream> {
         session.gatewayRefused = null
         const own = endpoint.gatewayAccount
         if (spec.gatewayAccount && !own) {
             throw new Error('A separate gateway sign-in is required before connecting.')
         }
+        if (signal?.aborted) {
+            throw new Error('the desktop was closed meanwhile')
+        }
         const credentials = own?.credentials ?? endpoint.credentials
         session.log.push(`gateway: ${gateway.host}:${gateway.port}, signing in with ${own ? 'its separate account' : 'the desktop\'s sign-in'}`)
+        return {
+            gateway: { host: gateway.host, port: gateway.port },
+            target: { host: endpoint.host, port: endpoint.port },
+            via: target.direct ? { direct: { host: gateway.host, port: gateway.port } } : () => target.openTcp(gateway.host, gateway.port),
+            clientName: os.hostname(),
+            checkCertificate: (fingerprint, valid, reason, details) => this.checkGatewayCertificate(session, gateway, fingerprint, valid, reason, details),
+            account: () => ({ username: credentials.username, password: credentials.password, domain: (own ? own.domain : endpoint.domain ?? spec.domain) || undefined }),
+            // The gateway refused the account (its sign-in, or its connection authorization policy).
+            refused: message => { session.gatewayRefused = message },
+            opened: () => {
+                // Entered a moment ago and taken by the gateway: kept, while the account is still what it was signed in as.
+                if (own?.remember && own.saveKey) {
+                    own.remember = false
+                    const saveKey = own.saveKey
+                    saveCredentialsIf(saveKey, own.credentials,
+                        () => this.accountCurrent(saveKey, own.saveFor, own.accountRevision), own.saveLabel).then(
+                        saved => session.log.push(saved ? `gateway: saved as the account's password in ${storeName()}` : 'gateway: not saved: the account changed meanwhile'),
+                        e => session.log.push(`gateway: ${storeName()}: ${e?.message ?? e}`))
+                }
+            },
+        }
+    }
+
+    /** FreeRDP still uses the plugin's stream-based gateway while IronRDP's helper owns its tunnel. */
+    private async throughGatewayStream (target: RemoteTarget, spec: DesktopSpec, session: DesktopSession, gateway: Gateway, endpoint: Endpoint, signal: AbortSignal): Promise<Duplex> {
+        const route = await this.throughGateway(target, spec, session, gateway, endpoint, signal)
         try {
             const stream = await openThroughGateway(
-                () => target.openTcp(gateway.host, gateway.port), gateway,
-                { username: credentials.username, password: credentials.password, domain: (own ? own.domain : endpoint.domain ?? spec.domain) || undefined },
-                { host: endpoint.host, port: endpoint.port },
-                (fingerprint, valid, reason, details) => this.checkGatewayCertificate(session, gateway, fingerprint, valid, reason, details),
-                { log: m => session.log.push(m), clientName: os.hostname(), signal })
-            // Entered a moment ago and taken by the gateway: kept, while the account is still what it was signed in as.
-            if (own?.remember && own.saveKey) {
-                own.remember = false
-                const saveKey = own.saveKey
-                saveCredentialsIf(saveKey, own.credentials,
-                    () => this.accountCurrent(saveKey, own.saveFor, own.accountRevision), own.saveLabel).then(
-                    saved => session.log.push(saved ? `gateway: saved as the account's password in ${storeName()}` : 'gateway: not saved: the account changed meanwhile'),
-                    e => session.log.push(`gateway: ${storeName()}: ${e?.message ?? e}`))
-            }
+                () => target.openTcp(gateway.host, gateway.port), gateway, await route.account(), route.target,
+                route.checkCertificate, { log: m => session.log.push(m), clientName: route.clientName, signal })
+            route.opened?.()
             return stream
         } catch (e: any) {
-            if (e instanceof GatewaySignInError) {
-                session.gatewayRefused = e.message
-            }
+            if (e instanceof GatewaySignInError) { route.refused?.(e.message) }
             throw e
         }
     }
@@ -4230,6 +4342,10 @@ export class RemoteDesktopService {
         signal.addEventListener('abort', stop, { once: true })
         session.onConnectionEnd(stop)
         session.log.push(`client: ${RDP_CLIENT_LABELS.freerdp}`)
+        const relaxOrderChecks = spec.relaxOrderChecks ?? this.settingsFor(session).relaxOrderChecks
+        const glyphCache = spec.glyphCache ?? settings.glyphCache
+        session.log.push(`FreeRDP glyph caching: ${glyphCache ? 'enabled (experimental)' : 'disabled'}`)
+        session.log.push(`FreeRDP drawing order checks: ${relaxOrderChecks ? 'relaxed' : 'strict'}`)
         session.log.push('FreeRDP preview: clipboard, audio, microphone and shared folders are unavailable')
         session.clipboard = 'off'
         const [domain, username] = /^([^\\]+)\\(.+)$/.exec(endpoint.credentials.username)?.slice(1) ?? [endpoint.domain ?? spec.domain ?? '', endpoint.credentials.username]
@@ -4240,11 +4356,15 @@ export class RemoteDesktopService {
             const info = await native.connect({
                 host: serverNameOf(spec.id === OWN_DESKTOP ? target.hostname ?? target.label : endpoint.host),
                 username, password: endpoint.credentials.password, domain, ...size,
-                // GNOME requires the pipeline. Windows uses FreeRDP's native bitmap decoder in this first build.
-                pipeline: spec.kind === 'gnome',
+                // GNOME requires the pipeline. Windows uses FreeRDP's native bitmap decoder in this first build;
+                // TRD_FREERDP_PIPELINE=1 in Tabby's environment turns the pipeline on there too, for a diagnosis that
+                // compares the two clients on the same path (test/suites/pdu-trace.ts).
+                pipeline: spec.kind === 'gnome' || process.env.TRD_FREERDP_PIPELINE === '1',
                 autologon: spec.kind === 'xrdp',
+                relaxOrderChecks,
+                glyphCache,
                 open: async abort => {
-                    const stream = gateway ? await this.throughGateway(target, spec, session, gateway, endpoint, abort) : await target.openTcp(endpoint.host, endpoint.port)
+                    const stream = gateway ? await this.throughGatewayStream(target, spec, session, gateway, endpoint, abort) : await target.openTcp(endpoint.host, endpoint.port)
                     if (abort.aborted) { stream.destroy(); throw new Error('Connection cancelled') }
                     return stream
                 },
@@ -4283,6 +4403,8 @@ export class RemoteDesktopService {
         this.watchSize(pane, session)
         session.state = 'connected'
         session.log.push(`connected: ${size.width}x${size.height}`)
+        session.trace?.local('plugin', 'Connected', { width: size.width, height: size.height })
+        this.watchTrace(session)
         session.status('')
         this.tip(pane, session)
         this.labelOnFocus(pane, session)
@@ -4381,11 +4503,12 @@ export class RemoteDesktopService {
             const [domain, username] = /^([^\\]+)\\(.+)$/.exec(credentials.username)?.slice(1) ?? [endpoint.domain ?? spec.domain ?? '', credentials.username]
             session.status(spec.id === OWN_DESKTOP ? `Connecting to ${target.label}…`
                 : target.direct ? `Connecting to ${spec.name}…` : `Connecting to ${spec.name} via ${target.label}…`)
+            // The name the server is signed in to as: the SSH host's for its own desktop, and for its VMs' consoles.
+            session.traceDestination = `${spec.id === OWN_DESKTOP || spec.hyperv ? target.hostname ?? target.label : endpoint.host}:${endpoint.port}`
             const config = session.ui.configBuilder()
                 .withUsername(username)
                 .withPassword(credentials.password)
-                // The name the server is signed in to as: the SSH host's for its own desktop, and for its VMs' consoles.
-                .withDestination(`${spec.id === OWN_DESKTOP || spec.hyperv ? target.hostname ?? target.label : endpoint.host}:${endpoint.port}`)
+                .withDestination(session.traceDestination)
                 .withProxyAddress(session.proxy!.url)
                 .withServerDomain(domain)
                 .withAuthToken(session.proxy!.token)
@@ -4416,7 +4539,8 @@ export class RemoteDesktopService {
                 // The vendor owns surface retirement and all resource accounting; its public option bounds the
                 // browser decoders without wrapping away lifecycle notifications (see h264.ts).
                 session.h264 = createH264Decoder(rdp.WebCodecsH264Decoder, { onFailure: (reason: string) => session.log.push(`h264: failed: ${reason}`) })
-                config.withExtension(rdp.h264Decoder(session.h264))
+                // Traced: each access unit handed to the browser's decoder and what came back (see pduTrace.ts).
+                config.withExtension(rdp.h264Decoder(session.trace ? session.trace.wrapH264Decoder(session.h264) : session.h264))
             }
             // GNOME Remote Desktop requires the graphics pipeline. Windows (and xrdp) do better with bitmaps than with
             // the pipeline without H.264; with H.264, Windows streams what changes a lot (video) as video. A build

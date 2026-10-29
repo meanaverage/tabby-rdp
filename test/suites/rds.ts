@@ -109,7 +109,8 @@ await suite('rds', async t => {
     has('the licensing exchange starting', /Licensing Exchange/)
     has('the Server License Request, received', /Received.*ServerLicenseRequest/)
     has('the platform challenge, received', /Received.*ServerPlatformChallenge/)
-    has('a new or upgraded license, received', /Received.*(ServerUpgradeLicense|NewLicense)|License verified/)
+    // A server may confirm an existing client license instead of issuing another one ([MS-RDPELE] 3.1.5.3.1).
+    has('a new, upgraded or valid existing license, received', /Received.*(ServerUpgradeLicense|NewLicense)|License verified|Received LicensingErrorMessage.*error_code: StatusValidClient/)
     // Whether a host sends auto-detection requests in the middle of the exchange is the host's choice (the one in
     // #106 did, between the platform challenge and the license); what matters is that none ended the connection.
     // Answered requests are logged alike in every phase; those after the exchange began are the late ones.
@@ -120,6 +121,11 @@ await suite('rds', async t => {
     has('the connection finalized', /Connection Finalization|connected: /)
     check('keying material is withheld: lengths only, no bytes', lines.some(l => /bytes withheld>/.test(l)) && !lines.some(l => /\[\s*(?:\d{1,3}\s*,\s*){7,}\d{1,3}\s*,?\s*\]/.test(l)),
         lines.filter(l => /\[\s*(?:\d{1,3}\s*,\s*){7,}/.test(l)).slice(0, 3))
-    check('the file is the user\'s alone', process.platform === 'win32' || ((await ev<number>(`return require('fs').statSync(${JSON.stringify(file)}).mode & 0o777`)) === 0o600))
+    // The runner can drive a Windows Tabby from a different OS; use the client OS for this POSIX mode check.
+    if (await ev<string>('return process.platform') === 'win32') {
+        t.skip('POSIX diagnostic log mode', 'Windows uses ACLs')
+    } else {
+        check('the file is the user\'s alone', (await ev<number>(`return require('fs').statSync(${JSON.stringify(file)}).mode & 0o777`)) === 0o600)
+    }
     console.log(`NOTE  diagnostic log: ${file} (${lines.length} lines)`)
 }, { needsHost: false })

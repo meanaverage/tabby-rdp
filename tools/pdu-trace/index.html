@@ -1,0 +1,583 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>RDP PDU Flow</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: a toolbar, then four instruments stacked: an overview strip to pick a window, swimlanes of the PDUs in it,
+   the resize ledger with its checks, pacing, and the raw table. One accent per lane, taken from the validated palette. */
+:root {
+    --bg: #fcfcfb; --surface: #ffffff; --surface-2: #f2f2ef; --line: #dcdcd6; --line-strong: #b9b9b1;
+    --fg: #121311; --fg-2: #52514e; --fg-3: #85847e;
+    --egfx: #2a78d6; --out: #eb6834; --control: #1baf7a; --fastpath: #eda100; --decoder: #e87ba4; --canvas: #008300; --plugin: #6250d6;
+    --error: #c8321f; --ok: #1b7f3b; --warn: #a56a00;
+    --band: rgba(98, 80, 214, 0.10); --band-line: rgba(98, 80, 214, 0.45);
+    --font: 'IBM Plex Sans', 'Helvetica Neue', Arial, sans-serif;
+    --mono: 'IBM Plex Mono', 'SFMono-Regular', Menlo, Consolas, monospace;
+    color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+        --bg: #161716; --surface: #1d1e1c; --surface-2: #262724; --line: #343531; --line-strong: #4d4e49;
+        --fg: #f0efec; --fg-2: #c3c2b7; --fg-3: #8d8c85;
+        --egfx: #3987e5; --out: #d95926; --control: #199e70; --fastpath: #c98500; --decoder: #d55181; --canvas: #2d9a3a; --plugin: #9085e9;
+        --error: #e66767; --ok: #4fbf6f; --warn: #d9a441;
+        --band: rgba(144, 133, 233, 0.14); --band-line: rgba(144, 133, 233, 0.55);
+        color-scheme: dark;
+    }
+}
+:root[data-theme="dark"] {
+    --bg: #161716; --surface: #1d1e1c; --surface-2: #262724; --line: #343531; --line-strong: #4d4e49;
+    --fg: #f0efec; --fg-2: #c3c2b7; --fg-3: #8d8c85;
+    --egfx: #3987e5; --out: #d95926; --control: #199e70; --fastpath: #c98500; --decoder: #d55181; --canvas: #2d9a3a; --plugin: #9085e9;
+    --error: #e66767; --ok: #4fbf6f; --warn: #d9a441;
+    --band: rgba(144, 133, 233, 0.14); --band-line: rgba(144, 133, 233, 0.55);
+    color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body { background: var(--bg); color: var(--fg); font: 14px/1.45 var(--font); padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-block: 0 32px; }
+h1 { font-size: 20px; font-weight: 600; margin: 0; letter-spacing: -0.01em; }
+h2 { font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--fg-2); margin: 0 0 8px; }
+.toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px; padding-block: 14px 10px; border-bottom: 1px solid var(--line); position: sticky; top: env(safe-area-inset-top, 0px); background: var(--bg); z-index: 5; }
+.toolbar .load { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.toolbar label.file { border: 1px dashed var(--line-strong); border-radius: 6px; padding: 4px 10px; cursor: pointer; color: var(--fg-2); }
+.toolbar label.file:hover, body.dragging .toolbar label.file { border-color: var(--plugin); color: var(--fg); }
+.toolbar input[type=file] { display: none; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px 10px; font-size: 12px; color: var(--fg-2); }
+.chip { background: var(--surface-2); border-radius: 4px; padding: 2px 8px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.chip b { color: var(--fg); font-weight: 500; }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; color: var(--fg-2); }
+.legend span::before { content: ''; display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; background: var(--c); }
+section { padding-block: 18px 6px; }
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; min-width: 0; }
+.hint { color: var(--fg-3); font-size: 12px; margin: 0 0 8px; }
+svg { display: block; max-width: 100%; font-family: var(--mono); font-size: 11px; }
+svg text { fill: var(--fg-2); }
+.axis path, .axis line { stroke: var(--line-strong); }
+.grid line { stroke: var(--line); }
+.lanes-wrap { position: relative; overflow: hidden; }
+.lane-label { fill: var(--fg); font-family: var(--font); font-size: 12px; font-weight: 500; }
+.lane-sub { fill: var(--fg-3); font-size: 10px; }
+.mark { cursor: pointer; }
+.mark:hover { stroke: var(--fg); stroke-width: 1px; }
+.mark.selected { stroke: var(--fg); stroke-width: 1.5px; }
+.band rect { fill: var(--band); }
+.band line { stroke: var(--band-line); stroke-dasharray: 3 3; }
+.band text { fill: var(--plugin); font-family: var(--font); font-weight: 500; }
+.tooltip { position: fixed; pointer-events: none; background: var(--surface); color: var(--fg); border: 1px solid var(--line-strong); border-radius: 6px; padding: 8px 10px; font: 12px/1.4 var(--mono); max-width: 420px; box-shadow: 0 4px 16px rgba(0,0,0,0.18); z-index: 10; white-space: pre-wrap; word-break: break-word; }
+.tooltip[hidden] { display: none; }
+.two { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 14px; }
+@media (max-width: 900px) { .two { grid-template-columns: 1fr; } }
+.detail table, .ledger table, .pdu-table table { border-collapse: collapse; width: 100%; font: 12px/1.4 var(--mono); font-variant-numeric: tabular-nums; }
+.detail td, .ledger td, .ledger th, .pdu-table td, .pdu-table th { padding: 3px 8px; border-bottom: 1px solid var(--line); vertical-align: top; text-align: left; }
+.detail td:first-child { color: var(--fg-2); white-space: nowrap; width: 1%; }
+.ledger th, .pdu-table th { color: var(--fg-2); font-weight: 500; position: sticky; top: 0; background: var(--surface); }
+.scroll { max-height: 420px; overflow: auto; }
+.dir { display: inline-block; width: 1.6em; text-align: center; font-weight: 600; }
+.dir.in { color: var(--egfx); } .dir.out { color: var(--out); } .dir.local { color: var(--plugin); }
+.checks { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 8px; margin: 8px 0 12px; }
+.check { border: 1px solid var(--line); border-left-width: 4px; border-radius: 6px; padding: 8px 10px; font-size: 13px; min-width: 0; }
+.check.ok { border-left-color: var(--ok); } .check.warn { border-left-color: var(--warn); } .check.bad { border-left-color: var(--error); } .check.na { border-left-color: var(--line-strong); color: var(--fg-2); }
+.check b { display: block; font-weight: 600; margin-bottom: 2px; }
+.check small { color: var(--fg-2); display: block; font-family: var(--mono); font-size: 11px; word-break: break-word; }
+select, input[type=search], button { font: inherit; color: var(--fg); background: var(--surface); border: 1px solid var(--line-strong); border-radius: 6px; padding: 4px 8px; }
+button { cursor: pointer; } button:hover { background: var(--surface-2); }
+:focus-visible { outline: 2px solid var(--plugin); outline-offset: 1px; }
+.row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; margin-bottom: 8px; }
+.key { color: var(--fg-3); }
+.name { color: var(--fg); font-weight: 500; }
+.ledger tr.key-row td { background: var(--surface-2); }
+.empty { color: var(--fg-3); padding: 24px 0; text-align: center; }
+.status-ok { color: var(--ok); } .status-bad { color: var(--error); }
+@media (prefers-reduced-motion: no-preference) { .mark { transition: opacity 120ms; } }
+</style>
+</head>
+<body>
+<div class="toolbar">
+    <h1>RDP PDU Flow</h1>
+    <div class="load">
+        <label class="file" for="file">Open a trace (.otlp.json) or drop it here</label>
+        <input id="file" type="file" accept=".json,application/json">
+        <span id="source" class="hint"></span>
+    </div>
+    <div id="chips" class="chips"></div>
+    <div class="legend">
+        <span style="--c: var(--out)">client → server</span>
+        <span style="--c: var(--control)">server control</span>
+        <span style="--c: var(--egfx)">graphics pipeline</span>
+        <span style="--c: var(--fastpath)">fast-path updates</span>
+        <span style="--c: var(--decoder)">H.264 decoder</span>
+        <span style="--c: var(--canvas)">canvas</span>
+        <span style="--c: var(--plugin)">plugin</span>
+    </div>
+</div>
+
+<section>
+    <h2>Whole connection</h2>
+    <p class="hint">Bytes from the server above the line, bytes from the client below, per bucket. Resizes are the shaded bands. Drag to choose the window the lanes show; double-click to see all.</p>
+    <div class="panel"><div id="overview"></div></div>
+</section>
+
+<section>
+    <h2>PDU lanes</h2>
+    <p class="hint">Each mark is one PDU (or one local event) at the moment it passed the proxy. Bars are spans: a graphics frame from its Start Frame to the client's Frame Acknowledge, an H.264 access unit from hand-out to pixels. Wheel to zoom, drag to pan, hover for the fields, click to pin the details.</p>
+    <div class="two">
+        <div class="panel lanes-wrap"><div id="lanes"></div></div>
+        <div class="panel detail"><h2>Details</h2><div id="detail" class="empty">Click a mark.</div></div>
+    </div>
+</section>
+
+<section>
+    <h2>Resize ledger</h2>
+    <p class="hint">One resize: what the plugin asked for, what the server did with it, in order, with the time since the request. The checks are the invariants a clean resize keeps.</p>
+    <div class="panel">
+        <div class="row"><label for="resize-select">Resize</label><select id="resize-select"></select><span id="resize-summary" class="hint"></span></div>
+        <div id="checks" class="checks"></div>
+        <div id="ledger" class="ledger scroll"></div>
+    </div>
+</section>
+
+<section>
+    <h2>Pacing</h2>
+    <p class="hint">How long each graphics frame waited for its acknowledgement (Start Frame to Frame Acknowledge), and how long each H.264 access unit took in the browser's decoder, over the same window as the lanes.</p>
+    <div class="panel"><div id="pacing"></div></div>
+</section>
+
+<section>
+    <h2>All PDUs</h2>
+    <div class="panel pdu-table">
+        <div class="row"><input id="filter" type="search" placeholder="Filter by name or field (e.g. ResetGraphics, frameId=12, surfaceId)" size="48"><span id="table-count" class="hint"></span></div>
+        <div id="table" class="scroll"></div>
+    </div>
+</section>
+
+<div id="tooltip" class="tooltip" hidden></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js"></script>
+<script>
+(() => {
+'use strict'
+const $ = id => document.getElementById(id)
+const LANES = [
+    { id: 'plugin', label: 'Plugin', sub: 'resize requests, connection', color: 'var(--plugin)' },
+    { id: 'out', label: 'Client → server', sub: 'input, acks, layouts', color: 'var(--out)' },
+    { id: 'control', label: 'Server: control', sub: 'X.224, MCS, share, channels', color: 'var(--control)' },
+    { id: 'egfx', label: 'Server: graphics pipeline', sub: 'EGFX commands and frames', color: 'var(--egfx)' },
+    { id: 'fastpath', label: 'Server: fast-path', sub: 'bitmaps, surface bits, pointers', color: 'var(--fastpath)' },
+    { id: 'decoder', label: 'H.264 decoder', sub: 'handed out → pixels', color: 'var(--decoder)' },
+    { id: 'canvas', label: 'Canvas', sub: 'resized, drawn', color: 'var(--canvas)' },
+]
+const LANE_H = 46
+const KEY_NAMES = /^(DisplayControl\.MonitorLayout|EGFX\.(ResetGraphics|CreateSurface|DeleteSurface|MapSurface\w*|CapsConfirm|CapsAdvertise)|DeactivateAll|DemandActive|ConfirmActive|FontMap|Resize\.Requested|Canvas\.Resized|Connected|ConnectionRequest|ConnectionConfirm|ConnectInitial|ConnectResponse|SetErrorInfo|H264\.Error|DecodeError|EGFX\.ZgfxError)$/
+
+let model = null
+let selected = null
+let windowRange = null
+
+function nsToMs (v) { return Number(BigInt(v) / 1000n) / 1000 }
+function attrsOf (list) {
+    const out = {}
+    for (const a of list ?? []) {
+        const v = a.value ?? {}
+        out[a.key] = 'intValue' in v ? Number(v.intValue) : 'doubleValue' in v ? v.doubleValue : 'boolValue' in v ? v.boolValue : v.stringValue ?? ''
+    }
+    return out
+}
+
+function parseOtlp (o) {
+    const rs = o.resourceSpans?.[0]
+    if (!rs) throw new Error('not an OTLP/JSON trace (no resourceSpans)')
+    const resource = attrsOf(rs.resource?.attributes)
+    const spans = rs.scopeSpans.flatMap(ss => ss.spans).map(s => ({
+        id: s.spanId, parent: s.parentSpanId, name: s.name, start: nsToMs(s.startTimeUnixNano), end: nsToMs(s.endTimeUnixNano),
+        attrs: attrsOf(s.attributes), status: s.status ?? { code: 0 },
+        events: (s.events ?? []).map(e => {
+            const a = attrsOf(e.attributes)
+            const { seq, dir, layer, bytes, repeat, untilUnixNano, ...rest } = a
+            return { t: nsToMs(e.timeUnixNano), name: e.name, seq, dir, layer, bytes: bytes ?? 0, repeat, until: untilUnixNano ? nsToMs(untilUnixNano) : undefined, attrs: rest }
+        }),
+    }))
+    const root = spans.find(s => s.name === 'rdp.connection') ?? spans[0]
+    const events = spans.flatMap(s => s.events.map(e => ({ ...e, span: s }))).sort((a, b) => (a.seq ?? 0) - (b.seq ?? 0) || a.t - b.t)
+    events.forEach(e => { e.lane = laneOf(e); e.rel = e.t - root.start })
+    const byId = new Map(spans.map(s => [s.id, s]))
+    spans.forEach(s => { s.rel = s.start - root.start; s.relEnd = s.end - root.start; s.parentSpan = byId.get(s.parent) })
+    return { resource, spans, root, events, t0: root.start, duration: Math.max(root.end - root.start, (events.at(-1)?.t ?? root.start) - root.start, 1) }
+}
+
+function laneOf (e) {
+    if (e.layer === 'plugin' || e.layer === 'trace') return 'plugin'
+    if (e.layer === 'decoder') return 'decoder'
+    if (e.layer === 'canvas') return 'canvas'
+    if (e.dir === 'out') return 'out'
+    if (e.layer === 'egfx') return 'egfx'
+    if (e.layer === 'fastpath') return 'fastpath'
+    return 'control'
+}
+const laneColor = id => LANES.find(l => l.id === id)?.color ?? 'var(--fg-3)'
+const isError = e => /Error|Malformed|Skipped/.test(e.name) || e.name === 'SetErrorInfo' && e.attrs.errorInfo !== 'NONE'
+const fmt = ms => (ms >= 1000 ? (ms / 1000).toFixed(3) + ' s' : ms.toFixed(ms < 10 ? 2 : 1) + ' ms')
+const fmtT = rel => '+' + (rel / 1000).toFixed(3) + ' s'
+const fmtBytes = n => n >= 1048576 ? (n / 1048576).toFixed(1) + ' MiB' : n >= 1024 ? (n / 1024).toFixed(1) + ' KiB' : n + ' B'
+const short = (k, v) => typeof v === 'string' && v.length > 60 ? v.slice(0, 57) + '…' : String(v)
+const summaryAttrs = e => Object.entries(e.attrs).filter(([k]) => !/^(pduLength|channel|partial)$/.test(k)).slice(0, 5).map(([k, v]) => `${k}=${short(k, v)}`).join(' ')
+
+// ---- loading ----
+
+function load (json, sourceName) {
+    try {
+        model = parseOtlp(json)
+    } catch (error) {
+        $('source').textContent = `Could not read ${sourceName}: ${error.message}`
+        return
+    }
+    selected = null
+    windowRange = [0, model.duration]
+    $('source').textContent = sourceName
+    try { localStorage.setItem('pdu-trace-last', sourceName) } catch { }
+    renderChips()
+    drawOverview()
+    drawLanes()
+    renderResizes()
+    drawPacing()
+    renderTable()
+    renderDetail(null)
+}
+
+$('file').addEventListener('change', ev => {
+    const f = ev.target.files?.[0]
+    if (f) readFile(f)
+})
+function readFile (f) {
+    const reader = new FileReader()
+    reader.onload = () => { try { load(JSON.parse(reader.result), f.name) } catch (e) { $('source').textContent = `Not JSON: ${e.message}` } }
+    reader.readAsText(f)
+}
+document.addEventListener('dragover', ev => { ev.preventDefault(); document.body.classList.add('dragging') })
+document.addEventListener('dragleave', () => document.body.classList.remove('dragging'))
+document.addEventListener('drop', ev => {
+    ev.preventDefault()
+    document.body.classList.remove('dragging')
+    const f = ev.dataTransfer?.files?.[0]
+    if (f) readFile(f)
+})
+
+// ---- chips ----
+
+function renderChips () {
+    const m = model
+    const inBytes = d3.sum(m.events.filter(e => e.dir === 'in'), e => e.bytes)
+    const outBytes = d3.sum(m.events.filter(e => e.dir === 'out'), e => e.bytes)
+    const frames = m.spans.filter(s => s.name === 'egfx.frame')
+    const acks = frames.filter(s => s.attrs.ackAfterMs != null).map(s => s.attrs.ackAfterMs)
+    const decodes = m.spans.filter(s => s.name === 'h264.decode' && s.attrs.latencyMs >= 0).map(s => s.attrs.latencyMs)
+    const resizes = m.spans.filter(s => s.name === 'rdp.resize')
+    const chips = [
+        ['desktop', m.resource['rdp.desktop']], ['to', m.resource['rdp.destination']], ['client', m.resource['rdp.client']], ['graphics', m.resource['rdp.graphics']],
+        ['plugin', m.resource['service.version']], ['duration', (m.duration / 1000).toFixed(1) + ' s'],
+        ['PDUs', m.events.filter(e => e.dir !== 'local').length + (m.resource['trace.events.dropped'] ? ` (+${m.resource['trace.events.dropped']} dropped)` : '')],
+        ['in', fmtBytes(inBytes)], ['out', fmtBytes(outBytes)], ['resizes', resizes.length + (resizes.length ? ` (${resizes.filter(s => s.status?.code === 1).length} settled)` : '')],
+        ['EGFX frames', frames.length], ['ack p50/p95', acks.length ? `${d3.quantile(acks.sort(d3.ascending), 0.5).toFixed(1)} / ${d3.quantile(acks, 0.95).toFixed(1)} ms` : '–'],
+        ['H.264 units', decodes.length], ['decode p50/p95', decodes.length ? `${d3.quantile(decodes.sort(d3.ascending), 0.5).toFixed(1)} / ${d3.quantile(decodes, 0.95).toFixed(1)} ms` : '–'],
+        ['errors', m.events.filter(isError).length],
+    ].filter(([, v]) => v !== undefined && v !== '' && v !== null)
+    $('chips').innerHTML = chips.map(([k, v]) => `<span class="chip">${k} <b>${esc(String(v))}</b></span>`).join('')
+}
+const esc = s => s.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]))
+
+// ---- overview ----
+
+let brush, overviewX, overviewSvg
+function drawOverview () {
+    const el = $('overview')
+    el.innerHTML = ''
+    const width = Math.max(320, el.clientWidth || 800)
+    const height = 110
+    const margin = { top: 10, right: 12, bottom: 22, left: 48 }
+    const svg = d3.select(el).append('svg').attr('width', width).attr('height', height)
+    overviewSvg = svg
+    const x = d3.scaleLinear().domain([0, model.duration]).range([margin.left, width - margin.right])
+    overviewX = x
+    const bins = 240
+    const step = model.duration / bins
+    const inB = new Float64Array(bins), outB = new Float64Array(bins)
+    for (const e of model.events) {
+        const i = Math.min(bins - 1, Math.floor(e.rel / step))
+        if (e.dir === 'in') inB[i] += e.bytes
+        else if (e.dir === 'out') outB[i] += e.bytes
+    }
+    const mid = (margin.top + height - margin.bottom) / 2
+    const maxIn = d3.max(inB) || 1, maxOut = d3.max(outB) || 1
+    const yIn = d3.scaleSqrt().domain([0, maxIn]).range([mid, margin.top])
+    const yOut = d3.scaleSqrt().domain([0, maxOut]).range([mid, height - margin.bottom])
+    const g = svg.append('g')
+    const bw = Math.max(1, (x(step) - x(0)) - 1)
+    g.selectAll('rect.in').data(Array.from(inB)).join('rect').attr('class', 'in')
+        .attr('x', (d, i) => x(i * step)).attr('width', bw).attr('y', d => yIn(d)).attr('height', d => mid - yIn(d)).attr('fill', 'var(--egfx)').attr('opacity', 0.85)
+    g.selectAll('rect.out').data(Array.from(outB)).join('rect').attr('class', 'out')
+        .attr('x', (d, i) => x(i * step)).attr('width', bw).attr('y', mid).attr('height', d => yOut(d) - mid).attr('fill', 'var(--out)').attr('opacity', 0.85)
+    svg.append('line').attr('x1', margin.left).attr('x2', width - margin.right).attr('y1', mid).attr('y2', mid).attr('stroke', 'var(--line-strong)')
+    svg.append('text').attr('x', 4).attr('y', margin.top + 10).text('in')
+    svg.append('text').attr('x', 4).attr('y', height - margin.bottom - 2).text('out')
+    svg.append('text').attr('x', 4).attr('y', mid - 3).attr('class', 'lane-sub').text(fmtBytes(maxIn) + '/bin')
+    // Resize bands and markers for activations and errors.
+    for (const s of model.spans.filter(s => s.name === 'rdp.resize')) {
+        svg.append('rect').attr('x', x(s.rel)).attr('width', Math.max(2, x(s.relEnd) - x(s.rel))).attr('y', margin.top).attr('height', height - margin.top - margin.bottom).attr('fill', 'var(--band)')
+        svg.append('line').attr('x1', x(s.rel)).attr('x2', x(s.rel)).attr('y1', margin.top).attr('y2', height - margin.bottom).attr('stroke', 'var(--band-line)')
+    }
+    for (const e of model.events.filter(isError)) {
+        svg.append('circle').attr('cx', x(e.rel)).attr('cy', margin.top + 4).attr('r', 3).attr('fill', 'var(--error)')
+    }
+    svg.append('g').attr('class', 'axis').attr('transform', `translate(0,${height - margin.bottom})`).call(d3.axisBottom(x).ticks(10).tickFormat(d => (d / 1000).toFixed(d % 1000 ? 1 : 0) + ' s'))
+    brush = d3.brushX().extent([[margin.left, margin.top], [width - margin.right, height - margin.bottom]]).on('end', ev => {
+        if (!ev.sourceEvent) return
+        windowRange = ev.selection ? ev.selection.map(x.invert) : [0, model.duration]
+        drawLanes()
+        drawPacing()
+    })
+    svg.append('g').attr('class', 'brush').call(brush)
+    svg.on('dblclick', () => { windowRange = [0, model.duration]; svg.select('.brush').call(brush.move, null); drawLanes(); drawPacing() })
+}
+
+// ---- lanes ----
+
+const tooltip = $('tooltip')
+function showTip (ev, html) { tooltip.innerHTML = html; tooltip.hidden = false; moveTip(ev) }
+function moveTip (ev) { const pad = 14; tooltip.style.left = Math.min(ev.clientX + pad, window.innerWidth - tooltip.offsetWidth - 8) + 'px'; tooltip.style.top = Math.min(ev.clientY + pad, window.innerHeight - tooltip.offsetHeight - 8) + 'px' }
+function hideTip () { tooltip.hidden = true }
+const eventTip = e => `<span class="name">${esc(e.name)}</span>  ${esc(fmtT(e.rel))}\n<span class="dir ${e.dir}">${e.dir === 'in' ? '←' : e.dir === 'out' ? '→' : '·'}</span> ${e.layer}${e.bytes ? '  ' + fmtBytes(e.bytes) : ''}${e.repeat ? `  ×${e.repeat} until ${fmtT(e.until - model.t0)}` : ''}\n` +
+    Object.entries(e.attrs).slice(0, 10).map(([k, v]) => `<span class="key">${esc(k)}</span> ${esc(short(k, v))}`).join('\n')
+
+function drawLanes () {
+    const el = $('lanes')
+    el.innerHTML = ''
+    const width = Math.max(320, el.clientWidth || 700)
+    const margin = { top: 18, right: 10, bottom: 22, left: 150 }
+    const height = margin.top + LANES.length * LANE_H + margin.bottom
+    const svg = d3.select(el).append('svg').attr('width', width).attr('height', height)
+    const x = d3.scaleLinear().domain(windowRange).range([margin.left, width - margin.right])
+    const laneY = i => margin.top + i * LANE_H
+    const defs = svg.append('defs')
+    defs.append('clipPath').attr('id', 'lane-clip').append('rect').attr('x', margin.left).attr('y', 0).attr('width', width - margin.left - margin.right).attr('height', height)
+    // Lane backgrounds and labels.
+    LANES.forEach((lane, i) => {
+        svg.append('rect').attr('x', margin.left).attr('y', laneY(i)).attr('width', width - margin.left - margin.right).attr('height', LANE_H).attr('fill', i % 2 ? 'var(--surface-2)' : 'none').attr('opacity', 0.6)
+        svg.append('text').attr('class', 'lane-label').attr('x', 6).attr('y', laneY(i) + 18).text(lane.label)
+        svg.append('text').attr('class', 'lane-sub').attr('x', 6).attr('y', laneY(i) + 32).text(lane.sub)
+    })
+    const plot = svg.append('g').attr('clip-path', 'url(#lane-clip)')
+    const gBands = plot.append('g'), gSpans = plot.append('g'), gMarks = plot.append('g')
+    const gAxis = svg.append('g').attr('class', 'axis').attr('transform', `translate(0,${height - margin.bottom})`)
+
+    const inWindow = (lo, hi) => {
+        // Events sorted by seq, not strictly by t; filter is fine at this size.
+        return model.events.filter(e => e.rel >= lo && e.rel <= hi)
+    }
+    const render = (xs) => {
+        const [lo, hi] = xs.domain()
+        gAxis.call(d3.axisBottom(xs).ticks(8).tickFormat(d => (d / 1000).toFixed(hi - lo < 2000 ? 3 : hi - lo < 20000 ? 2 : 1) + ' s'))
+        // Resize and activation bands.
+        const bands = model.spans.filter(s => (s.name === 'rdp.resize' || s.name === 'rdp.reactivation' || s.name === 'rdp.activation') && s.relEnd >= lo && s.rel <= hi)
+        gBands.selectAll('g').data(bands, d => d.id).join(enter => {
+            const g = enter.append('g').attr('class', 'band')
+            g.append('rect').attr('y', margin.top).attr('height', LANES.length * LANE_H)
+            g.append('line').attr('y1', margin.top).attr('y2', margin.top + LANES.length * LANE_H)
+            g.append('text').attr('y', margin.top - 5)
+            return g
+        }).each(function (d) {
+            const g = d3.select(this)
+            const x0 = xs(d.rel), x1 = xs(d.relEnd)
+            g.select('rect').attr('x', x0).attr('width', Math.max(1, x1 - x0))
+            g.select('line').attr('x1', x0).attr('x2', x0)
+            g.select('text').attr('x', x0 + 3).text(d.name === 'rdp.resize' ? `resize ${d.attrs.width}×${d.attrs.height}${d.status?.code === 2 ? ' ✗' : d.attrs.settledAfterMs != null ? ` ${fmt(d.attrs.settledAfterMs)}` : ''}` : d.name.replace('rdp.', ''))
+        })
+        // Span bars: EGFX frames in the graphics lane, H.264 decodes in the decoder lane, legacy frames in fast-path.
+        const laneOfSpan = { 'egfx.frame': 3, 'h264.decode': 5, 'fastpath.frame': 4 }
+        const spans = model.spans.filter(s => laneOfSpan[s.name] !== undefined && s.relEnd >= lo && s.rel <= hi)
+        const dense = spans.length > 3000
+        gSpans.selectAll('rect').data(dense ? [] : spans, d => d.id).join('rect')
+            .attr('x', d => xs(d.rel)).attr('width', d => Math.max(1.5, xs(d.relEnd) - xs(d.rel)))
+            .attr('y', d => laneY(laneOfSpan[d.name]) + LANE_H - 14).attr('height', 9).attr('rx', 2)
+            .attr('fill', d => d.status?.code === 2 ? 'var(--error)' : d.name === 'h264.decode' ? 'var(--decoder)' : d.name === 'egfx.frame' ? 'var(--egfx)' : 'var(--fastpath)').attr('opacity', 0.55)
+            .on('mousemove', (ev, d) => showTip(ev, `<span class="name">${esc(d.name)}</span>  ${esc(fmtT(d.rel))} → ${esc(fmt(d.end - d.start))}\n` + Object.entries(d.attrs).map(([k, v]) => `<span class="key">${esc(k)}</span> ${esc(String(v))}`).join('\n') + (d.status?.message ? `\n<span class="status-bad">${esc(d.status.message)}</span>` : '')))
+            .on('mouseleave', hideTip)
+        // Marks: one per event, or a density strip when there are too many to tell apart.
+        const visible = inWindow(lo, hi)
+        const perLane = d3.group(visible, e => e.lane)
+        gMarks.selectAll('*').remove()
+        const px = width - margin.left - margin.right
+        LANES.forEach((lane, i) => {
+            const evs = perLane.get(lane.id) ?? []
+            if (evs.length > Math.max(1500, px * 2)) {
+                const bins = Math.floor(px / 2)
+                const counts = new Uint32Array(bins)
+                for (const e of evs) counts[Math.min(bins - 1, Math.floor((e.rel - lo) / (hi - lo) * bins))]++
+                const max = d3.max(counts) || 1
+                gMarks.selectAll(null).data(Array.from(counts)).join('rect')
+                    .attr('x', (d, k) => margin.left + k * 2).attr('width', 2).attr('y', laneY(i) + 4).attr('height', 26)
+                    .attr('fill', lane.color).attr('opacity', d => d ? 0.15 + 0.85 * Math.sqrt(d / max) : 0)
+                gMarks.append('text').attr('class', 'lane-sub').attr('x', width - margin.right - 4).attr('y', laneY(i) + 12).attr('text-anchor', 'end').text(`${evs.length} events: zoom in to see each`)
+                return
+            }
+            gMarks.selectAll(null).data(evs).join('rect').attr('class', e => 'mark' + (e === selected ? ' selected' : ''))
+                .attr('x', e => xs(e.rel) - (KEY_NAMES.test(e.name) ? 2.5 : 1.25)).attr('width', e => KEY_NAMES.test(e.name) ? 5 : 2.5)
+                .attr('y', e => laneY(i) + (KEY_NAMES.test(e.name) ? 3 : 8)).attr('height', e => KEY_NAMES.test(e.name) ? 28 : 18).attr('rx', 1)
+                .attr('fill', e => isError(e) ? 'var(--error)' : lane.color).attr('opacity', e => KEY_NAMES.test(e.name) || isError(e) ? 1 : 0.6)
+                .on('mousemove', (ev, e) => showTip(ev, eventTip(e))).on('mouseleave', hideTip)
+                .on('click', (ev, e) => { selected = e; renderDetail(e); gMarks.selectAll('.mark').classed('selected', d => d === e) })
+        })
+    }
+    render(x)
+    const zoom = d3.zoom().scaleExtent([1, Math.max(1, model.duration / 5)]).translateExtent([[margin.left, 0], [width - margin.right, height]]).extent([[margin.left, 0], [width - margin.right, height]])
+        .on('zoom', ev => {
+            const xs = ev.transform.rescaleX(x)
+            render(xs)
+            const [lo, hi] = xs.domain()
+            if (overviewSvg) overviewSvg.select('.brush').call(brush.move, [overviewX(lo), overviewX(hi)])
+        })
+    svg.call(zoom).on('dblclick.zoom', null)
+}
+
+// ---- details ----
+
+function renderDetail (e) {
+    const el = $('detail')
+    if (!e) { el.className = 'empty'; el.textContent = 'Click a mark.'; return }
+    el.className = ''
+    const rows = [['event', e.name], ['time', `${fmtT(e.rel)} (${new Date(e.t).toISOString()})`], ['direction', e.dir], ['layer', e.layer], ['bytes', e.bytes], ...e.repeat ? [['repeated', `${e.repeat}× until ${fmtT(e.until - model.t0)}`]] : [], ['span', `${e.span.name} ${fmtT(e.span.rel)} → ${fmt(e.span.end - e.span.start)}`], ...Object.entries(e.attrs)]
+    let html = '<table>' + rows.map(([k, v]) => `<tr><td>${esc(String(k))}</td><td>${esc(String(v))}</td></tr>`).join('') + '</table>'
+    const frameId = e.attrs.frameId
+    if (frameId !== undefined) {
+        const related = model.events.filter(o => o.attrs.frameId === frameId && o !== e)
+        if (related.length) {
+            html += `<p class="hint" style="margin-top:10px">Same frame id ${esc(String(frameId))}:</p><table>` + related.slice(0, 20).map(o => `<tr><td>${esc(fmtT(o.rel))}</td><td><span class="dir ${o.dir}">${o.dir === 'in' ? '←' : o.dir === 'out' ? '→' : '·'}</span> ${esc(o.name)} <span class="key">${esc(summaryAttrs(o))}</span></td></tr>`).join('') + '</table>'
+        }
+    }
+    el.innerHTML = html
+}
+
+// ---- resize ledger ----
+
+function renderResizes () {
+    const sel = $('resize-select')
+    const resizes = model.spans.filter(s => s.name === 'rdp.resize')
+    sel.innerHTML = resizes.length ? resizes.map((s, i) => `<option value="${i}">#${i + 1} ${fmtT(s.rel)} → ${s.attrs.width}×${s.attrs.height}${s.status?.code === 2 ? ' (not settled)' : ''}</option>`).join('') : '<option>no resize in this trace</option>'
+    sel.onchange = () => renderResize(resizes[+sel.value])
+    // The first resize that did not settle, else the first that grew the picture, else the first.
+    const pick = resizes.findIndex(s => s.status?.code === 2)
+    const grew = resizes.findIndex((s, i) => i && s.attrs.width * s.attrs.height > resizes[i - 1].attrs.width * resizes[i - 1].attrs.height)
+    const index = pick >= 0 ? pick : grew >= 0 ? grew : 0
+    sel.value = String(index)
+    renderResize(resizes[index])
+}
+
+function renderResize (s) {
+    const checks = $('checks'), ledger = $('ledger'), summary = $('resize-summary')
+    if (!s) { checks.innerHTML = ''; ledger.innerHTML = '<div class="empty">No resize was requested in this connection.</div>'; summary.textContent = ''; return }
+    const a = s.attrs
+    const start = s.start
+    const within = model.events.filter(e => e.t >= start && e.t <= s.end + 1)
+    const ev = name => within.find(e => e.name === name)
+    const reset = within.find(e => e.name === 'EGFX.ResetGraphics')
+    const surface = within.find(e => e.name === 'EGFX.CreateSurface' && (!reset || e.t >= reset.t))
+    const frames = model.spans.filter(f => f.name === 'egfx.frame' && f.parent === s.id)
+    const firstFrame = frames.find(f => f.attrs.frameId === a.firstFrameId) ?? frames[0]
+    const firstCmds = firstFrame ? model.events.filter(e => e.span === firstFrame && /^EGFX\.(WireToSurface1|WireToSurface2|SolidFill|CacheToSurface|SurfaceToSurface)$/.test(e.name)) : []
+    const area = e => {
+        if (e.name === 'EGFX.WireToSurface1' && e.attrs.regionArea !== undefined && /^AVC/.test(String(e.attrs.codec))) return Number(e.attrs.regionArea)
+        const m = /^(\d+),(\d+)-(\d+),(\d+)$/.exec(String(e.attrs.dest ?? ''))
+        return m ? (m[3] - m[1]) * (m[4] - m[2]) : 0
+    }
+    const covered = d3.sum(firstCmds, area)
+    const surfaceArea = surface ? surface.attrs.width * surface.attrs.height : a.width * a.height
+    const avc = firstCmds.filter(e => /^AVC/.test(String(e.attrs.codec)))
+    const stale = within.filter(e => e.name === 'EGFX.WireToSurface1' && surface && e.t >= surface.t && (() => { const m = /-(\d+),(\d+)$/.exec(String(e.attrs.dest)); return m && (+m[1] > surface.attrs.width || +m[2] > surface.attrs.height) })())
+    const canvasResized = within.find(e => e.name === 'Canvas.Resized' && e.attrs.width === a.width && e.attrs.height === a.height)
+    const drawsBefore = reset ? within.filter(e => e.name === 'Canvas.Draw' && e.t >= reset.t && (!canvasResized || e.t < canvasResized.t)) : []
+    const firstDraw = canvasResized && within.find(e => e.name === 'Canvas.Draw' && e.t >= canvasResized.t)
+    const decodes = model.spans.filter(f => f.name === 'h264.decode' && f.start >= start && f.start <= s.end)
+    const decodeErrors = decodes.filter(f => f.attrs.outcome && f.attrs.outcome !== 'decoded')
+    const slow = d3.max(decodes, f => f.attrs.latencyMs) ?? 0
+    const deactivation = within.find(e => e.name === 'DeactivateAll')
+    const hasWire = model.events.some(e => e.layer === 'egfx' && e.name === 'EGFX.StartFrame')
+    const C = []
+    const put = (state, title, detail) => C.push({ state, title, detail })
+    put(a.resetAfterMs != null ? 'ok' : deactivation ? 'ok' : 'bad', a.resetAfterMs != null ? `Server reset the graphics to ${reset.attrs.width}×${reset.attrs.height}` : deactivation ? 'Server deactivated and reactivated (legacy path)' : 'No graphics reset for this request',
+        a.resetAfterMs != null ? `${fmt(a.resetAfterMs)} after the layout${a.resetSize ? `; asked ${a.width}×${a.height}, got ${a.resetSize}` : ''}` : deactivation ? `Deactivate All ${fmt(deactivation.t - start)} after the layout` : 'the request may have been superseded, or the server ignored it')
+    put(surface ? (surface.attrs.width === a.width && surface.attrs.height === a.height ? 'ok' : 'warn') : reset ? 'bad' : 'na', surface ? `Surface ${surface.attrs.surfaceId} created at ${surface.attrs.width}×${surface.attrs.height}` : 'No surface created after the reset', surface ? `${fmt(surface.t - start)} after the layout; mapped ${ev('EGFX.MapSurfaceToScaledOutput') ? 'scaled to ' + ev('EGFX.MapSurfaceToScaledOutput').attrs.target : ev('EGFX.MapSurfaceToOutput') ? 'at ' + ev('EGFX.MapSurfaceToOutput').attrs.origin : 'not yet'}` : '')
+    put(!hasWire ? 'na' : firstFrame ? (s.status?.code === 1 ? 'ok' : 'warn') : 'bad', !hasWire ? 'Frames are not in this trace (log-derived)' : firstFrame ? `First frame ${firstFrame.attrs.frameId}: ${firstFrame.attrs.commands} command${firstFrame.attrs.commands === 1 ? '' : 's'}, ${s.status?.code === 1 ? 'acknowledged ' + fmt(a.settledAfterMs) + ' after the layout' : 'not acknowledged'}` : 'No frame at the new size', firstFrame ? Object.entries(firstFrame.attrs).filter(([k]) => k.startsWith('codec.')).map(([k, v]) => `${k.slice(6)} ×${v}`).join(', ') + (firstFrame.attrs.ackAfterMs != null ? `; ack ${fmt(firstFrame.attrs.ackAfterMs)} after Start Frame` : '') : '')
+    put(!hasWire ? 'na' : !firstFrame ? 'na' : covered >= surfaceArea * 0.98 ? 'ok' : covered >= surfaceArea * 0.5 ? 'warn' : 'bad', !hasWire || !firstFrame ? 'Coverage of the first frame: unknown' : `First frame covers ${Math.min(100, Math.round(covered / surfaceArea * 100))}% of the new surface`, firstFrame ? `${firstCmds.length} surface commands, ${fmtBytes(firstFrame.attrs.bitmapBytes)} of bitmap data (overlaps counted once each)` : '')
+    put(!avc.length ? 'na' : avc[0].attrs.keyFrame === true ? 'ok' : 'bad', !avc.length ? 'No H.264 in the first frame' : avc[0].attrs.keyFrame === true ? 'First H.264 access unit is a key frame' : 'First H.264 access unit is NOT a key frame', avc.length ? `${avc[0].attrs.codec}, picture ${avc[0].attrs.picture ?? '?'}, ${avc[0].attrs.regions} region${avc[0].attrs.regions === 1 ? '' : 's'}, QP ${avc[0].attrs.qp}` : '')
+    put(avc.length && avc[0].attrs.picture ? (avc[0].attrs.picture === `${surface?.attrs.width}x${surface?.attrs.height}` ? 'ok' : 'warn') : 'na', avc.length && avc[0].attrs.picture ? `Coded picture ${avc[0].attrs.picture} vs surface ${surface?.attrs.width}×${surface?.attrs.height}` : 'Coded picture size: unknown', 'from the SPS of the first access unit on the new surface')
+    put(stale.length ? 'bad' : 'ok', stale.length ? `${stale.length} surface command${stale.length === 1 ? '' : 's'} past the new surface's edge` : 'No surface command past the new surface\'s edge', stale.slice(0, 3).map(e => `${e.attrs.codec} dest ${e.attrs.dest}`).join('; '))
+    put(!model.events.some(e => e.layer === 'canvas') ? 'na' : canvasResized ? (drawsBefore.length ? 'warn' : 'ok') : 'bad', !model.events.some(e => e.layer === 'canvas') ? 'Canvas events are not in this trace' : canvasResized ? `Canvas resized to ${a.width}×${a.height} ${fmt(canvasResized.t - start)} after the layout` : 'Canvas was not resized to the new size', canvasResized ? `${drawsBefore.length} draw${drawsBefore.length === 1 ? '' : 's'} between the reset and the canvas resize; first draw at the new size ${firstDraw ? fmt(firstDraw.t - canvasResized.t) + ' later (' + firstDraw.attrs.width + '×' + firstDraw.attrs.height + ' at ' + firstDraw.attrs.x + ',' + firstDraw.attrs.y + ')' : 'never'}` : '')
+    put(!decodes.length ? 'na' : decodeErrors.length ? 'bad' : slow > 500 ? 'warn' : 'ok', !decodes.length ? 'No H.264 decoded during the resize' : `${decodes.length} H.264 access unit${decodes.length === 1 ? '' : 's'} decoded, slowest ${fmt(slow)}`, decodeErrors.length ? decodeErrors.slice(0, 3).map(f => `#${f.attrs.id} ${f.attrs.outcome}${f.status?.message ? ': ' + f.status.message : ''}`).join('; ') : decodes.length ? `median ${fmt(d3.median(decodes, f => f.attrs.latencyMs))}` : '')
+    put(s.status?.code === 2 ? 'bad' : 'ok', s.status?.code === 2 ? `Not settled: ${s.status.message}` : `Settled ${a.settledAfterMs != null ? fmt(a.settledAfterMs) : fmt(s.end - s.start)} after the layout`, deactivation ? 'through a deactivation-reactivation sequence' : 'in place, through the graphics pipeline')
+    checks.innerHTML = C.map(c => `<div class="check ${c.state}"><b>${esc(c.title)}</b><small>${esc(c.detail || '')}</small></div>`).join('')
+    summary.textContent = `requested ${a.width}×${a.height} @${a.scale}% at ${fmtT(s.rel)}; ${within.length} events in ${fmt(s.end - s.start)}`
+    // The ledger: every event of the span, in order, the key ones set off.
+    const rows = within.map(e => `<tr class="${KEY_NAMES.test(e.name) ? 'key-row' : ''}"><td>${esc('+' + (e.t - start).toFixed(1) + ' ms')}</td><td><span class="dir ${e.dir}">${e.dir === 'in' ? '←' : e.dir === 'out' ? '→' : '·'}</span></td><td>${esc(e.name)}${e.repeat ? ` ×${e.repeat}` : ''}</td><td>${e.bytes ? esc(fmtBytes(e.bytes)) : ''}</td><td class="key">${esc(summaryAttrs(e))}</td></tr>`)
+    ledger.innerHTML = `<table><thead><tr><th>since request</th><th></th><th>event</th><th>bytes</th><th>fields</th></tr></thead><tbody>${rows.join('')}</tbody></table>`
+}
+
+// ---- pacing ----
+
+function drawPacing () {
+    const el = $('pacing')
+    el.innerHTML = ''
+    const width = Math.max(320, el.clientWidth || 800), height = 190
+    const margin = { top: 10, right: 12, bottom: 24, left: 48 }
+    const [lo, hi] = windowRange
+    const frames = model.spans.filter(s => s.name === 'egfx.frame' && s.attrs.ackAfterMs != null && s.rel >= lo && s.rel <= hi)
+    const decodes = model.spans.filter(s => s.name === 'h264.decode' && s.attrs.latencyMs >= 0 && s.rel >= lo && s.rel <= hi)
+    const legacy = model.spans.filter(s => s.name === 'fastpath.frame' && s.rel >= lo && s.rel <= hi)
+    if (!frames.length && !decodes.length && !legacy.length) { el.innerHTML = '<div class="empty">No frame or decoder timing in this window (a log-derived trace has none).</div>'; return }
+    const svg = d3.select(el).append('svg').attr('width', width).attr('height', height)
+    const x = d3.scaleLinear().domain([lo, hi]).range([margin.left, width - margin.right])
+    const maxY = Math.max(5, d3.max(frames, f => f.attrs.ackAfterMs) ?? 0, d3.max(decodes, f => f.attrs.latencyMs) ?? 0, d3.max(legacy, f => f.end - f.start) ?? 0)
+    const y = d3.scaleSqrt().domain([0, maxY]).range([height - margin.bottom, margin.top])
+    svg.append('g').attr('class', 'grid').selectAll('line').data(y.ticks(4)).join('line').attr('x1', margin.left).attr('x2', width - margin.right).attr('y1', d => y(d)).attr('y2', d => y(d))
+    for (const s of model.spans.filter(s => s.name === 'rdp.resize' && s.relEnd >= lo && s.rel <= hi)) {
+        svg.append('rect').attr('x', x(s.rel)).attr('width', Math.max(2, x(s.relEnd) - x(s.rel))).attr('y', margin.top).attr('height', height - margin.top - margin.bottom).attr('fill', 'var(--band)')
+    }
+    const dot = (data, value, color, label) => svg.append('g').selectAll('circle').data(data).join('circle')
+        .attr('cx', d => x(d.rel)).attr('cy', d => y(value(d))).attr('r', 3).attr('fill', color).attr('opacity', 0.8).attr('stroke', 'var(--surface)').attr('stroke-width', 1)
+        .on('mousemove', (ev, d) => showTip(ev, `<span class="name">${label}</span> ${esc(fmtT(d.rel))}\n${esc(fmt(value(d)))}\n` + Object.entries(d.attrs).map(([k, v]) => `<span class="key">${esc(k)}</span> ${esc(String(v))}`).join('\n'))).on('mouseleave', hideTip)
+    dot(legacy, d => d.end - d.start, 'var(--fastpath)', 'legacy frame (marker begin → end)')
+    dot(frames, d => d.attrs.ackAfterMs, 'var(--egfx)', 'EGFX frame: Start Frame → Frame Acknowledge')
+    dot(decodes, d => d.attrs.latencyMs, 'var(--decoder)', 'H.264 access unit: handed out → pixels')
+    svg.append('g').attr('class', 'axis').attr('transform', `translate(0,${height - margin.bottom})`).call(d3.axisBottom(x).ticks(8).tickFormat(d => (d / 1000).toFixed(hi - lo < 2000 ? 3 : 1) + ' s'))
+    svg.append('g').attr('class', 'axis').attr('transform', `translate(${margin.left},0)`).call(d3.axisLeft(y).ticks(4).tickFormat(d => d + ' ms'))
+}
+
+// ---- table ----
+
+function renderTable () {
+    const el = $('table'), count = $('table-count')
+    const q = $('filter').value.trim().toLowerCase()
+    const match = e => !q || e.name.toLowerCase().includes(q) || Object.entries(e.attrs).some(([k, v]) => `${k}=${v}`.toLowerCase().includes(q) || k.toLowerCase() === q)
+    const rows = model.events.filter(match)
+    const shown = rows.slice(0, 3000)
+    count.textContent = `${rows.length} of ${model.events.length}${rows.length > shown.length ? ` (first ${shown.length} shown)` : ''}`
+    el.innerHTML = `<table><thead><tr><th>time</th><th></th><th>layer</th><th>event</th><th>bytes</th><th>fields</th></tr></thead><tbody>` +
+        shown.map(e => `<tr data-seq="${e.seq}"><td>${esc(fmtT(e.rel))}</td><td><span class="dir ${e.dir}">${e.dir === 'in' ? '←' : e.dir === 'out' ? '→' : '·'}</span></td><td>${esc(e.layer)}</td><td class="${isError(e) ? 'status-bad' : ''}">${esc(e.name)}${e.repeat ? ` ×${e.repeat}` : ''}</td><td>${e.bytes ? esc(fmtBytes(e.bytes)) : ''}</td><td class="key">${esc(Object.entries(e.attrs).map(([k, v]) => `${k}=${short(k, v)}`).join(' '))}</td></tr>`).join('') + '</tbody></table>'
+    el.querySelectorAll('tr[data-seq]').forEach(tr => tr.addEventListener('click', () => { const e = model.events.find(o => String(o.seq) === tr.dataset.seq); if (e) { selected = e; renderDetail(e); windowRange = [Math.max(0, e.rel - 500), Math.min(model.duration, e.rel + 500)]; drawLanes(); drawPacing(); window.scrollTo({ top: $('lanes').getBoundingClientRect().top + window.scrollY - 120, behavior: 'smooth' }) } }))
+}
+$('filter').addEventListener('input', () => model && renderTable())
+let resizeTimer
+window.addEventListener('resize', () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(() => { if (model) { drawOverview(); drawLanes(); drawPacing() } }, 150) })
+
+// An embedded trace (a page published with one), else wait for a file.
+const embedded = document.getElementById('trace-data')
+if (embedded) {
+    try { load(JSON.parse(embedded.textContent), embedded.dataset.name || 'embedded trace') } catch (e) { $('source').textContent = `Embedded trace unreadable: ${e.message}` }
+} else {
+    $('source').textContent = 'No trace loaded. Tabby writes one next to each diagnostic log file (Settings › Remote Desktop › Diagnostics) as <name>.otlp.json.'
+}
+})()
+</script>
+</body>
+</html>

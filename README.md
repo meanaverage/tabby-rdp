@@ -138,7 +138,7 @@ In an RDP profile tab's **…** menu, choose **RDP client** to switch that profi
 | FreeRDP (experimental) | macOS ARM64; Windows and Linux ARM64/x64 native helpers | In-tab display, keyboard/mouse, scaling, resize, view only, screenshots and reconnect. Clipboard, files, audio, shared folders, Hyper-V and H.264 are pending. |
 
 Windows Server performance has **not been benchmarked**. See [FreeRDP builds, licensing and capability notes](native/README.md).
-The proposed `0.6.0-rc.1` remains a PR test build until further analysis and hands-on testing are complete.
+To try the preview, open **Settings › Remote Desktop › Updates**, choose **Preview**, and install the offered version.
 
 <a id="settings"></a>
 <a id="saved-accounts"></a>
@@ -186,8 +186,8 @@ names and addresses; check those before attaching one.
 
 ## License
 
-[MIT](LICENSE). IronRDP is MIT or Apache-2.0 ([license](vendor/IRONRDP-LICENSE)); bundled FreeRDP, WinPR and OpenSSL 3
-are Apache-2.0, with their license notices and WinPR's Unicode conversion notice included in each native bundle. [FreeRDP licensing](native/README.md#licensing).
+[MIT](LICENSE). IronRDP is MIT or Apache-2.0 ([license](vendor/IRONRDP-LICENSE)); FreeRDP, WinPR and OpenSSL 3
+are Apache-2.0, with their license notices and WinPR's Unicode conversion notice included in each platform's helper package. [FreeRDP licensing](native/README.md#licensing).
 Header icons are from [Font Awesome Free](https://fontawesome.com) (CC BY 4.0).
 
 tabby-rdp is an independent project, not affiliated with Tabby, Devolutions or the GNOME Project.

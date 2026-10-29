@@ -1,6 +1,6 @@
 {
   "name": "tabby-rdp",
-  "version": "0.6.0-rc.1",
+  "version": "0.6.1",
   "description": "Windows and Linux remote desktops in Tabby, through SSH, direct RDP or RD Gateway. IronRDP with an experimental FreeRDP client.",
   "keywords": [
     "tabby-plugin",
@@ -28,8 +28,8 @@
     "dist",
     "!dist/**/*.map",
     "vendor",
+    "bin",
     "remote",
-    "native/bin",
     "native/README.md",
     "LICENSE",
     "CHANGELOG.md",
@@ -41,12 +41,15 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "build:helper": "node scripts/build-helper.mjs",
+    "build:helpers": "node scripts/build-helper.mjs --all",
     "watch": "tsc -p tsconfig.json --watch --sourceMap",
     "typecheck": "tsc -p tsconfig.json --noEmit && npm run typecheck:test",
     "typecheck:test": "tsc -p tsconfig.test.json",
     "test": "tsx test/run.ts",
     "test:smoke": "tsx test/run.ts --packed --hidden smoke-host smoke-rdp direct",
     "test:unit": "tsx --test test/unit/*.ts",
+    "test:helper": "go -C helper vet ./... && go -C helper test ./...",
     "build:ironrdp": "scripts/build-ironrdp.sh",
     "build:freerdp": "node scripts/build-freerdp.mjs",
     "prepublishOnly": "npm run build",
@@ -57,12 +60,11 @@
     "pack:release": "node scripts/pack.mjs"
   },
   "dependencies": {
-    "semver": "7.8.5",
-    "ws": "8.21.3"
+    "semver": "7.8.5"
   },
   "devDependencies": {
     "@angular/core": "21.2.25",
-    "@playwright/test": "1.64.0",
+    "@playwright/test": "1.64.1",
     "@types/node": "^20.19.0",
     "@types/semver": "^7.8.0",
     "rxjs": "7.8.2",
@@ -70,11 +72,19 @@
     "tabby-settings": "1.0.231-nightly.0",
     "tabby-terminal": "1.0.231-nightly.0",
     "tsx": "^4.23.15",
-    "typescript": "~5.9.3"
+    "typescript": "~5.9.3",
+    "ws": "8.22.0"
   },
   "tabbyRdp": {
     "minimumTabbyVersion": "1.0.236",
     "rollbackFloor": "0.5.3",
-    "packageFormat": 3
+    "packageFormat": 5,
+    "freerdpPlatforms": [
+      "darwin-arm64",
+      "linux-arm64",
+      "linux-x64",
+      "win32-arm64",
+      "win32-x64"
+    ]
   }
 }

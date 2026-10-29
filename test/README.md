@@ -14,10 +14,14 @@ npm test -- winhost               # SSH to Windows itself (TRD_TEST_WIN_OPENSSH)
 npm test -- hyperv                # Hyper-V VMs on a Windows host (TRD_TEST_HYPERV)
 npm test -- gateway               # desktops behind an RD Gateway (TRD_TEST_GATEWAY)
 npm test -- rds                   # a Windows Server with RDS licensing, with the diagnostic log (TRD_TEST_RDS)
+npm test -- pdu-trace             # the PDU flow of a connection and of live resizes, from the PDU trace (TRD_TEST_RDS or TRD_TEST_DIRECT)
+TRD_TEST_CLIENT=freerdp npm test -- pdu-trace   # the same with FreeRDP, from its graphics log (WLOG_*; see tools/pdu-trace/README.md)
+npm test -- fps                   # frame pacing on testufo.com in Edge on a Windows desktop (TRD_TEST_RDS or TRD_TEST_DIRECT; TRD_TEST_CLIENT as above)
 npm test -- xrdp                  # the xrdp suite (TRD_TEST_XRDP_*)
 npm test -- direct                # a desktop reached directly, not through SSH (TRD_TEST_DIRECT_*, else the test host)
 npm test -- --packed freerdp      # opt-in native client and switch back to IronRDP (TRD_TEST_DIRECT_*, native helper required)
 npm test -- --packed e2e          # with the plugin installed as npm would install it (the release packer)
+npm test -- helper                # the network helper in Tabby itself; no remote machine (see below)
 npm test -- --keep e2e            # leave the test Tabby open afterwards
 npm test -- --port 9334 e2e       # use a Tabby already running with --remote-debugging-port=9334
 npm test -- screenshots           # regenerate docs/images from the test machines
@@ -106,6 +110,15 @@ All live RDP checks used Ubuntu 24.04 GNOME Remote Desktop as the server.
 Tabby 1.0.238 ships xterm 5; xterm 6 was tested separately. These results record the tested builds, rather than
 qualifying every later host release. Rerun the relevant suites when the plugin or host changes.
 
+## The network helper in Tabby
+
+`npm test -- helper` (or `npm test -- --packed --hidden helper`, the plugin installed from the package) needs no remote
+machine: in the test Tabby's window it starts the proxy (Electron's Node spawning the helper from the plugin's
+`bin/`), connects Chromium's own WebSocket to it as IronRDP's client does, relays both ways to a stand-in RDP server in
+the window, kills the helper under the relay (the failure has to say how it stopped, the client has to hear the end,
+and the next proxy has to work), and closes a proxy (its helper has to be gone). Linked, it needs this computer's
+helper built (`npm run build:helper`); packed, every platform's (`npm run build:helpers`).
+
 ## Package-change smoke tests
 
 Test the package-change dialog with `npm test -- --packed --hidden --tabby /path/to/Tabby smoke-updates`.
@@ -134,7 +147,8 @@ when Settings closes. Set `TRD_TEST_DUMP` to retain screenshots of progress, fai
 | `TRD_TEST_WINRM_PYTHON` | windows | Python with `pywinrm` on that host (default: the one `provision.sh` installs, else `python3`). |
 | `TRD_TEST_HYPERV` | hyperv | `user@host[:port]` of a Hyper-V host running OpenSSH Server, accepting the test key, as an account that may list its VMs (the testbed's `tabbyadmin`). `TRD_TEST_HYPERV_PASSWORD`: its password. `TRD_TEST_HYPERV_VM`: the VM to open (default `tabby-rdp-empty`). `TRD_TEST_HYPERV_CONSOLE` and `TRD_TEST_HYPERV_CONSOLE_PASSWORD`: an account that may open the console, where the first may not (the testbed's `tabbyrdp`). |
 | `TRD_TEST_GATEWAY` | gateway | An RD Gateway's address as the machine Tabby runs on sees it (`host` or `host:port`). `TRD_TEST_GATEWAY_USER` and `TRD_TEST_GATEWAY_PASSWORD`: an account the gateway lets through and the desktop signs in (the testbed's `tabbyrdp`). `TRD_TEST_GATEWAY_TARGET`: the desktop as the gateway sees it (default: the gateway's own host). With `TRD_TEST_HOST` set and reaching the gateway, also a desktop behind that SSH host. |
-| `TRD_TEST_RDS` | rds | `host[:port]` of a Windows Server with the Remote Desktop Session Host and Remote Desktop Licensing roles (`testbed/windows-server/rds.ps1`). `TRD_TEST_RDS_USER` and `TRD_TEST_RDS_PASSWORD`: an account it signs in. |
+| `TRD_TEST_CLIENT` | pdu-trace, fps | `freerdp` runs the suite with the FreeRDP helper; then set `WLOG_APPENDER=FILE`, `WLOG_FILEAPPENDER_OUTPUT_FILE_PATH`, `WLOG_FILEAPPENDER_OUTPUT_FILE_NAME` and `WLOG_FILTER='com.freerdp.channels.rdpgfx.client:TRACE,com.freerdp.channels.disp.client:DEBUG'` for FreeRDP's graphics log, and `TRD_FREERDP_PIPELINE=1` for the graphics pipeline on a Windows desktop. |
+| `TRD_TEST_RDS` | rds, pdu-trace | `host[:port]` of a Windows Server with the Remote Desktop Session Host and Remote Desktop Licensing roles (`testbed/windows-server/rds.ps1`). `TRD_TEST_RDS_USER` and `TRD_TEST_RDS_PASSWORD`: an account it signs in. |
 | `TRD_TEST_WIN_OPENSSH` | winhost | `user@host[:port]` of a Windows machine running OpenSSH Server, accepting the test key (`TRD_TEST_SSH_KEY` or the agent). Signs in with `TRD_TEST_WIN_USER` / `TRD_TEST_WIN_PASSWORD`. |
 | `TRD_TEST_XRDP_USER`, `TRD_TEST_XRDP_PASSWORD` | xrdp | The account on the test host that signs in to xrdp (default user `tabbyxrdp`; see `testbed/linux/xrdp.sh`). The suite is skipped without the password. |
 | `TRD_TEST_XRDP_PORT` | xrdp | xrdp's port on the test host (default 3390). |

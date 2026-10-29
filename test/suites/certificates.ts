@@ -60,7 +60,7 @@ await suite('certificates', async t => {
     // 1. The own desktop: the certificate the setup made, nothing remembered in the config.
     await ev('await H.inZone(() => RD.desktop.showDesktop(H.pane))')
     check('own desktop connected', !!(await t.waitFor('return H.up()', 40)), await ev('return H.attempt()'))
-    const onDisk = (await t.remote('H.pane', `openssl x509 -in ~/.local/share/tabby-rdp/tls.crt -noout -fingerprint -sha256 | sed 's/^[^=]*=//'`)).trim().toUpperCase()
+    const onDisk = (await t.remote('H.pane', `openssl x509 -in "$HOME/.local/share/tabby-rdp/hosts/$(cat /etc/machine-id)/tls.crt" -noout -fingerprint -sha256 | sed 's/^[^=]*=//'`)).trim().toUpperCase()
     const seen = await ev(`return H.attempt().map(l => /^certificate: SHA-256 (\\S+), as set up$/.exec(l)?.[1]).find(Boolean) ?? null`)
     check('own desktop: checked against the certificate the setup made', FINGERPRINT.test(onDisk) && seen === onDisk, { seen, onDisk })
     check('own desktop: nothing remembered in the config', !(await ev(`return H.trusted(${JSON.stringify(ownKey)})`)))
@@ -87,7 +87,7 @@ await suite('certificates', async t => {
 
     // 3. The desktop behind the host, first use: remembered without asking.
     await ev(`H.inZone(() => { H.config.store.remoteDesktop.desktops = [{ name: ${JSON.stringify(NAME)}, via: H.test.host, host: '127.0.0.1', port: 3389, kind: 'gnome', username: 'tabby' }]; H.config.save() })`)
-    const password = (await t.remote('H.pane', 'cat ~/.local/share/tabby-rdp/rdp-password')).trim()
+    const password = await t.gnomePassword('H.pane')
     const key = await ev(`return (await RD.targets.targetOf(H.pane)).key + '#${ID}'`)
     const k = JSON.stringify(key)
     await ev(`H.setTrusted(${k}, null)`)

@@ -40,6 +40,8 @@ test(`Real RDP visual checkpoints: ${kind}`, async ({}, info) => {
         expect(await ev('return globalThis.__trdSmokeCredentials')).toBe(true)
         metadata.client = await clientIdentity(ev)
         metadata.host = await ev('return RD.compat.snapshot()')
+        // Keep Playwright's viewport state in sync so element screenshots restore this size, rather than native window bounds.
+        await page.setViewportSize({ width: 1100, height: 850 })
         const cdp = await context.newCDPSession(page)
         await cdp.send('Emulation.setDeviceMetricsOverride', { width: 1100, height: 850, deviceScaleFactor: 1, mobile: false })
         await t.settings({ desk: false, resize: krdp ? 'off' : 'live', zoom: 'fit', sharpness: 'standard', clipboard: 'off', sound: false, microphone: false, h264: krdp, connectionStatus: false })
@@ -302,6 +304,8 @@ PYFIXTURE`)
         await control({ reset: true }); await expect.poll(async () => (await readState())?.sequence).toBe(0)
         await test.step('Tab switch restores the same real framebuffer', async () => {
             await ev("RD.help.openSettings('remote-desktop')")
+            // Tabby may first show its default Settings page while opening the tab. Select the plugin page explicitly.
+            await page.getByRole('tab', { name: /Remote Desktop/ }).click()
             await expect(page.locator('.trd-settings')).toBeVisible()
             await ev('H.inZone(() => RD.app.selectTab(H.topOf(H.pane)))')
             await setSize(800, 600)

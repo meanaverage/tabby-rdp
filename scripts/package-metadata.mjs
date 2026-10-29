@@ -10,9 +10,73 @@
 // source repository (they aren't in the package), which scanners read as the package having tests (Socket's "No tests"
 // came with format 2's package.json, which publishes no scripts). npm never runs it when the package is installed;
 // install, build and other lifecycle scripts stay out.
-export const PACKAGE_FORMATS = [1, 2, 3]
+// Format 4: format 3, and the FreeRDP helper is published apart from the plugin, in a package per platform
+// (@tabby-rdp/freerdp-<platform>, made from native/bin/<platform>; see freeRDPMetadata and freeRDPFiles). The published
+// package.json names each one in tabbyRdp.freerdpPlatforms as an optional dependency, pinned to the plugin's own version:
+// npm installs the one that matches the computer, and the plugin's package holds no native code. The committed
+// package.json names none, so that the lock never has to resolve packages that are published with the release.
+// Format 5 keeps format 4's optional FreeRDP packages and adds reproducible Go network helpers to bin/.
+export const PACKAGE_FORMATS = [1, 2, 3, 4, 5]
 
 const EXACT = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?$/
+
+/** The npm package that holds the FreeRDP helper for a platform (`linux-x64`, say). src/freerdp.ts names it the same. */
+export const freeRDPPackage = platform => `@tabby-rdp/freerdp-${platform}`
+
+/** tabbyRdp.freerdpPlatforms, checked: each a platform that npm tells apart by its os and cpu, and each once. */
+export function freeRDPPlatforms (manifest) {
+    const platforms = manifest.tabbyRdp?.freerdpPlatforms
+    if (!Array.isArray(platforms) || platforms.length === 0 || new Set(platforms).size !== platforms.length ||
+        platforms.some(platform => typeof platform !== 'string' || !/^(darwin|linux|win32)-(arm64|x64)$/.test(platform))) {
+        throw new Error('Expected tabbyRdp.freerdpPlatforms: platforms such as linux-x64, each once')
+    }
+    return platforms
+}
+
+/** package.json of a platform's FreeRDP package, as published with the plugin's (committed) `manifest`. */
+export function freeRDPMetadata (manifest, platform) {
+    if (!freeRDPPlatforms(manifest).includes(platform)) {
+        throw new Error(`${platform} is not in tabbyRdp.freerdpPlatforms`)
+    }
+    const [os, cpu] = platform.split('-')
+    const pkg = {
+        name: freeRDPPackage(platform),
+        version: manifest.version,
+        description: `tabby-rdp's FreeRDP helper for ${platform}. tabby-rdp installs it; it is not a Tabby plugin.`,
+        homepage: manifest.homepage,
+        // npm's provenance check holds the repository to the one the release workflow ran in.
+        repository: manifest.repository,
+        bugs: manifest.bugs,
+        author: manifest.author,
+        // The helper's own code is MIT; FreeRDP, WinPR and OpenSSL are Apache-2.0 (licenses/ in the package).
+        license: 'MIT AND Apache-2.0',
+        os: [os],
+        cpu: [cpu],
+        // The Linux builds link against glibc (native/README.md): npm leaves them out where it is not the C library.
+        ...os === 'linux' ? { libc: ['glibc'] } : {},
+        // Scoped packages are private unless published otherwise, a first publish by hand (CONTRIBUTING.md) included.
+        publishConfig: { access: 'public' },
+    }
+    return Buffer.from(JSON.stringify(pkg, null, 2) + '\n')
+}
+
+/**
+ * What a platform's FreeRDP package holds besides its package.json: each path in the package, and the committed file it
+ * is. `built` lists native/bin/<platform>'s files (paths within it), which go at the package's root, where the helper
+ * finds its libraries.
+ */
+export function freeRDPFiles (platform, built) {
+    const files = [
+        ['README.md', 'native/package/README.md'],
+        ['LICENSE', 'LICENSE'],
+        ...built.map(file => [file, `native/bin/${platform}/${file}`]),
+    ]
+    const names = files.map(([name]) => name.toLowerCase())
+    if (names.includes('package.json') || new Set(names).size !== names.length) {
+        throw new Error(`native/bin/${platform} has a file the package keeps for its own (package.json, README.md or LICENSE)`)
+    }
+    return files
+}
 
 /** What a lock says of the package itself agrees with the manifest: name, version and runtime dependencies. */
 function agrees (manifest, lock) {
@@ -80,5 +144,22 @@ export function runtimeMetadata (manifest, lock) {
             throw new Error(`${name} is installed at run time but isn't a pinned runtime dependency`)
         }
     }
-    return { 'package.json': withoutDevelopment(manifest, format >= 3) }
+    const published = withoutDevelopment(manifest, format >= 3)
+    if (format < 4) {
+        return { 'package.json': published }
+    }
+    if (manifest.optionalDependencies !== undefined) {
+        throw new Error('package.json names optional dependencies: format 4 derives them, the FreeRDP packages, from tabbyRdp.freerdpPlatforms')
+    }
+    // The FreeRDP packages, after the runtime dependencies (or last), each at the plugin's version.
+    const optionalDependencies = Object.fromEntries(freeRDPPlatforms(manifest).map(platform => [freeRDPPackage(platform), manifest.version]))
+    const pkg = {}
+    for (const [key, value] of Object.entries(JSON.parse(published.toString('utf8')))) {
+        pkg[key] = value
+        if (key === 'dependencies') {
+            pkg.optionalDependencies = optionalDependencies
+        }
+    }
+    pkg.optionalDependencies ??= optionalDependencies
+    return { 'package.json': Buffer.from(JSON.stringify(pkg, null, 2) + '\n') }
 }

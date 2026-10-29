@@ -1,6 +1,7 @@
 // Persistent package-change UI and the saved-data floor, with simulated compatible package changes.
 import fs from 'node:fs'
 import path from 'node:path'
+import { inc } from 'semver'
 import { suite } from '../lib/harness.js'
 import { rendererErrors, smokeHost } from '../lib/smoke.js'
 
@@ -8,6 +9,8 @@ await suite('smoke-updates', async t => {
     const { ev, check, waitFor } = t
     await smokeHost(t)
     const errors = await rendererErrors(t)
+    const targetVersion = inc(await ev<string>('await RD.updates.ready; return RD.updates.running'), 'patch')
+    if (!targetVersion) throw new Error('The running plugin has no valid version')
     t.onCleanup(() => ev('if (H.originalReleaseEnv) Object.assign(RD.updates.env, H.originalReleaseEnv)'))
     const capture = async (name: string) => {
         if (!process.env.TRD_TEST_DUMP) { return }
@@ -19,16 +22,18 @@ await suite('smoke-updates', async t => {
         if (!process.env.TABBY_CONFIG_DIRECTORY?.includes('tabby-rdp-test-')) throw new Error('A fresh disposable profile is required');
         await RD.updates.ready;
         H.initialVersion = RD.updates.running;
+        H.targetVersion = ${JSON.stringify(targetVersion)};
         H.originalReleaseEnv = { ...RD.updates.env };
         H.packageModal = () => document.querySelector('dialog.trd-package-dialog');
         RD.updates.env.fetchCatalog = async () => ({ stable: '0.5.2', preview: null,
-            versions: ['0.5.1', '0.5.2', '0.6.0'].map(version => ({ version, deprecated: false,
-                policy: { minimumTabbyVersion: '1.0.236', rollbackFloor: version === '0.6.0' ? '0.6.0' : '0.5.1' } })) });
+            versions: ['0.5.1', '0.5.2', H.targetVersion].map(version => ({ version, deprecated: false,
+                policy: { minimumTabbyVersion: '1.0.236', rollbackFloor: version === H.targetVersion ? H.targetVersion : '0.5.1' } })) });
         H.installCalls = 0;
         RD.updates.env.install = async () => { H.installCalls++; throw new Error('Unexpected installation'); };
         await RD.updates.refreshCatalog(true);
         RD.help.open('updates');
     `)
+    check('the simulated update target differs from the running version', await ev('return H.targetVersion !== H.initialVersion'))
     check('Updates opens in the fresh profile', !!await waitFor('return !!document.querySelector(".trd-settings [data-install]")', 5))
     check('startup persists the gateway-prompt floor even with automatic checks paused', await ev(`
         const saved = JSON.parse(localStorage.getItem('tabby-rdp.releases.v1'));
@@ -49,10 +54,10 @@ await suite('smoke-updates', async t => {
         `))
         await ev('H.packageModal().querySelector("[data-close]").click()')
     }
-    // A compatible synthetic release keeps dialog checks deterministic without a published compatible RC.
-    await ev(`RD.updates.error = ''; RD.updates.catalog.stable = '0.6.0';
+    // A compatible synthetic release keeps dialog checks deterministic without a published future version.
+    await ev(`RD.updates.error = ''; RD.updates.catalog.stable = H.targetVersion;
         const select = document.querySelector('.trd-settings [data-version]');
-        select.value = '0.6.0'; select.dispatchEvent(new Event('change', { bubbles: true }));`)
+        select.value = H.targetVersion; select.dispatchEvent(new Event('change', { bubbles: true }));`)
     await ev('document.querySelector(".trd-settings [data-install]").click()')
     check('confirmation is a modal with Cancel focused', !!await waitFor(`
         const d = H.packageModal(); return d?.open && d.matches(':modal') && !d.querySelector('[data-confirm]').hidden &&
@@ -98,23 +103,23 @@ await suite('smoke-updates', async t => {
     await ev(`H.simulatedDisk = H.initialVersion;
         RD.updates.env.diskVersion = () => H.simulatedDisk;
         RD.updates.env.install = async (name, version) => {
-            if (name !== 'tabby-rdp' || version !== '0.6.0') throw new Error('Unexpected package change');
+            if (name !== 'tabby-rdp' || version !== H.targetVersion) throw new Error('Unexpected package change');
             H.installCalls++; H.simulatedDisk = version;
         };
-        H.simulatedInstallation = RD.updates.install('0.6.0');`)
+        H.simulatedInstallation = RD.updates.install(H.targetVersion);`)
     await waitFor('return H.packageModal() && !H.packageModal().querySelector("[data-confirm]").hidden', 3)
     await ev('H.sameModal = H.packageModal(); H.sameModal.querySelector("[data-confirm]").click()')
     check('a compatible simulated installation produces a verified success in the same dialog', !!await waitFor(`
         const d = H.packageModal(); return d === H.sameModal && d.open &&
             d.querySelector('[data-result]').dataset.phase === 'success' &&
-            d.textContent.includes('tabby-rdp 0.6.0 is installed.') && d.textContent.includes('restart Tabby') &&
-            RD.updates.env.diskVersion() === '0.6.0' && RD.updates.pending === '0.6.0' &&
+            d.textContent.includes('tabby-rdp ' + H.targetVersion + ' is installed.') && d.textContent.includes('restart Tabby') &&
+            RD.updates.env.diskVersion() === H.targetVersion && RD.updates.pending === H.targetVersion &&
             !d.querySelector('[data-close]').hidden;
     `, 5))
     await capture('install-success')
-    check('running and simulated installed versions stay distinct until restart', await ev('return RD.updates.running === H.initialVersion && RD.updates.env.diskVersion() === "0.6.0"'))
+    check('running and simulated installed versions stay distinct until restart', await ev('return RD.updates.running === H.initialVersion && RD.updates.env.diskVersion() === H.targetVersion'))
     check('the target release floor is persisted before restart', await ev(`
-        return RD.updates.running === H.initialVersion && JSON.parse(localStorage.getItem('tabby-rdp.releases.v1')).rollbackFloor === '0.6.0';
+        return RD.updates.running === H.initialVersion && JSON.parse(localStorage.getItem('tabby-rdp.releases.v1')).rollbackFloor === H.targetVersion;
     `))
     check('the actual installed package stays unchanged', await ev('return H.originalReleaseEnv.diskVersion() === H.initialVersion'))
     await ev('H.packageModal().querySelector("[data-close]").click()')

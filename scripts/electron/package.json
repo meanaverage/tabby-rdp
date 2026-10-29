@@ -2,7 +2,7 @@
   "name": "tabby-rdp-electron-tests",
   "version": "1.0.0",
   "private": true,
-  "description": "The Electron shipped by the Tabby release used for compatibility tests",
+  "description": "Standalone patched Electron for additional compatibility tests; Tabby supplies its own runtime",
   "dependencies": {
     "electron": "43.8.1"
   }

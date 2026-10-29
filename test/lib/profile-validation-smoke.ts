@@ -51,6 +51,26 @@ export async function profileValidationSmoke (t: TestContext): Promise<void> {
         const saved = H.config.store.profiles.find(p => p.id === 'rdp:validation-smoke').options;
         return !document.querySelector('.modal') && saved.host === 'new.example' && saved.port === 3390 && saved.gateway === 'new-gateway.example:444';
     `, 5))
+    for (const key of ['glyphCache', 'relaxOrderChecks']) for (const [choice, expected] of [['on', true], ['off', false], ['', null]] as const) {
+        await ev(`H.inZone(() => [...document.querySelectorAll('.trd-settings [data-list=desktops] .trd-row')]
+            .find(r => r.textContent.includes('Validation smoke')).querySelector('button').click())`)
+        if (!await waitFor(`return !!document.querySelector('.modal rdp-profile-settings [name=${key}]')`, 5)) {
+            throw new Error(`${key} profile editor did not open`)
+        }
+        await ev(`
+            const field = document.querySelector('.modal rdp-profile-settings [name=${key}]');
+            field.value = ${JSON.stringify(choice)};
+            field.dispatchEvent(new Event('change', { bubbles: true }));
+            H.inZone(() => document.querySelector('.modal .modal-footer .btn-primary').click());
+        `)
+        check(`${key} ${choice || 'follow Settings'} survives the host Save button`, !!await waitFor(`
+            const saved = H.config.store.profiles.find(p => p.id === 'rdp:validation-smoke').options;
+            return !document.querySelector('.modal') &&
+                ${expected === null
+                    ? `!Object.prototype.hasOwnProperty.call(saved, '${key}')`
+                    : `saved.${key} === ${expected}`};
+        `, 5))
+    }
     for (const scenario of [
         { label: 'empty type', mode: 'enabled', options: {}, globalPort: 3389, expectedPort: 3389, ownPort: false },
         { label: 'empty group', mode: 'group', options: {}, globalPort: 3389, expectedPort: 3389, ownPort: false },

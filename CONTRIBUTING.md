@@ -17,28 +17,42 @@ Issues and pull requests are welcome. For anything larger than a fix, please ope
 
 ## How changes land
 
-Everything goes through a pull request against `main`, including the maintainers' own work: push a branch (or fork),
-open a pull request, and CI builds and packages the plugin, checks `vendor/` against the list its build wrote and the
+Everything goes through a pull request, including the maintainers' own work. During preview development, branch
+from the active version branch named in [AGENTS.md](AGENTS.md) and target follow-up PRs there. `main` holds stable
+releases only, so that a checkout of it is always a released, stable version: previews are tagged on their version
+branch, and a version branch goes into `main` through a release-integration PR only for a stable release, after
+maintainer approval. Push a branch (or fork), open a pull
+request, and CI builds and packages the plugin, checks `vendor/` against the list its build wrote and the
 package against the commit, runs trd-pty's tests, applies the IronRDP patch series and runs its web tests. When the
 series, the IronRDP build or `vendor/` change, CI also rebuilds `vendor/` and compares it byte for byte, and runs the
 patched crates' Rust tests ([ironrdp/README.md](ironrdp/README.md#reproducing-vendor)); those jobs don't run for every
 pull request, so they can't be required checks, but a release runs them whatever changed and is made only if they pass
 (below). The end-to-end suites need test machines, so they aren't in CI; say in the pull request which ones you ran.
-`main` only changes by merging a pull request that CI passed. Releases are tags on `main` (below).
+`main` only changes by merging a pull request that CI passed. A preview release is a tag on its version branch, a
+stable release a tag on `main` (below).
 
-Prepare an isolated test package from the PR before release. Keep the PR as a draft while analysis and the
-maintainer's hands-on testing remain; merge only after approval and passing checks. A version such as
-`0.6.0-rc.1` can be prepared on the PR without creating a release. Do not tag or publish until the maintainer
-explicitly approves the release after testing. [AGENTS.md](AGENTS.md) records this procedure for coding agents.
+Prepare an isolated test package from the PR before release. A version such as `0.6.0-rc.1` can be prepared without
+creating a release. Do not tag or publish until the maintainer explicitly approves the release after testing. A
+stable version's release-integration PR stays a draft while analysis and the maintainer's hands-on testing remain,
+and merges into `main` only after approval and passing checks. [AGENTS.md](AGENTS.md) records this procedure for
+coding agents. After a preview is published, start the next preview branch from its tag and advance the package
+version before making further changes, including documentation-only changes. Published tags and packages remain
+immutable.
 
 The pull request template has a short checklist, and the issue forms ask for what helps most with a connection
 problem: versions, what kind of desktop, and the connection log (Settings › Remote Desktop › Desktops › Open desktops › Copy log).
+
+Write public descriptions for reviewers and users who have not seen the development conversation. Explain the
+problem, resulting behavior, relevant limitations and validation. Keep personal test setup, progress reports,
+approval history and agent handoffs in the development conversation. Public installation instructions must work for
+any reader. Read back saved GitHub descriptions and release notes before considering a copy update complete.
 
 ## Working on the plugin
 
 ```sh
 npm install
 npm run build          # or: npm run watch
+npm run build:helper   # this computer's Go network helper for linked testing
 scripts/sandbox.sh     # a separate Tabby with this checkout linked in (macOS); restart it to load a new build
 ```
 
@@ -50,18 +64,24 @@ The suites run against real machines; set up a Linux test host as described in [
 then `npm test` ([test/README.md](test/README.md)). Please run the suites your change touches, and add checks for new
 behavior. `npm test -- --packed` checks the plugin as npm would install it. The suites and their harness are
 TypeScript; `npm run typecheck` checks the plugin and them (CI runs the build and `npm run typecheck:test`).
-`npm run test:unit` runs the unit tests, which need no test machine. Three of them run the plugin's proxy in Electron,
-whose TLS library is the one Tabby has (the fallback for Windows' own certificate, why the certificate question says a
-certificate isn't valid, and ending a direct connection with TLS over its socket), when `TRD_ELECTRON` names an
+`npm run test:unit` and `npm run test:helper` need no test machine. The proxy tests verify TLS 1.2 ECDHE with a certificate
+like Windows' default one. The Electron proxy test checks that Tabby's runtime starts the helper and carries direct,
+SSH and gateway-like streams when `TRD_ELECTRON` names an
 Electron binary that may run as Node (an app's with that fuse on, such as Visual Studio Code's `Contents/MacOS/Code`,
 or the `electron` npm package's: `node -p "require('electron')"` in a folder where it is installed); without it, they
 are skipped. CI runs them on Linux in the Electron of the Tabby release the plugin is qualified on.
 
-The compatibility job uses `scripts/electron/package.json` and its own committed lockfile. Upgrade Electron there
+The compatibility job uses a standalone patched Electron in `scripts/electron/package.json` and its own committed
+lockfile, in addition to native smoke checks using Tabby's bundled runtime. This QA dependency does not update
+Tabby or become a plugin dependency. Upgrade Electron there
 with `npm install --package-lock-only --ignore-scripts --prefix scripts/electron electron@<exact-version> --save-exact`,
 review all dependency and integrity changes, and run the proxy tests with that binary. CI installs this tree using
 `npm ci --ignore-scripts`, then explicitly runs only Electron's locked binary installer, which checks the downloaded
 archive against Electron's release checksums. The project does not install Electron as a plugin dependency.
+
+`npm test -- helper` starts the helper in Tabby and tests its relay and crash recovery without a remote machine.
+For a packed test, build every target first with `npm run build:helpers`, then run
+`npm test -- --packed --hidden helper`.
 
 For a Tabby host upgrade, run `npm run build` and then `npm run test:smoke -- --tabby <binary> --expect-xterm <major>`.
 This checks a locally packed plugin in an isolated host profile, with dummy credential storage. Add `--require-rdp`
@@ -69,8 +89,8 @@ to require the live desktop checks. See [the host smoke instructions](test/READM
 coverage and the release/nightly test matrix.
 
 For release controls, run `npm test -- --packed --hidden --tabby <binary> smoke-updates`.
-It exercises cancellation, progress and failures, then installs a real published package in the runner's disposable
-profile and verifies its version. See [test/README.md](test/README.md#package-change-smoke-tests).
+It exercises cancellation, progress, failures and verified success using a simulated compatible release and disk
+result, retaining the installed test package. See [test/README.md](test/README.md#package-change-smoke-tests).
 
 ## Host compatibility
 
@@ -92,8 +112,8 @@ them; see [ironrdp/README.md](ironrdp/README.md). Fixes that belong upstream sho
 
 ## Releasing
 
-**When.** Changes accrue on `main` under an **Unreleased** heading in CHANGELOG.md (the workflow also creates the
-GitHub release from that section once it is titled with the version). A release is cut when there is enough there to
+**When.** Changes accrue on the active version branch under its version's heading in CHANGELOG.md, marked unreleased
+until then (the workflow also creates the GitHub release from that section once it is titled with the version). A release is cut when there is enough there to
 be worth a user's update — a feature set, or a batch of fixes — not per change. Patch releases between those are for
 security fixes and for bugs that make the plugin unusable; everything else waits. Features gather under the next
 minor version (see the milestones).
@@ -105,7 +125,8 @@ else the lock would install at run time. The committed `package-lock.json` locks
 for `npm ci`; npm never publishes it. Build with Node 22.12 or newer on the Node 22 line (CI uses Node 22). Angular 21.2.25 is a development dependency used for type checking;
 Tabby supplies Angular at runtime. The plugin uses TypeScript compilation, not Angular template compilation.
 
-Create distributable packages with `npm run pack:release -- --pack-destination <directory>`, not a direct `npm pack`.
+Build every network helper with `npm run build:helpers`, then create distributable packages with
+`npm run pack:release -- --pack-destination <directory>`, not a direct `npm pack`.
 The packer stages files without changing the checkout, removes development dependencies and every script but `test`
 from the published manifest (the test script says how the tests run, from this repository; npm never runs it on
 install, and scanners read it as the package having tests), and publishes no shrinkwrap (0.5.5's packages carried a runtime-only one; check-vendor still checks
@@ -113,6 +134,20 @@ those against it). Playwright and its browser installer helpers belong to QA, no
 plugin installations. CI audits the complete development tree too; excluding tools from publication does not replace
 keeping those tools patched. Upgrade dependencies through
 a reviewed change, run `npm ci --ignore-scripts`, build, and check the packed package before releasing.
+
+**Native helpers.** The plugin's package includes the Go network helper for macOS, Windows and Linux on supported
+architectures. `scripts/build-helper.mjs --all` uses the pinned Go toolchain and records every binary in
+`bin/SHA256SUMS`. The release workflow builds them on Linux and independently on macOS; the package check compares
+their lists byte for byte. Before approving an npm stage, rebuild the helpers from the release tag and compare its
+`bin/SHA256SUMS` to the staged package. The FreeRDP helper is published in a package per
+platform, `@tabby-rdp/freerdp-<platform>` (`linux-x64`, say), made from the committed `native/bin/<platform>` for each
+platform in `tabbyRdp.freerdpPlatforms`. The published `package.json` names each one as an optional dependency at the
+plugin's own version, so npm installs only the one for the computer, along with the plugin. The committed `package.json`
+names none, so the lock never has to resolve packages that are published with the release (package format 5,
+`scripts/package-metadata.mjs`). `pack:release` makes all of them: the plugin's package first, then one per platform. To
+try an unreleased build, install the plugin's package together with the one for the computer, in Tabby's plugin folder:
+`npm install ./tabby-rdp-<version>.tgz ./tabby-rdp-freerdp-<platform>-<version>.tgz`. On its own, the plugin's package
+installs without the helper, since npm finds no such version on the registry; FreeRDP then reports the helper missing.
 
 **Version metadata.** Keep `package.json` and the root entries in `package-lock.json` on the same version. The
 `tabbyRdp.minimumTabbyVersion` and `tabbyRdp.rollbackFloor` fields let release controls check compatibility and data
@@ -134,7 +169,10 @@ own, which reports the package's SHA-256; the job that stages it takes the packa
 can replace an artifact, the IronRDP jobs with their many builds and tests included), and checks it against the tagged
 commit: `vendor/` as the commit's `vendor/SHA256SUMS` lists it, the two runtime metadata files as deterministically
 derived from the committed sources, every other file but `dist/` as committed, and nothing more. `dist/` is as the
-package job built it: nothing in the workflow checks it against another build.
+package job built it: nothing in the workflow checks it against another build. The FreeRDP packages go the same way,
+each taken by its hash and checked against the tag (`native/bin/<platform>` as committed, the README and license, and
+`package.json` as derived from the committed one). They are staged before the plugin, and a failure leaves the plugin
+unstaged. Approve them before the plugin: until they are live, an installation of the plugin goes without its helper.
 
 That check runs in the job that publishes, which can't vouch for itself (its Node.js and npm are whatever their download
 served for 26.8.2), and a package's own `vendor/SHA256SUMS` can't vouch for the package. So before approving, check the
@@ -144,13 +182,18 @@ against a build of your own:
 ```sh
 npm stage download <stage-id>     # saves tabby-rdp-<version>-<stage-id>.tgz
 git worktree add /tmp/tabby-rdp-v<version> v<version>     # the tag, built here: tabby-rdp-<version>.tgz
-(cd /tmp/tabby-rdp-v<version> && npm ci --ignore-scripts && npm run build && npm run pack:release)
+(cd /tmp/tabby-rdp-v<version> && npm ci --ignore-scripts && npm run build && npm run build:helpers && npm run pack:release)
 node scripts/check-vendor.mjs package tabby-rdp-<version>-<stage-id>.tgz --same-as /tmp/tabby-rdp-v<version>/tabby-rdp-<version>.tgz
 ```
 
+Check each staged FreeRDP package the same way, against the one your build of the tag made
+(`/tmp/tabby-rdp-v<version>/tabby-rdp-freerdp-<platform>-<version>.tgz`). Nothing in those is built, so the check
+against the tag alone covers every file; `--same-as` adds nothing but costs nothing either.
+
 The workflow creates a GitHub draft; preview versions also carry the prerelease flag and cannot become latest.
-After npm approval, verify the published version and its dist-tag, replace the draft's pending-approval paragraph
-with installation instructions, and publish the draft. Mark only a stable release as GitHub's latest release.
+After npm approval, verify the published version and its dist-tag, remove the draft's unpublished notice, check
+the installation instructions and release notes for their public audience, and publish the draft. Mark only a
+stable release as GitHub's latest release.
 
 It finds the tag by the package's version and reads the list and the files from git, never from the package; any file
 the tag doesn't have, or has otherwise (apart from the declared runtime metadata projection), or a `vendor/` file
@@ -165,6 +208,20 @@ the package on npmjs.com: the package's **Settings › Trusted publishing**, cho
 owner/user `meanaverage`, repository `tabby-rdp`, workflow filename `publish.yml` (no environment). Leave "publish
 directly" unchecked: the workflow only stages. After a first release that way, **Settings › Publishing access** can be
 set to require two-factor authentication and disallow tokens.
+
+Trusted publishing can only be set up for a package that exists, so a new FreeRDP package (a new platform, or all of
+them the first time) has its first version published by hand, before the tag is pushed. The packages belong to the npm
+organization `tabby-rdp`, which a maintainer creates once (npmjs.com, **Add Organization**, free for public packages).
+From your build of the release commit, check each new package against the commit, then publish it with two-factor
+authentication; its `package.json` makes it public. Then set up its trusted publishing as above:
+
+```sh
+node scripts/check-vendor.mjs package tabby-rdp-freerdp-<platform>-<version>.tgz HEAD
+npm publish tabby-rdp-freerdp-<platform>-<version>.tgz --tag beta    # latest for a stable version
+```
+
+A version published by hand has no provenance. When the workflow finds a FreeRDP package's version already on npm, it
+downloads it and checks it against the tag instead of staging it; if that check fails, nothing is staged.
 
 ## Actions
 
@@ -190,6 +247,14 @@ Node.js whose npm is new enough (its changelog says which npm it has). An exact 
 other bytes served under the same one: the check of a staged package before approving it (above) is what doesn't
 depend on them. Checkouts don't keep the job's token in git's configuration, and only the publish job can get the
 token npm trusts; it runs none of the dependencies' code.
+
+The Dependabot config also defines npm updates for the plugin. The Electron compatibility test's separate dependency
+tree stays pinned to an explicitly reviewed version. Validate changes with its proxy tests and the native Tabby smoke
+checks; a standalone Electron result does not qualify a different Tabby host. GitHub reads
+this config from the default branch; once it is there, version-update PRs target the active preview branch. Advance
+`target-branch` when that branch changes. GitHub always sends security-update PRs to the default branch. A security
+fix found on `main` must be carried through the active preview and the release process above rather than merged
+directly into stable `main` between releases.
 
 ## Style
 

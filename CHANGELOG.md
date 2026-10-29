@@ -1,5 +1,96 @@
 # Changelog
 
+## 0.6.1 (unreleased)
+
+**Changed**
+- Start the next development version from stable 0.6.0.
+
+## 0.6.0
+
+**Added**
+- Choose IronRDP or the experimental FreeRDP client globally or for an individual RDP profile or configured desktop. IronRDP remains the default. FreeRDP supports display and input; clipboard, audio, shared folders, Hyper-V consoles and H.264 decoding remain unavailable in that client.
+- Automatically hide the window's title/tab header for a single connected desktop, with optional minimum window dimensions. Never and Always modes are also available. Hover reveals the header without resizing the desktop.
+- Default-off FreeRDP compatibility settings for glyph caching and relaxed drawing-order checks, with independent per-connection overrides. Glyph caching may help missing text on older servers or PAM login screens but can cause display artifacts. Individual PAM proxies remain unverified.
+- Optional PDU traces alongside diagnostic logs, with a viewer for connection, resize and graphics timing. Traces record protocol structure and sizes, omitting credentials, keystrokes, clipboard contents and bitmap data.
+
+**Fixed**
+- Windows' default self-signed RDP certificates connect through IronRDP with forward-secret TLS 1.2 and ECDHE, while retaining certificate authority/fingerprint checks before sign-in ([#102](https://github.com/meanaverage/tabby-rdp/issues/102)). RSA key exchange is no longer offered; servers requiring it cannot connect. Logs show the negotiated TLS version and cipher. RD Gateway HTTPS may use TLS 1.3.
+- Preserve the bitmap cache and Progressive tile state across Windows desktop resizes, preventing stale picture fragments, black bars and taskbar corruption ([#115](https://github.com/meanaverage/tabby-rdp/issues/115)).
+- Tab-switch shortcuts no longer send their digit to the previously active remote desktop. macOS file pastes work when Electron omits native filesystem path resolution.
+- Cancelling RD Gateway setup waits for its transport to close. FreeRDP also handles Unicode shortcuts, international keys, mouse-button chords, display-control resize and bounded input queues; it requires CredSSP version 5 or newer before authentication.
+- Header auto-hide settles after resize reconnects, preserves native menu visibility and keeps revealed controls usable. Remote Desktop settings use Tabby's native toggle controls.
+
+**Changed**
+- Group settings by connection, display, keyboard, sound, sharing, SSH integration, compatibility and diagnostics, with everyday controls first.
+- Run IronRDP connections through the bundled Go network helper on supported macOS, Windows and Linux architectures. Each desktop owns its helper and closes it when the connection ends.
+- Install FreeRDP through optional platform-specific helper packages for macOS ARM64, Linux ARM64/x64 and Windows ARM64/x64. Intel Macs continue to use IronRDP. A synchronized global FreeRDP default falls back to IronRDP when the native helper is unavailable; an explicit per-connection choice reports the missing helper.
+- Update the locked WinRM and QA download dependencies, and add scheduled dependency monitoring. These tools are excluded from plugin installations.
+
+Requires Tabby 1.0.236 or later. Desktop qualification covers macOS, Linux and Windows ARM64 clients against Windows 11, Windows Server 2022/2025, GNOME and xrdp, plus the documented experimental KRDP setup. Additional Windows x64 direct and gateway checks passed. See the [compatibility guide](docs/compatibility.md) for client and server limitations.
+
+## 0.6.0-rc.5 (not published; included in 0.6.0)
+
+**Added**
+- Default-off experimental glyph caching for FreeRDP, with independent overrides in RDP profiles and configured desktops. It can help older RDP servers or PAM login screens with missing text; support for individual proxies still needs validation.
+
+**Fixed**
+- Cancelling RD Gateway setup closes its transport before returning, including when TLS shutdown and setup failure overlap.
+- Pasting files copied on macOS works when Electron's filesystem wrapper omits native path resolution. Links inside a copied folder remain restricted to that folder.
+- A Tabby shortcut that switches tabs no longer sends its key to the desktop being left while that desktop still has DOM focus.
+- Windows' default self-signed RDP certificate now connects with forward-secret TLS in IronRDP ([#102](https://github.com/meanaverage/tabby-rdp/issues/102)). The RDP connection runs in the plugin's Go network helper, which accepts that certificate's key usage while still checking its fingerprint or authority before sign-in. RDP uses TLS 1.2 with ECDHE; RD Gateway HTTPS may use TLS 1.3. RSA key exchange is no longer offered, so a server that only offers it cannot connect. The negotiated version and cipher are shown in the connection log.
+
+**Changed**
+- Group Remote Desktop settings by connection, display, keyboard, sharing, SSH integration, compatibility and diagnostics. FreeRDP compatibility controls follow the everyday settings.
+- The plugin package includes the network helper for supported macOS, Windows and Linux architectures. Tabby starts one per open IronRDP desktop and stops it when the desktop closes. FreeRDP remains an optional, experimental client with its own helper package.
+
+## 0.6.0-rc.4
+
+**Added**
+- A default-off **Relax drawing order checks** option for FreeRDP, with overrides in RDP profiles and configured
+  desktops. It accepts drawing orders a server or PAM proxy did not announce, which may help diagnose black screens.
+  The option applies on reconnect and does not change IronRDP.
+
+## 0.6.0-rc.3
+
+**Added**
+- A PDU trace for diagnosing picture problems (issue #115): while the diagnostic log is on, each desktop also writes
+  `<log name>.otlp.json`, an OpenTelemetry trace of every RDP PDU that passed the plugin's proxy (X.224, MCS, share
+  control and data, fast-path updates, the static channels, and inside drdynvc the display control and graphics
+  pipeline commands, ZGFX-decompressed), with what this side did with them (H.264 access units handed to the browser's
+  decoder and their latency, the canvas resized and drawn, resize requests), grouped into spans: the connection, each
+  activation, each resize until a frame at the new size is acknowledged, each graphics frame until its acknowledgement,
+  each H.264 access unit. Structure and sizes only: no credentials, keystrokes, clipboard or bitmap data. A D3 viewer
+  (`tools/pdu-trace/index.html`) lays the flow out in lanes and checks each resize; `tools/pdu-trace/from-log.mjs`
+  converts an older debug log. New suites: `test/unit/pdu-trace.ts`, `test/unit/zgfx.ts`, `npm test -- pdu-trace`.
+- The same resizes with the FreeRDP client, for comparison: `TRD_TEST_CLIENT=freerdp npm test -- pdu-trace` reads
+  the graphics commands from FreeRDP's own log (`tools/pdu-trace/from-freerdp-log.mjs`), which the helper now writes
+  when `WLOG_*` is set in Tabby's environment, and `TRD_FREERDP_PIPELINE=1` puts FreeRDP on the graphics pipeline
+  for Windows desktops too (it uses bitmaps there otherwise).
+- `npm test -- fps`: frame pacing under motion (testufo.com in Edge on a Windows desktop): the server's frame rate,
+  the client's, and with IronRDP where each frame's time goes (decoder, canvas, acknowledgement) from the trace.
+
+**Fixed**
+- Tearing after a live resize with IronRDP on Windows (issue #115): stale pieces of the old picture, black bars at the
+  old edge and a garbled taskbar. The trace shows Windows repainting a resized desktop from the bitmap cache, which
+  IronRDP cleared on `ResetGraphics` (IronRDP patch 58, upstream [#2011](https://github.com/Devolutions/IronRDP/pull/2011)),
+  and a tile column that its Progressive decoder never painted because the server had moved the tiles to a new codec
+  context (patch 59, upstream [#2117](https://github.com/Devolutions/IronRDP/pull/2117)). Six resizes in three runs
+  against Windows Server 2025 now settle without any of it; the `pdu-trace` suite checks the flow and the picture.
+
+## 0.6.0-rc.2
+
+**Changed**
+- Publish the FreeRDP helper in a package per platform (`@tabby-rdp/freerdp-<platform>-<arch>`), which npm installs
+  with the plugin for the computer it runs on. The plugin's own package no longer contains native code, and an
+  installation downloads one platform's helper rather than all five (about 2 MB for the plugin, 4–6 MB for the helper,
+  instead of 25 MB).
+- Build the settings page, the profile editor, the desktop form and the auto-hide header styles from shorter strings,
+  which package scanners such as Socket no longer report as possibly packed code. Nothing visible changes.
+- Clarify Preview-channel installation and client test coverage in the documentation.
+- Keep pull request descriptions and generated release notes focused on behavior, limitations and validation.
+- Keep `main` for stable releases: previews are tagged on their version branch, so a checkout of `main` is always a
+  released, stable version.
+
 ## 0.6.0-rc.1
 
 **Added**
