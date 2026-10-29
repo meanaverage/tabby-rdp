@@ -67,12 +67,13 @@
     "@playwright/test": "1.64.1",
     "@types/node": "^26.6.5",
     "@types/semver": "^7.8.0",
+    "@typescript/typescript6": "6.0.2",
     "rxjs": "7.8.2",
     "tabby-core": "1.0.231-nightly.0",
     "tabby-settings": "1.0.231-nightly.0",
     "tabby-terminal": "1.0.231-nightly.0",
     "tsx": "^4.23.15",
-    "typescript": "~5.9.3",
+    "typescript": "~7.0.2",
     "ws": "8.22.0"
   },
   "tabbyRdp": {

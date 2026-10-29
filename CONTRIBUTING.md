@@ -121,7 +121,8 @@ shrinkwrap, so `package.json` alone decides what a user's npm installs. Packing 
 an exact version, isn't what the lock installs, or has dependencies of its own (whose ranges would float), and anything
 else the lock would install at run time. The committed `package-lock.json` locks development and runtime dependencies
 for `npm ci`; npm never publishes it. Build with Node 22.22.3 or newer on the Node 22 line (CI uses Node 22). Angular 22.2.3 is a development dependency used for type checking;
-Tabby supplies Angular at runtime. The plugin uses TypeScript compilation, not Angular template compilation.
+Tabby supplies Angular at runtime. The plugin uses TypeScript compilation, not Angular template compilation. TypeScript 7 provides the build CLI;
+`@typescript/typescript6` provides the compiler API used by the IronRDP factory-generation tool. Both are development dependencies.
 
 Build every network helper with `npm run build:helpers`, then create distributable packages with
 `npm run pack:release -- --pack-destination <directory>`, not a direct `npm pack`.
