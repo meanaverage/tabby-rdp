@@ -4499,7 +4499,7 @@ export class RemoteDesktopService {
             const size = session.initialSize ?? remoteSizeFor(session.overlay.getBoundingClientRect(), settings)
             const { width, height } = size
 
-            // DOMAIN\user is split; user@domain and a PAM proxy's bracketed name go as typed.
+            // DOMAIN\user is split; user@domain, a PAM proxy's bracketed name and a name after a leading \ go as typed.
             const { username, domain } = signInParts(credentials.username, endpoint.domain ?? spec.domain ?? '')
             session.status(spec.id === OWN_DESKTOP ? `Connecting to ${target.label}…`
                 : target.direct ? `Connecting to ${spec.name}…` : `Connecting to ${spec.name} via ${target.label}…`)

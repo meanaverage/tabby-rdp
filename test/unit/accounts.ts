@@ -1,5 +1,6 @@
 // The user name and domain both clients sign in with (signInParts): DOMAIN\user is split, anything else goes as typed
-// with the desktop's domain, and a PAM proxy's bracketed name (#122) is not split at the backslash inside its brackets.
+// with the desktop's domain, a PAM proxy's bracketed name (#122) is not split at the backslash inside its brackets,
+// and a leading backslash sends the rest as typed with no domain.
 // Reads the built plugin: npm run build && npm run test:unit
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -20,9 +21,19 @@ test('a name with no domain of its own goes as typed, with the desktop\'s domain
     assert.deepEqual(signInParts('alice', 'CORP'), { username: 'alice', domain: 'CORP' })
     assert.deepEqual(signInParts('alice', ''), { username: 'alice', domain: '' })
     assert.deepEqual(signInParts('alice@corp.example', 'CORP'), { username: 'alice@corp.example', domain: 'CORP' })
-    // Nothing on one side of the backslash: not DOMAIN\user.
-    assert.deepEqual(signInParts('\\alice', ''), { username: '\\alice', domain: '' })
+    // Nothing after the backslash: not DOMAIN\user.
     assert.deepEqual(signInParts('CORP\\', ''), { username: 'CORP\\', domain: '' })
+})
+
+test('a leading backslash names no domain: the rest goes as typed, without the desktop\'s domain', () => {
+    assert.deepEqual(signInParts('\\alice', 'CORP'), { username: 'alice', domain: '' })
+    // A proxy's name with a backslash of its own outside brackets (WALLIX's DOMAIN\user@target:login).
+    assert.deepEqual(signInParts('\\CORP\\alice@target:login', 'CORP'), { username: 'CORP\\alice@target:login', domain: '' })
+    assert.deepEqual(signInParts('\\pam-user[CORP\\vault-account@target-vm]', ''),
+        { username: 'pam-user[CORP\\vault-account@target-vm]', domain: '' })
+    // Only the first backslash is taken off; a lone one names nobody, and goes as typed.
+    assert.deepEqual(signInParts('\\\\alice', ''), { username: '\\alice', domain: '' })
+    assert.deepEqual(signInParts('\\', 'CORP'), { username: '\\', domain: 'CORP' })
 })
 
 test('a PAM proxy\'s bracketed name goes whole, its backslash and all (#122)', () => {

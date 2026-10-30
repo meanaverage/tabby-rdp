@@ -58,9 +58,15 @@ export function signInName (account: Pick<SavedAccount, 'username' | 'domain'>):
  * The user name and domain a sign-in goes to the server with, for either client: DOMAIN\user split at its backslash,
  * and any other name as typed, with `domain` (the desktop's) beside it. A PAM proxy's name keeps its backslash inside
  * square brackets (senhasegura's `vault-user[DOMAIN\target-user@device]`) and is read whole by the proxy, which finds
- * its target there, so a name with a bracket before its backslash goes as typed too.
+ * its target there, so a name with a bracket before its backslash goes as typed too. A leading backslash names no
+ * domain at all (as other RDP clients read it): the rest goes as typed, without one, for a proxy whose name has a
+ * backslash of its own outside brackets (WALLIX's `DOMAIN\user@target:login`).
  */
 export function signInParts (username: string, domain: string): { username: string, domain: string } {
+    const bare = /^\\(.+)$/.exec(username)
+    if (bare) {
+        return { username: bare[1], domain: '' }
+    }
     const split = /^([^\\[\]]+)\\(.+)$/.exec(username)
     return split ? { username: split[2], domain: split[1] } : { username, domain }
 }
