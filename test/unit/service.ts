@@ -2255,6 +2255,16 @@ test('glyph caching is opt-in and independent of relaxed drawing order checks', 
     assert.equal(service({ relaxOrderChecks: true }).svc.settings().glyphCache, false)
 })
 
+test('bitmap caching is opt-in and independent of glyph caching and relaxed drawing order checks', () => {
+    assert.equal(service().svc.settings().bitmapCache, false)
+    assert.equal(service({ bitmapCache: 'true' }).svc.settings().bitmapCache, false)
+    const settings = service({ bitmapCache: true }).svc.settings()
+    assert.equal(settings.bitmapCache, true)
+    assert.equal(settings.glyphCache, false)
+    assert.equal(settings.relaxOrderChecks, false)
+    assert.equal(service({ glyphCache: true, relaxOrderChecks: true }).svc.settings().bitmapCache, false)
+})
+
 test('a global FreeRDP default preserves discovered Hyper-V consoles; explicit unsupported overrides fail before credentials', async () => {
     const { svc } = service({ client: 'freerdp' })
     const pane = {}, spec = hyperVSpec('test-vm', 'Test VM')

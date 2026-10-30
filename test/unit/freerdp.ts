@@ -112,16 +112,18 @@ test('IPC handles split headers/bodies, coalesced frames and rejects oversized f
     assert.throws(() => decoder.push(Buffer.from([70, 127, 255, 255, 255]), () => {}), /oversized/)
 })
 
-test('IPC start keeps glyph caching and relaxed checks independent, both off by default', () => {
+test('IPC start keeps glyph caching, bitmap caching and relaxed checks independent, all off by default', () => {
     const options = { host: 'pc', username: 'user', password: 'pass', domain: '', width: 800, height: 600, pipeline: false }
     const relay = { port: 1234, token: 'a'.repeat(64) }
     const strict = freeRDPStart(options, relay)
-    assert.deepEqual(strict.subarray(-28), numbers(1234, 800, 600, 0, 0, 0, 0))
+    assert.deepEqual(strict.subarray(-32), numbers(1234, 800, 600, 0, 0, 0, 0, 0))
     for (const glyphCache of [false, true]) {
-        for (const relaxOrderChecks of [false, true]) {
-            const start = freeRDPStart({ ...options, glyphCache, relaxOrderChecks }, relay)
-            assert.deepEqual(start.subarray(-28), numbers(1234, 800, 600, 0, 0, +relaxOrderChecks, +glyphCache))
-            assert.deepEqual(strict.subarray(0, -28), start.subarray(0, -28))
+        for (const bitmapCache of [false, true]) {
+            for (const relaxOrderChecks of [false, true]) {
+                const start = freeRDPStart({ ...options, glyphCache, bitmapCache, relaxOrderChecks }, relay)
+                assert.deepEqual(start.subarray(-32), numbers(1234, 800, 600, 0, 0, +relaxOrderChecks, +glyphCache, +bitmapCache))
+                assert.deepEqual(strict.subarray(0, -32), start.subarray(0, -32))
+            }
         }
     }
 })

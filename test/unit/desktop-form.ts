@@ -70,7 +70,7 @@ test('a desktop can select either client, retain it through edits, and return to
     assert.ok(!('client' in await submitted(free, field => { field('client').value = '' })))
 })
 
-for (const key of ['relaxOrderChecks', 'glyphCache']) test(`a desktop can override ${key} in either direction or follow Settings`, async () => {
+for (const key of ['relaxOrderChecks', 'glyphCache', 'bitmapCache']) test(`a desktop can override ${key} in either direction or follow Settings`, async () => {
     const enabled = await submitted(legacy, field => { field(key).value = 'on' })
     assert.equal(enabled[key], true)
     assert.equal(specOf(enabled)[key], true)
