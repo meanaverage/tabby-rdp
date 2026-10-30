@@ -2,6 +2,9 @@
 
 ## 0.6.1 (unreleased)
 
+**Fixed**
+- A PAM proxy's bracketed user name, such as senhasegura's `vault-user[DOMAIN\target-user@device]`, now reaches the proxy whole, with both clients ([#122](https://github.com/meanaverage/tabby-rdp/issues/122)). It was split at the backslash inside the brackets, so the proxy received a domain of `vault-user[DOMAIN` and a user name of `target-user@device]`, and couldn't find its target. `DOMAIN\user` is still split as before. Not yet verified against a senhasegura proxy.
+
 **Changed**
 - Update build and QA dependencies, including Angular and Node declarations, TypeScript 7 with its compiler-API compatibility package, Playwright, WebSocket test fixtures and standalone Electron checks. These development tools are excluded from plugin installations.
 

@@ -54,6 +54,17 @@ export function signInName (account: Pick<SavedAccount, 'username' | 'domain'>):
     return account.domain && !/[\\@]/.test(account.username) ? `${account.domain}\\${account.username}` : account.username
 }
 
+/**
+ * The user name and domain a sign-in goes to the server with, for either client: DOMAIN\user split at its backslash,
+ * and any other name as typed, with `domain` (the desktop's) beside it. A PAM proxy's name keeps its backslash inside
+ * square brackets (senhasegura's `vault-user[DOMAIN\target-user@device]`) and is read whole by the proxy, which finds
+ * its target there, so a name with a bracket before its backslash goes as typed too.
+ */
+export function signInParts (username: string, domain: string): { username: string, domain: string } {
+    const split = /^([^\\[\]]+)\\(.+)$/.exec(username)
+    return split ? { username: split[2], domain: split[1] } : { username, domain }
+}
+
 /** Where the keychain keeps an account's password (next to the desktops' own entries, which are session keys). */
 export function accountKey (id: string): string {
     return `account#${id}`

@@ -20,7 +20,7 @@ import { ConnectionStatus, STYLE as STATS_STYLE } from './connectionStatus'
 import { Microphone } from './microphone'
 import { SharedDrives, SharedFolder, sharedFolders } from './drives'
 import { askDesktop, formatAddress } from './desktopForm'
-import { accountKey, accountsOf, ASK_GATEWAY_ACCOUNT, newAccountId, SavedAccount, signInName } from './accounts'
+import { accountKey, accountsOf, ASK_GATEWAY_ACCOUNT, newAccountId, SavedAccount, signInName, signInParts } from './accounts'
 import { ACCOUNT_REMEMBER_UNAVAILABLE, AccountRevisions } from './accountRevisions'
 import { NewAccountInput, STYLE as ACCOUNT_FORM_STYLE } from './accountForm'
 import { FileTransfer, STYLE as FILES_STYLE, uniquePath } from './fileTransfer'
@@ -4348,7 +4348,7 @@ export class RemoteDesktopService {
         session.log.push(`FreeRDP drawing order checks: ${relaxOrderChecks ? 'relaxed' : 'strict'}`)
         session.log.push('FreeRDP preview: clipboard, audio, microphone and shared folders are unavailable')
         session.clipboard = 'off'
-        const [domain, username] = /^([^\\]+)\\(.+)$/.exec(endpoint.credentials.username)?.slice(1) ?? [endpoint.domain ?? spec.domain ?? '', endpoint.credentials.username]
+        const { username, domain } = signInParts(endpoint.credentials.username, endpoint.domain ?? spec.domain ?? '')
         const gateway = spec.gateway ? parseGateway(spec.gateway) : null
         session.status(`Connecting to ${spec.name} with FreeRDP…`)
         let connected = false
@@ -4499,8 +4499,8 @@ export class RemoteDesktopService {
             const size = session.initialSize ?? remoteSizeFor(session.overlay.getBoundingClientRect(), settings)
             const { width, height } = size
 
-            // DOMAIN\user or user@domain go to the server as typed; only the former needs splitting.
-            const [domain, username] = /^([^\\]+)\\(.+)$/.exec(credentials.username)?.slice(1) ?? [endpoint.domain ?? spec.domain ?? '', credentials.username]
+            // DOMAIN\user is split; user@domain and a PAM proxy's bracketed name go as typed.
+            const { username, domain } = signInParts(credentials.username, endpoint.domain ?? spec.domain ?? '')
             session.status(spec.id === OWN_DESKTOP ? `Connecting to ${target.label}…`
                 : target.direct ? `Connecting to ${spec.name}…` : `Connecting to ${spec.name} via ${target.label}…`)
             // The name the server is signed in to as: the SSH host's for its own desktop, and for its VMs' consoles.
