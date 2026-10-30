@@ -9,11 +9,11 @@
     "url": "https://github.com/openssl/openssl/releases/download/openssl-3.5.9/openssl-3.5.9.tar.gz",
     "sha256": "603f5602e2eef00d77fbd429d34dcd5822bb301757a1bc9cdb24c670f1eb859a"
   },
-  "version": "tabby-freerdp IPC 4; FreeRDP 3.32.2",
+  "version": "tabby-freerdp IPC 5; FreeRDP 3.32.2",
   "platform": "linux",
   "arch": "arm64",
   "buildSources": {
-    "native/main.c": "978949374c60fb8357dd6f4ecaa9f7db9c7c13160ad650e3116267f32950b4e5",
+    "native/main.c": "0ee1b524cc66abdcb2cd3a0d62d6bf5cd627ee6217793b3fd75d99a4c334f0ef",
     "native/options.cmake": "228ae20f83200a8a76a6a05bf73deb2b9aa94487b0ffca023bbb8fefd76cd1b8",
     "native/CMakeLists.txt": "659585c5dc95ef68bb755290be39fa1c517097728e784bb30ec74c616f6708aa",
     "scripts/build-freerdp.mjs": "bee69bc743102493457586fa49b5539fb02c9e1d7b52ef2b6306146a32a65118",
@@ -27,15 +27,15 @@
     },
     {
       "path": "libcrypto.so.3",
-      "sha256": "b3fbd30f15d5636df614533cdb7f590f221e1a2ca41b2708ccf75dc7033033d2"
+      "sha256": "d6508b81d57a3e2990500e45cfe7fdcd216f83c933c427d22c56605d0bac2499"
     },
     {
       "path": "libfreerdp-client3.so.3",
-      "sha256": "dd458d0a622a3edac67cc2b40d76a58526d55fada2f96322e91c11911e0ebe27"
+      "sha256": "d50efd1b521c74edd5d54a4db89978251fe74ebd7faef3cab9f1f9ce641d73f2"
     },
     {
       "path": "libfreerdp3.so.3",
-      "sha256": "03adb36aa79f127809e849fe461a54672682cc1a6baace815cfd9c42286b2d32"
+      "sha256": "693b613773a016e55bf0fbb4ef175d0ee6d37b47efde483d8591d8de397e890a"
     },
     {
       "path": "libssl.so.3",
@@ -43,7 +43,7 @@
     },
     {
       "path": "libwinpr3.so.3",
-      "sha256": "d257d1b983506982d58be6126226672395d7d6db5fb033862be6d8c091fdeac0"
+      "sha256": "d41e5c8bce18da90698f00542281ed335704b89d1a1c5fcbff923070a13938e0"
     },
     {
       "path": "licenses/FreeRDP-LICENSE",
@@ -67,7 +67,7 @@
     },
     {
       "path": "tabby-freerdp",
-      "sha256": "3ef5be68e749c020a485e7499e381c693ab85000dd4472583e58785072ddf53e"
+      "sha256": "8e9702365b66ea3635a438dac05a54644ab3a3f20b53586972fd67705914408a"
     }
   ]
 }
