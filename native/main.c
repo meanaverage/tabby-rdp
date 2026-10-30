@@ -379,8 +379,10 @@ int main(int argc, char** argv) {
     BOOLSET(AllowUnanouncedOrdersFromServer, relaxOrderChecks != 0);
     /* Glyph decoding is independent of accepting orders the client did not announce. */
     NUM(GlyphSupportLevel, glyphCache ? GLYPH_SUPPORT_FULL : GLYPH_SUPPORT_NONE);
-    /* Announces MemBlt/Mem3Blt with FreeRDP's default bitmap cache cells (xfreerdp's +bitmap-cache). */
-    BOOLSET(BitmapCacheEnabled, bitmapCache != 0);
+    /* Announces MemBlt/Mem3Blt with FreeRDP's default bitmap cache cells (xfreerdp's +bitmap-cache). Cache Bitmap V3
+     * goes with it: offered the bitmap codecs below and MemBlt without it, Windows 11 closed the connection as soon as
+     * the session started. */
+    BOOLSET(BitmapCacheEnabled, bitmapCache != 0); BOOLSET(BitmapCacheV3Enabled, bitmapCache != 0);
     BOOLSET(AutoReconnectionEnabled, FALSE); /* The parent owns retries and their fresh native processes. */
     BOOLSET(SupportDisplayControl, TRUE); BOOLSET(DynamicResolutionUpdate, TRUE);
     BOOLSET(SupportGraphicsPipeline, gfx != 0); BOOLSET(GfxH264, FALSE); BOOLSET(GfxAVC444, FALSE);
