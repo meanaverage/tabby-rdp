@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: meanaverage <18336095+meanaverage@users.noreply.github.com>
 Date: Sun, 27 Sep 2026 02:01:49 -0700
-Subject: [PATCH 08/17] feat(web): H.264 in the graphics pipeline, decoded by
+Subject: [PATCH] feat(web): H.264 in the graphics pipeline, decoded by
  WebCodecs
 
 The web client's graphics pipeline advertised CAPVERSION_8 only, so servers
@@ -50,11 +50,11 @@ session with an error: the application can reconnect without H.264.
 `h264Supported()` asks VideoDecoder.isConfigSupported first.
 ---
  crates/ironrdp-egfx/README.md                 |  11 +
- crates/ironrdp-egfx/src/client.rs             | 409 +++++++++++++-
+ crates/ironrdp-egfx/src/client.rs             | 406 ++++++++++++-
  crates/ironrdp-egfx/src/h264.rs               | 500 +++++++++++++++++
  crates/ironrdp-egfx/src/lib.rs                |   1 +
- crates/ironrdp-session/src/active_stage.rs    | 103 +++-
- .../tests/egfx/external_h264.rs               | 527 ++++++++++++++++++
+ crates/ironrdp-session/src/active_stage.rs    |  57 +-
+ .../tests/egfx/external_h264.rs               | 531 ++++++++++++++++++
  .../ironrdp-testsuite-core/tests/egfx/h264.rs | 158 ++++++
  .../ironrdp-testsuite-core/tests/egfx/mod.rs  |   2 +
  crates/ironrdp-web/src/h264.rs                |  97 ++++
@@ -63,7 +63,7 @@ session with an error: the application can reconnect without H.264.
  .../src/H264Decoder.test.ts                   | 314 +++++++++++
  .../src/H264Decoder.ts                        | 412 ++++++++++++++
  .../iron-remote-desktop-rdp/src/main.ts       |  18 +-
- 14 files changed, 2612 insertions(+), 45 deletions(-)
+ 14 files changed, 2589 insertions(+), 23 deletions(-)
  create mode 100644 crates/ironrdp-egfx/src/h264.rs
  create mode 100644 crates/ironrdp-testsuite-core/tests/egfx/external_h264.rs
  create mode 100644 crates/ironrdp-testsuite-core/tests/egfx/h264.rs
@@ -94,38 +94,27 @@ index 2145e61b..d99bbd7f 100644
  
  This crate contains optional integration support for OpenH264 through the
 diff --git a/crates/ironrdp-egfx/src/client.rs b/crates/ironrdp-egfx/src/client.rs
-index a9a471c6..3fad6c4d 100644
+index 4eede696..588d90e6 100644
 --- a/crates/ironrdp-egfx/src/client.rs
 +++ b/crates/ironrdp-egfx/src/client.rs
-@@ -53,7 +53,7 @@
- //! [3.3.5.2]: https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-rdpegfx/90aba3e3-d4a8-4af1-b1bb-a94e2313bbf0
- //! [3.3.5.12]: https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-rdpegfx/e3c80bff-3e4e-4e65-b7c2-c2cd6b1fb4f5
+@@ -59,7 +59,7 @@
+ //! [3.3.5.17]: https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-rdpegfx/df29d040-f74b-4002-92ed-f0903b8402c3
  
--use std::collections::BTreeMap;
-+use std::collections::{BTreeMap, VecDeque};
+ use std::collections::btree_map::Entry;
+-use std::collections::{BTreeMap, BTreeSet};
++use std::collections::{BTreeMap, BTreeSet, VecDeque};
  
  use ironrdp_core::{Decode as _, ReadCursor, impl_as_any};
  use ironrdp_dvc::{DvcClientProcessor, DvcMessage, DvcProcessor};
-@@ -68,12 +68,13 @@ use tracing::{debug, trace, warn};
- use crate::CHANNEL_NAME;
+@@ -81,6 +81,7 @@ use crate::cache::{
+ };
  use crate::compositor::{Compositor, OutputUpdate};
  use crate::decode::H264Decoder;
 +use crate::h264;
  use crate::pdu::{
--    Avc420BitmapStream, CacheImportReplyPdu, CacheToSurfacePdu, CapabilitiesAdvertisePdu, CapabilitiesV8Flags,
--    CapabilitiesV81Flags, CapabilitiesV107Flags, CapabilitySet, Codec1Type, DeleteEncodingContextPdu,
--    EvictCacheEntryPdu, FrameAcknowledgePdu, GfxPdu, MapSurfaceToScaledOutputPdu, MapSurfaceToScaledWindowPdu,
--    MapSurfaceToWindowPdu, PixelFormat, QueueDepth, RawCapabilitySet, SolidFillPdu, SurfaceToCachePdu,
--    SurfaceToSurfacePdu, WireToSurface2Pdu,
-+    Avc420BitmapStream, Avc444BitmapStream, CacheImportReplyPdu, CacheToSurfacePdu, CapabilitiesAdvertisePdu,
-+    CapabilitiesV8Flags, CapabilitiesV81Flags, CapabilitiesV107Flags, CapabilitySet, Codec1Type,
-+    DeleteEncodingContextPdu, Encoding, EvictCacheEntryPdu, FrameAcknowledgePdu, GfxPdu, MapSurfaceToScaledOutputPdu,
-+    MapSurfaceToScaledWindowPdu, MapSurfaceToWindowPdu, PixelFormat, QueueDepth, RawCapabilitySet, SolidFillPdu,
-+    SurfaceToCachePdu, SurfaceToSurfacePdu, WireToSurface2Pdu,
- };
- 
- /// Max capacity to keep for decompressed buffer when cleared.
-@@ -209,6 +210,47 @@ pub struct BitmapUpdate {
+     Avc420BitmapStream, Avc444BitmapStream, CacheImportOfferPdu, CacheImportReplyPdu, CacheToSurfacePdu,
+     CapabilitiesAdvertisePdu, CapabilitiesV8Flags, CapabilitiesV10Flags, CapabilitiesV81Flags, CapabilitiesV103Flags,
+@@ -238,6 +239,47 @@ pub struct BitmapUpdate {
      pub height: u16,
  }
  
@@ -173,11 +162,10 @@ index a9a471c6..3fad6c4d 100644
  // ============================================================================
  // Handler Trait
  // ============================================================================
-@@ -422,6 +464,21 @@ pub struct GraphicsPipelineClient {
-     frames_queued: u32,
-     total_frames_decoded: u32,
-     pending_output_reset: Option<(u16, u16)>,
-+
+@@ -482,6 +524,20 @@ pub struct GraphicsPipelineClient {
+     cache_import_attempted: bool,
+     /// Keys of the last `CacheImportOffer`, in offer order, until its reply arrives.
+     offered_cache_keys: Option<Vec<u64>>,
 +    /// AVC420 frames go to a decoder outside the processor ([`Self::with_external_h264`]).
 +    external_h264: bool,
 +    next_h264_id: u32,
@@ -195,10 +183,10 @@ index a9a471c6..3fad6c4d 100644
  }
  
  impl GraphicsPipelineClient {
-@@ -449,9 +506,65 @@ impl GraphicsPipelineClient {
-             frames_queued: 0,
-             total_frames_decoded: 0,
-             pending_output_reset: None,
+@@ -515,6 +571,13 @@ impl GraphicsPipelineClient {
+             persistent_cache: None,
+             cache_import_attempted: false,
+             offered_cache_keys: None,
 +            external_h264: false,
 +            next_h264_id: 0,
 +            h264_frames: Vec::new(),
@@ -207,6 +195,10 @@ index a9a471c6..3fad6c4d 100644
 +            queued_frame_ends: 0,
 +            received_surfaces: BTreeMap::new(),
          }
+     }
+ 
+@@ -532,6 +595,55 @@ impl GraphicsPipelineClient {
+         self
      }
  
 +    /// Decodes AVC420 outside the processor, for decoders that are asynchronous or live elsewhere (a browser's
@@ -261,7 +253,7 @@ index a9a471c6..3fad6c4d 100644
      // ========================================================================
      // State Queries
      // ========================================================================
-@@ -507,6 +620,217 @@ impl GraphicsPipelineClient {
+@@ -664,6 +776,217 @@ impl GraphicsPipelineClient {
          self.pending_output_reset.take()
      }
  
@@ -479,39 +471,10 @@ index a9a471c6..3fad6c4d 100644
      // ========================================================================
      // PDU Handlers
      // ========================================================================
-@@ -682,6 +1006,7 @@ impl GraphicsPipelineClient {
-         let cap = self.negotiated_caps.insert(cap);
- 
-         debug!(
-+            ?cap,
-             avc420 = self.codec_caps.avc420,
-             avc444 = self.codec_caps.avc444,
-             "EGFX capabilities confirmed"
-@@ -1126,8 +1451,9 @@ impl GraphicsPipelineClient {
-         // Per [3.3.5.12]: client MUST send FrameAcknowledge after EndFrame.
-         // We send the actual queue depth (not Unavailable / 0xFFFFFFFF as FreeRDP does);
-         // the real value gives the server backpressure information for frame pacing.
-+        // Frames still waiting behind an H.264 frame being decoded outside count as queued too.
-         let ack = GfxPdu::FrameAcknowledge(FrameAcknowledgePdu {
--            queue_depth: QueueDepth::from_u32(self.frames_queued),
-+            queue_depth: QueueDepth::from_u32(self.frames_queued.saturating_add(self.queued_frame_ends)),
-             frame_id,
-             total_frames_decoded: self.total_frames_decoded,
-         });
-@@ -1145,7 +1471,7 @@ impl DvcProcessor for GraphicsPipelineClient {
-     }
- 
-     fn start(&mut self, _channel_id: u32) -> PduResult<Vec<DvcMessage>> {
--        let caps = if self.h264_decoder.is_some() {
-+        let caps = if self.h264_decoder.is_some() || self.external_h264 {
-             self.handler.capabilities()
-         } else {
-             // No H.264 decoder: filter out capability sets that imply AVC support.
-@@ -1197,14 +1523,11 @@ impl DvcProcessor for GraphicsPipelineClient {
+@@ -685,13 +1008,11 @@ impl GraphicsPipelineClient {
              }
          }
  
--        // Process decoded PDUs
 -        let mut responses: Vec<DvcMessage> = Vec::new();
 +        // Process decoded PDUs, in order behind any H.264 frame still being decoded outside
          for pdu in pdus {
@@ -523,9 +486,31 @@ index a9a471c6..3fad6c4d 100644
 -        Ok(responses)
 +        self.process_queue()
      }
- }
  
-@@ -1214,6 +1537,64 @@ impl DvcClientProcessor for GraphicsPipelineClient {}
+     fn handle_pdu(&mut self, pdu: GfxPdu) -> PduResult<Vec<DvcMessage>> {
+@@ -1966,12 +2287,15 @@ impl DvcProcessor for GraphicsPipelineClient {
+         }
+ 
+         // Keep only the sets this client can honor: AVC420 needs a decoder, and AVC444
+-        // needs one returning the YUV planes the two views are combined from.
+-        let avc420 = self.h264_decoder.is_some();
+-        let avc444 = self
+-            .h264_decoder
+-            .as_ref()
+-            .is_some_and(|decoder| decoder.supports_yuv420());
++        // needs one returning the YUV planes the two views are combined from. An external
++        // decoder takes AVC444 as its YUV420 main view (see `hand_out_avc`), so it honors both:
++        // Windows only sends H.264 with a set from V10 on, which implies AVC444.
++        let avc420 = self.external_h264 || self.h264_decoder.is_some();
++        let avc444 = self.external_h264
++            || self
++                .h264_decoder
++                .as_ref()
++                .is_some_and(|decoder| decoder.supports_yuv420());
+         let mut caps: Vec<CapabilitySet> = self
+             .handler
+             .capabilities()
+@@ -2031,6 +2355,64 @@ fn bitmap_cache_limits(caps: &CodecCapabilities) -> (u16, usize) {
  // Frame Cropping
  // ============================================================================
  
@@ -1097,10 +1082,10 @@ index 00000000..b9e0b12e
 +    }
 +}
 diff --git a/crates/ironrdp-egfx/src/lib.rs b/crates/ironrdp-egfx/src/lib.rs
-index 284c2673..12243615 100644
+index 00ac4446..214cbb7c 100644
 --- a/crates/ironrdp-egfx/src/lib.rs
 +++ b/crates/ironrdp-egfx/src/lib.rs
-@@ -8,5 +8,6 @@ pub mod client;
+@@ -10,5 +10,6 @@ pub mod client;
  pub mod compositor;
  pub mod decode;
  pub mod encode;
@@ -1108,12 +1093,12 @@ index 284c2673..12243615 100644
  pub mod pdu;
  pub mod server;
 diff --git a/crates/ironrdp-session/src/active_stage.rs b/crates/ironrdp-session/src/active_stage.rs
-index f53e0aed..b80186a6 100644
+index 6853d8ec..929a719b 100644
 --- a/crates/ironrdp-session/src/active_stage.rs
 +++ b/crates/ironrdp-session/src/active_stage.rs
-@@ -4,8 +4,10 @@ use ironrdp_bulk::{BulkCompressor, CompressionType as BulkCompressionType};
- use ironrdp_core::{ReadCursor, WriteBuf};
+@@ -5,8 +5,10 @@ use ironrdp_core::{MonotonicInstant, ReadCursor, WriteBuf};
  use ironrdp_displaycontrol::client::DisplayControlClient;
+ use ironrdp_displaycontrol::pdu::{DisplayControlCapabilities, DisplayControlMonitorLayout};
  use ironrdp_dvc::pdu::SoftSyncTunnelType;
 -use ironrdp_dvc::{DrdynvcClient, DvcClientProcessor, DvcMessageBatch, DynamicChannelMut, DynamicChannelRef};
 -use ironrdp_egfx::client::GraphicsPipelineClient;
@@ -1121,10 +1106,10 @@ index f53e0aed..b80186a6 100644
 +    DrdynvcClient, DvcClientProcessor, DvcMessageBatch, DynamicChannelMut, DynamicChannelRef, encode_dvc_messages,
 +};
 +use ironrdp_egfx::client::{GraphicsPipelineClient, H264Frame};
+ use ironrdp_egfx::compositor::WindowUpdate;
  use ironrdp_graphics::pointer::DecodedPointer;
  use ironrdp_pdu::gcc::{ChannelName, Monitor};
- use ironrdp_pdu::geometry::{ExclusiveRectangle, InclusiveRectangle, Rectangle as _};
-@@ -24,7 +26,7 @@ use ironrdp_pdu::window::{
+@@ -27,7 +29,7 @@ use ironrdp_pdu::window::{
  };
  use ironrdp_pdu::{Action, mcs};
  use ironrdp_rdpei::RdpeiClient;
@@ -1133,77 +1118,9 @@ index f53e0aed..b80186a6 100644
  use tracing::{debug, warn};
  
  use crate::fast_path::UpdateKind;
-@@ -230,26 +232,11 @@ impl ActiveStage {
-                     }
-                 }
- 
--                // Drain the client-side EGFX compositor: composite each completed-frame
--                // output region into the image and surface it as a graphics update. EGFX
--                // data only ever arrives over a DVC, which is X224-carried, so this stays
--                // out of the Action::FastPath arm rather than running on every fast-path
--                // frame (the highest-frequency path in a session).
--                let (output_reset, graphics_updates) = self
--                    .get_dvc_mut::<GraphicsPipelineClient>()
--                    .map(|mut gfx| {
--                        let gfx = gfx.processor_mut();
--                        (gfx.take_output_reset(), gfx.drain_output())
--                    })
--                    .unwrap_or_default();
--                if let Some((width, height)) = output_reset {
--                    image.reset_preserving_pointer(width, height)?;
--                    self.graphics_output_needs_full_refresh = true;
--                }
--                let (region, damage_regions) =
--                    composite_graphics_updates(image, graphics_updates.into_iter().map(|u| (u.region, u.data)))?;
--                self.damage_regions.extend(damage_regions);
--                if let Some(region) = region {
-+                // Drain the client-side EGFX compositor. EGFX data only ever arrives over a
-+                // DVC, which is X224-carried, so this stays out of the Action::FastPath arm
-+                // rather than running on every fast-path frame (the highest-frequency path in
-+                // a session).
-+                if let Some(region) = self.drain_graphics_pipeline(image)? {
-                     stage_outputs.push(ActiveStageOutput::GraphicsUpdate(region));
-                 }
- 
-@@ -286,6 +273,33 @@ impl ActiveStage {
-             }
+@@ -356,6 +358,55 @@ impl ActiveStage {
          }
- 
-+        self.widen_to_full_refresh(image, &mut stage_outputs);
-+
-+        Ok(stage_outputs)
-+    }
-+
-+    /// Composites each completed-frame output region of the client-side EGFX compositor
-+    /// into the image; returns their union, to surface as a graphics update.
-+    fn drain_graphics_pipeline(&mut self, image: &mut DecodedImage) -> SessionResult<Option<InclusiveRectangle>> {
-+        let (output_reset, graphics_updates) = self
-+            .get_dvc_mut::<GraphicsPipelineClient>()
-+            .map(|mut gfx| {
-+                let gfx = gfx.processor_mut();
-+                (gfx.take_output_reset(), gfx.drain_output())
-+            })
-+            .unwrap_or_default();
-+        if let Some((width, height)) = output_reset {
-+            image.reset_preserving_pointer(width, height)?;
-+            self.graphics_output_needs_full_refresh = true;
-+        }
-+        let (region, damage_regions) =
-+            composite_graphics_updates(image, graphics_updates.into_iter().map(|u| (u.region, u.data)))?;
-+        self.damage_regions.extend(damage_regions);
-+        Ok(region)
-+    }
-+
-+    /// After a graphics-output reset, the first graphics update covers the whole image.
-+    fn widen_to_full_refresh(&mut self, image: &DecodedImage, stage_outputs: &mut [ActiveStageOutput]) {
-         if self.graphics_output_needs_full_refresh
-             && let Some(ActiveStageOutput::GraphicsUpdate(region)) = stage_outputs
-                 .iter_mut()
-@@ -301,7 +315,50 @@ impl ActiveStage {
-             self.damage_regions.push(region.clone());
-             self.graphics_output_needs_full_refresh = false;
-         }
-+    }
+     }
  
 +    /// Takes the AVC420 frames the graphics pipeline hands to an external decoder.
 +    ///
@@ -1243,19 +1160,26 @@ index f53e0aed..b80186a6 100644
 +                encode_dvc_messages(channel_id, messages, ChannelFlags::empty()).map_err(SessionError::encode)?;
 +            stage_outputs.push(ActiveStageOutput::ResponseFrame(self.encode_dvc_messages(messages)?));
 +        }
-+        if let Some(region) = self.drain_graphics_pipeline(image)? {
++        let (region, window_updates) = self.drain_graphics_pipeline(image)?;
++        if let Some(region) = region {
 +            stage_outputs.push(ActiveStageOutput::GraphicsUpdate(region));
 +        }
++        if !window_updates.is_empty() {
++            stage_outputs.push(ActiveStageOutput::WindowSurfaceUpdates(window_updates));
++        }
 +        self.widen_to_full_refresh(image, &mut stage_outputs);
-         Ok(stage_outputs)
-     }
- 
++        Ok(stage_outputs)
++    }
++
+     /// Replaces the fast-path processor wholesale.
+     ///
+     /// Prefer [`ActiveStage::reactivate`] for a Deactivation-Reactivation Sequence: it also
 diff --git a/crates/ironrdp-testsuite-core/tests/egfx/external_h264.rs b/crates/ironrdp-testsuite-core/tests/egfx/external_h264.rs
 new file mode 100644
-index 00000000..a957554d
+index 00000000..e6bda971
 --- /dev/null
 +++ b/crates/ironrdp-testsuite-core/tests/egfx/external_h264.rs
-@@ -0,0 +1,527 @@
+@@ -0,0 +1,531 @@
 +//! `GraphicsPipelineClient::with_external_h264`: AVC420 frames (and AVC444 main views) decoded outside the
 +//! processor, whose pixels are applied (and frames acknowledged) in the order the server sent them.
 +
@@ -1442,7 +1366,10 @@ index 00000000..a957554d
 +        panic!("expected CapabilitiesAdvertise");
 +    };
 +    let versions: Vec<CapabilityVersion> = caps.0.iter().map(|cap| cap.version).collect();
-+    assert_eq!(versions, [CapabilityVersion::V8_1, CapabilityVersion::V8]);
++    // Every set the handler offers, those implying AVC420 and AVC444 included: an external decoder honors both.
++    let offered: Vec<CapabilityVersion> = NoopHandler.capabilities().iter().map(|cap| cap.version()).collect();
++    assert_eq!(versions, offered);
++    assert!(versions.contains(&CapabilityVersion::V8_1));
 +}
 +
 +#[test]
@@ -1548,8 +1475,9 @@ index 00000000..a957554d
 +    let sent = client
 +        .complete_h264_frame(frames[0].id, Some(solid(1, rect(0, 0, 16, 8))))
 +        .expect("complete first");
-+    // Frame 1 is acknowledged while frame 2 still waits in the queue.
-+    assert_eq!(acks(&sent), [(1, 1), (2, 0)]);
++    // Frame 1 is acknowledged while frame 2 still waits in the queue, then frame 2. The client reports no queue
++    // depth (QueueDepth counts queued bytes, which it doesn't measure).
++    assert_eq!(acks(&sent), [(1, 0), (2, 0)]);
 +    let output = client.drain_output();
 +    assert_eq!(output.last().expect("output").data, solid(2, rect(0, 0, 16, 8)));
 +}
@@ -1663,8 +1591,8 @@ index 00000000..a957554d
 +            &client.complete_h264_frame(frame.id, Some(pixels)).expect("complete"),
 +        ));
 +    }
-+    // Each acknowledgement counts the frames still waiting behind it.
-+    assert_eq!(acknowledged, [(1, 2), (2, 1), (3, 0)]);
++    // Each frame is acknowledged in turn (with no queue depth: see above).
++    assert_eq!(acknowledged, [(1, 0), (2, 0), (3, 0)]);
 +    // The last picture shown is the second main view; the auxiliary views leave the surface alone.
 +    let output = client.drain_output();
 +    let last = output.last().expect("output");
@@ -1948,15 +1876,16 @@ index 00000000..2aeb8c8d
 +    assert!(matches!(with_low_latency_output(&stream), Cow::Borrowed(_)));
 +}
 diff --git a/crates/ironrdp-testsuite-core/tests/egfx/mod.rs b/crates/ironrdp-testsuite-core/tests/egfx/mod.rs
-index cadb9b8b..f91ffbf0 100644
+index 559c6c61..f0c84a3e 100644
 --- a/crates/ironrdp-testsuite-core/tests/egfx/mod.rs
 +++ b/crates/ironrdp-testsuite-core/tests/egfx/mod.rs
-@@ -4,5 +4,7 @@ mod client;
+@@ -6,6 +6,8 @@ mod codecs;
  #[cfg(feature = "openh264-bundled")]
  mod decode;
  mod decoded_frame;
 +mod external_h264;
 +mod h264;
+ mod persistent_cache;
  mod server;
  mod wire_to_surface_real_world;
 diff --git a/crates/ironrdp-web/src/h264.rs b/crates/ironrdp-web/src/h264.rs
@@ -2075,26 +2004,26 @@ index 8ac2b44b..0c4e56a1 100644
  mod input;
  mod network_client;
 diff --git a/crates/ironrdp-web/src/session.rs b/crates/ironrdp-web/src/session.rs
-index a96ae6e3..83f921c3 100644
+index 082750a7..b77e1061 100644
 --- a/crates/ironrdp-web/src/session.rs
 +++ b/crates/ironrdp-web/src/session.rs
-@@ -94,6 +94,7 @@ struct SessionBuilderInner {
+@@ -100,6 +100,7 @@ struct SessionBuilderInner {
      use_graphics_pipeline: bool,
      audio_playback_callback: Option<js_sys::Function>,
      audio_input_callback: Option<js_sys::Function>,
 +    h264_decoder: Option<JsValue>,
      enable_credssp: bool,
+     enable_standard_rdp_security: bool,
      enable_server_pointer: bool,
-     legacy_graphics: bool,
-@@ -142,6 +143,7 @@ impl Default for SessionBuilderInner {
+@@ -150,6 +151,7 @@ impl Default for SessionBuilderInner {
              use_graphics_pipeline: false,
              audio_playback_callback: None,
              audio_input_callback: None,
 +            h264_decoder: None,
              enable_credssp: true,
+             enable_standard_rdp_security: false,
              enable_server_pointer: true,
-             legacy_graphics: false,
-@@ -273,6 +275,10 @@ impl iron_remote_desktop::SessionBuilder for SessionBuilder {
+@@ -310,6 +312,10 @@ impl iron_remote_desktop::SessionBuilder for SessionBuilder {
                  // A function told when to capture (see audio_input::to_js); anything else turns the microphone off.
                  self.0.borrow_mut().audio_input_callback = audio_input.dyn_into::<js_sys::Function>().ok();
              };
@@ -2103,11 +2032,11 @@ index a96ae6e3..83f921c3 100644
 +                self.0.borrow_mut().h264_decoder = h264_decoder.is_object().then_some(h264_decoder);
 +            };
              |enable_credssp: bool| { self.0.borrow_mut().enable_credssp = enable_credssp };
-             |enable_server_pointer: bool| { self.0.borrow_mut().enable_server_pointer = enable_server_pointer };
-             |legacy_graphics: bool| { self.0.borrow_mut().legacy_graphics = legacy_graphics };
-@@ -446,8 +452,10 @@ impl iron_remote_desktop::SessionBuilder for SessionBuilder {
-         let enable_credssp = self.0.borrow().enable_credssp;
-         config.enable_credssp = enable_credssp;
+             |enable_standard_rdp_security: bool| {
+                 self.0.borrow_mut().enable_standard_rdp_security = enable_standard_rdp_security;
+@@ -496,8 +502,10 @@ impl iron_remote_desktop::SessionBuilder for SessionBuilder {
+         );
+ 
          // Graphics pipeline (EGFX): required by GNOME Remote Desktop. Off by default: without an H.264
 -        // decoder only CAPVERSION_8 is advertised, and Windows servers do better with the bitmap path.
 +        // decoder (the `h264_decoder` extension) only CAPVERSION_8 is advertised, and Windows servers do better
@@ -2117,7 +2046,7 @@ index a96ae6e3..83f921c3 100644
          config.support_dyn_vc_gfx_protocol = use_graphics_pipeline;
          // Audio playback (RDPSND) when a callback takes the audio.
          let audio_playback_callback = self.0.borrow().audio_playback_callback.clone();
-@@ -550,6 +558,7 @@ impl iron_remote_desktop::SessionBuilder for SessionBuilder {
+@@ -607,6 +615,7 @@ impl iron_remote_desktop::SessionBuilder for SessionBuilder {
              computer_name: client_name.clone(),
              use_display_control,
              use_graphics_pipeline,
@@ -2125,7 +2054,7 @@ index a96ae6e3..83f921c3 100644
              audio_backend: audio_playback_callback
                  .as_ref()
                  .map(|_| crate::audio::WasmAudioBackend::new(input_events_tx.clone())),
-@@ -583,6 +592,7 @@ impl iron_remote_desktop::SessionBuilder for SessionBuilder {
+@@ -640,6 +649,7 @@ impl iron_remote_desktop::SessionBuilder for SessionBuilder {
              audio_playback_callback,
              audio_input_callback,
              audio_input,
@@ -2133,7 +2062,7 @@ index a96ae6e3..83f921c3 100644
  
              input_events_rx: RefCell::new(Some(input_events_rx)),
              rdp_reader: RefCell::new(Some(rdp_reader)),
-@@ -608,6 +618,12 @@ pub(crate) enum RdpInputEvent {
+@@ -665,6 +675,12 @@ pub(crate) enum RdpInputEvent {
      AudioInput(crate::audio_input::AudioInputMessage),
      /// Microphone backend → event loop: captured audio for the server.
      AudioInputUplink(crate::audio_input::AudioInputUplink),
@@ -2146,7 +2075,7 @@ index a96ae6e3..83f921c3 100644
      FastPath(FastPathInputEvents),
      Resize {
          width: u32,
-@@ -642,6 +658,7 @@ pub(crate) struct Session {
+@@ -699,6 +715,7 @@ pub(crate) struct Session {
      audio_input_callback: Option<js_sys::Function>,
      /// Takes the PCM that JS captures (`audio_input_data`), when the microphone is on.
      audio_input: Option<crate::audio_input::AudioInputSink>,
@@ -2154,7 +2083,7 @@ index a96ae6e3..83f921c3 100644
  
      // Consumed when `run` is called
      input_events_rx: RefCell<Option<mpsc::UnboundedReceiver<RdpInputEvent>>>,
-@@ -769,6 +786,13 @@ impl iron_remote_desktop::Session for Session {
+@@ -826,6 +843,13 @@ impl iron_remote_desktop::Session for Session {
          }
          .build();
  
@@ -2168,7 +2097,7 @@ index a96ae6e3..83f921c3 100644
          // Timer interval for driving clipboard lock timeouts (5 second interval)
          let mut cleanup_interval = IntervalStream::new(5_000).fuse();
  
-@@ -971,6 +995,13 @@ impl iron_remote_desktop::Session for Session {
+@@ -1028,6 +1052,13 @@ impl iron_remote_desktop::Session for Session {
                          RdpInputEvent::AudioInputUplink(uplink) => {
                              vec![ActiveStageOutput::ResponseFrame(active_stage.encode_dvc_messages(uplink.into_messages())?)]
                          }
@@ -2182,7 +2111,7 @@ index a96ae6e3..83f921c3 100644
                          RdpInputEvent::TerminateSession => {
                              active_stage.graceful_shutdown()
                                  .context("graceful shutdown")?
-@@ -1000,6 +1031,14 @@ impl iron_remote_desktop::Session for Session {
+@@ -1057,6 +1088,14 @@ impl iron_remote_desktop::Session for Session {
                  }
              };
  
@@ -2197,7 +2126,7 @@ index a96ae6e3..83f921c3 100644
              for out in outputs {
                  match out {
                      ActiveStageOutput::ResponseFrame(frame) => {
-@@ -1693,6 +1732,7 @@ struct ConnectParams {
+@@ -1765,6 +1804,7 @@ struct ConnectParams {
      computer_name: String,
      use_display_control: bool,
      use_graphics_pipeline: bool,
@@ -2205,7 +2134,7 @@ index a96ae6e3..83f921c3 100644
      audio_backend: Option<crate::audio::WasmAudioBackend>,
      audio_input_listener: Option<crate::audio_input::AudioInputListener>,
  }
-@@ -1746,6 +1786,7 @@ async fn connect(
+@@ -1818,6 +1858,7 @@ async fn connect(
          computer_name,
          use_display_control,
          use_graphics_pipeline,
@@ -2213,7 +2142,7 @@ index a96ae6e3..83f921c3 100644
          audio_backend,
          audio_input_listener,
      }: ConnectParams,
-@@ -1792,11 +1833,13 @@ async fn connect(
+@@ -1864,11 +1905,13 @@ async fn connect(
  
      let mut drdynvc = DrdynvcClient::new();
      if use_graphics_pipeline {
@@ -2232,7 +2161,7 @@ index a96ae6e3..83f921c3 100644
      }
      if use_display_control {
          drdynvc = drdynvc.with_dynamic_channel(DisplayControlClient::new(|_| Ok(Vec::new())));
-@@ -2474,5 +2517,52 @@ mod tests {
+@@ -2762,5 +2805,52 @@ mod tests {
      }
  }
  
@@ -3025,7 +2954,7 @@ index 00000000..c95ac01a
 +    return String(error);
 +}
 diff --git a/web-client/iron-remote-desktop-rdp/src/main.ts b/web-client/iron-remote-desktop-rdp/src/main.ts
-index bf0e2cdb..87cf1063 100644
+index 9e18accb..97c642c7 100644
 --- a/web-client/iron-remote-desktop-rdp/src/main.ts
 +++ b/web-client/iron-remote-desktop-rdp/src/main.ts
 @@ -8,6 +8,7 @@ import wasm_init, {

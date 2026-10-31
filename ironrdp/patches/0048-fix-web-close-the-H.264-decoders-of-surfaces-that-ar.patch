@@ -1,8 +1,8 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: meanaverage <18336095+meanaverage@users.noreply.github.com>
 Date: Sun, 4 Oct 2026 13:28:35 -0700
-Subject: [PATCH 48/51] fix(web): close the H.264 decoders of surfaces that are
- gone, and bound them
+Subject: [PATCH] fix(web): close the H.264 decoders of surfaces that are gone,
+ and bound them
 
 WebCodecsH264Decoder opened a VideoDecoder for every surface a frame
 named, and closed none until the session ended: nothing told it that a
@@ -30,12 +30,12 @@ finishing their frames while those of the new ones start. A frame for a
 error does.
 ---
  crates/ironrdp-egfx/README.md                 |  7 +-
- crates/ironrdp-egfx/src/client.rs             | 31 ++++++-
+ crates/ironrdp-egfx/src/client.rs             | 29 +++++-
  .../tests/egfx/external_h264.rs               | 48 +++++++++-
  crates/ironrdp-web/src/h264.rs                | 16 +++-
  .../src/H264Decoder.test.ts                   | 91 +++++++++++++++++++
  .../src/H264Decoder.ts                        | 72 +++++++++++++--
- 6 files changed, 249 insertions(+), 16 deletions(-)
+ 6 files changed, 248 insertions(+), 15 deletions(-)
 
 diff --git a/crates/ironrdp-egfx/README.md b/crates/ironrdp-egfx/README.md
 index d99bbd7f..84b4c2ce 100644
@@ -56,19 +56,10 @@ index d99bbd7f..84b4c2ce 100644
  decoders hold every picture back).
  
 diff --git a/crates/ironrdp-egfx/src/client.rs b/crates/ironrdp-egfx/src/client.rs
-index c6439cef..60c00774 100644
+index e8efa610..506c08aa 100644
 --- a/crates/ironrdp-egfx/src/client.rs
 +++ b/crates/ironrdp-egfx/src/client.rs
-@@ -53,7 +53,7 @@
- //! [3.3.5.2]: https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-rdpegfx/90aba3e3-d4a8-4af1-b1bb-a94e2313bbf0
- //! [3.3.5.12]: https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-rdpegfx/e3c80bff-3e4e-4e65-b7c2-c2cd6b1fb4f5
- 
--use std::collections::{BTreeMap, VecDeque};
-+use std::collections::{BTreeMap, BTreeSet, VecDeque};
- 
- use ironrdp_core::{Decode as _, Encode as _, ReadCursor, impl_as_any};
- use ironrdp_dvc::{DvcClientProcessor, DvcMessage, DvcProcessor};
-@@ -253,6 +253,10 @@ pub struct H264Frame {
+@@ -282,6 +282,10 @@ pub struct H264Frame {
      pub data: Vec<u8>,
      /// Whether the access unit holds an IDR picture, which a new decoder can start from.
      pub key_frame: bool,
@@ -79,7 +70,9 @@ index c6439cef..60c00774 100644
  }
  
  /// A command waiting to be applied, in the order the server sent it.
-@@ -529,4 +533,8 @@ pub struct GraphicsPipelineClient {
+@@ -587,6 +591,10 @@ pub struct GraphicsPipelineClient {
+     /// `queue`: a frame is handed out when it arrives, and its regions are bounded by its surface then. Like
+     /// `surfaces`, it leaves out surfaces too large for the compositor.
      received_surfaces: BTreeMap<u16, (u16, u16)>,
 +    /// Surfaces frames were handed out for since they were created, as of the commands received so far.
 +    h264_surfaces: BTreeSet<u16>,
@@ -88,7 +81,7 @@ index c6439cef..60c00774 100644
  }
  
  impl GraphicsPipelineClient {
-@@ -564,6 +572,8 @@ impl GraphicsPipelineClient {
+@@ -629,6 +637,8 @@ impl GraphicsPipelineClient {
              held_bytes: 0,
              queued_frame_ends: 0,
              received_surfaces: BTreeMap::new(),
@@ -97,7 +90,7 @@ index c6439cef..60c00774 100644
          }
      }
  
-@@ -576,7 +586,9 @@ impl GraphicsPipelineClient {
+@@ -655,7 +665,9 @@ impl GraphicsPipelineClient {
      /// handler may advertise capability sets from V10 on, which imply it. Commands after it, including its `EndFrame` and so its `FrameAcknowledge`,
      /// wait until then: surface commands read and write the pixels the frame produces, and the acknowledgement
      /// tells the server the frame was shown, which paces what it sends. Frames can be decoded ahead (all taken
@@ -108,13 +101,18 @@ index c6439cef..60c00774 100644
      ///
      /// What waits is bounded at all times: it is checked as each command is queued and each frame completes, and
      /// the command or completion that takes it past 65,536 commands (frames included), or past 512 MiB of them and
-@@ -690,4 +702,5 @@ impl GraphicsPipelineClient {
+@@ -846,6 +858,7 @@ impl GraphicsPipelineClient {
      /// Queues a decoded PDU; with an external H.264 decoder, an AVC420 frame is handed out right away, so that
      /// decoding overlaps with receiving what follows.
      fn enqueue(&mut self, pdu: GfxPdu) -> PduResult<()> {
 +        // The H.264 stream of a surface ends with the surface, or when it is created again.
          match &pdu {
-@@ -702,9 +715,19 @@ impl GraphicsPipelineClient {
+             GfxPdu::CreateSurface(create) if create.width != 0 && create.height != 0 => {
+                 if Compositor::holds_surface(create.width, create.height) {
+@@ -855,12 +868,22 @@ impl GraphicsPipelineClient {
+                     // Refused along with the surface it replaces (see `handle_create_surface`).
+                     self.received_surfaces.remove(&create.surface_id);
+                 }
 +                if self.h264_surfaces.remove(&create.surface_id) {
 +                    self.ended_h264_surfaces.push(create.surface_id);
 +                }
@@ -135,7 +133,7 @@ index c6439cef..60c00774 100644
              _ => {}
          }
          let pdu = match pdu {
-@@ -859,6 +882,7 @@ impl GraphicsPipelineClient {
+@@ -1015,6 +1038,7 @@ impl GraphicsPipelineClient {
                  "H.264 access unit handed out"
              );
              self.held_bytes = self.held_bytes.saturating_add(data.len());
@@ -143,7 +141,7 @@ index c6439cef..60c00774 100644
              self.h264_frames.push(H264Frame {
                  id,
                  surface_id: pdu.surface_id,
-@@ -866,6 +890,7 @@ impl GraphicsPipelineClient {
+@@ -1022,6 +1046,7 @@ impl GraphicsPipelineClient {
                  regions: regions.clone(),
                  data,
                  key_frame,
@@ -152,7 +150,7 @@ index c6439cef..60c00774 100644
              queued.push(Queued::H264 {
                  id,
 diff --git a/crates/ironrdp-testsuite-core/tests/egfx/external_h264.rs b/crates/ironrdp-testsuite-core/tests/egfx/external_h264.rs
-index 2a7ef301..b6d2a968 100644
+index b7e063d4..9229e92e 100644
 --- a/crates/ironrdp-testsuite-core/tests/egfx/external_h264.rs
 +++ b/crates/ironrdp-testsuite-core/tests/egfx/external_h264.rs
 @@ -7,8 +7,8 @@ use ironrdp_egfx::client::{GraphicsPipelineClient, GraphicsPipelineHandler};
@@ -166,7 +164,7 @@ index 2a7ef301..b6d2a968 100644
  };
  use ironrdp_graphics::zgfx::wrap_uncompressed;
  use ironrdp_pdu::geometry::ExclusiveRectangle;
-@@ -701,3 +701,47 @@ fn completions_for_frames_not_pending_are_ignored() {
+@@ -705,3 +705,47 @@ fn completions_for_frames_not_pending_are_ignored() {
      // Applied already.
      assert!(client.complete_h264_frame(frame.id, None).expect("ignored").is_empty());
  }

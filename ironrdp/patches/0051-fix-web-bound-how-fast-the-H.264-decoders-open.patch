@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: meanaverage <18336095+meanaverage@users.noreply.github.com>
 Date: Sun, 4 Oct 2026 18:39:43 -0700
-Subject: [PATCH 51/51] fix(web): bound how fast the H.264 decoders open
+Subject: [PATCH] fix(web): bound how fast the H.264 decoders open
 
 Since the decoders of surfaces that are gone are closed, a surface that
 is created again starts a new stream in a new decoder: its next frame

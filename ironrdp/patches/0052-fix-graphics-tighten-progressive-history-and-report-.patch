@@ -12,7 +12,7 @@ Subject: [PATCH] fix(graphics): tighten progressive history and report grid
  4 files changed, 51 insertions(+), 6 deletions(-)
 
 diff --git a/crates/ironrdp-graphics/src/pointer.rs b/crates/ironrdp-graphics/src/pointer.rs
-index 14fe3a68..cf34853d 100644
+index c1ea3cb0..d9b7dfe7 100644
 --- a/crates/ironrdp-graphics/src/pointer.rs
 +++ b/crates/ironrdp-graphics/src/pointer.rs
 @@ -41,6 +41,7 @@ pub enum PointerError {
@@ -68,10 +68,10 @@ index 14fe3a68..cf34853d 100644
          for row_idx in 0..data.height {
              // For non-monochrome cursors we read strides from bottom to top
 diff --git a/crates/ironrdp-graphics/src/progressive.rs b/crates/ironrdp-graphics/src/progressive.rs
-index fc24b86b..31db3133 100644
+index 8429f0f1..872eb31c 100644
 --- a/crates/ironrdp-graphics/src/progressive.rs
 +++ b/crates/ironrdp-graphics/src/progressive.rs
-@@ -1092,12 +1092,17 @@ impl SurfaceTiles {
+@@ -1093,12 +1093,17 @@ impl SurfaceTiles {
          let tiles_wide = width_pixels.div_ceil(64);
          let tiles_high = height_pixels.div_ceil(64);
          let count = usize::from(tiles_wide) * usize::from(tiles_high);
@@ -90,7 +90,7 @@ index fc24b86b..31db3133 100644
          })
      }
  
-@@ -1181,9 +1186,9 @@ const MAX_REGION_CLIPPING_WORK: usize = 1 << 20;
+@@ -1182,9 +1187,9 @@ const MAX_REGION_CLIPPING_WORK: usize = 1 << 20;
  ///
  /// The server chooses the surfaces, codec contexts and tiles the decoder keeps state for, and
  /// each tile it fills takes about 60 KiB: a [`TileState`] (36 KiB) and its surface's sub-band
@@ -103,7 +103,7 @@ index fc24b86b..31db3133 100644
  
  /// Most tiles one [`ProgressiveDecoder::decode_bitmap`] call may decode or redraw.
  ///
-@@ -1216,6 +1221,8 @@ pub enum ProgressiveDecodeError {
+@@ -1217,6 +1222,8 @@ pub enum ProgressiveDecodeError {
      MemoryLimitExceeded { limit: usize },
      /// A bitmap decodes or redraws more tiles than [`MAX_TILES_PER_BITMAP`].
      TileLimitExceeded { limit: usize },
@@ -112,7 +112,7 @@ index fc24b86b..31db3133 100644
  }
  
  impl core::fmt::Display for ProgressiveDecodeError {
-@@ -1247,6 +1254,7 @@ impl core::fmt::Display for ProgressiveDecodeError {
+@@ -1248,6 +1255,7 @@ impl core::fmt::Display for ProgressiveDecodeError {
              Self::TileLimitExceeded { limit } => {
                  write!(f, "progressive bitmap decodes or redraws more than {limit} tiles")
              }
@@ -121,10 +121,10 @@ index fc24b86b..31db3133 100644
      }
  }
 diff --git a/crates/ironrdp-session/src/fast_path.rs b/crates/ironrdp-session/src/fast_path.rs
-index fb376a08..82451002 100644
+index cf2ad304..1953bc62 100644
 --- a/crates/ironrdp-session/src/fast_path.rs
 +++ b/crates/ironrdp-session/src/fast_path.rs
-@@ -698,6 +698,7 @@ impl Processor {
+@@ -713,6 +713,7 @@ impl Processor {
              PointerError::InvalidAndMaskSize { .. } => "InvalidAndMaskSize",
              PointerError::NotSupportedBpp { .. } => "NotSupportedBpp",
              PointerError::DimensionsTooLarge { .. } => "DimensionsTooLarge",
@@ -133,7 +133,7 @@ index fb376a08..82451002 100644
          };
          warn!(pointer_error = error_kind, "Ignoring unsupported pointer update");
 diff --git a/crates/ironrdp-testsuite-core/tests/peak_heap.rs b/crates/ironrdp-testsuite-core/tests/peak_heap.rs
-index 8580a49b..dad565e4 100644
+index 7a5ec46f..40d6d458 100644
 --- a/crates/ironrdp-testsuite-core/tests/peak_heap.rs
 +++ b/crates/ironrdp-testsuite-core/tests/peak_heap.rs
 @@ -126,6 +126,31 @@ fn with_heap_limit<T>(limit: usize, f: impl FnOnce() -> T) -> T {

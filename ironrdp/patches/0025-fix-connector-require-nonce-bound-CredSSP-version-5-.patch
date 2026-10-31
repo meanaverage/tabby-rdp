@@ -5,32 +5,36 @@ Subject: [PATCH] fix(connector): require nonce-bound CredSSP version 5 or
  later
 
 ---
- crates/ironrdp-connector/src/credssp.rs       |  19 ++
+ crates/ironrdp-connector/src/credssp.rs       |  18 ++
  .../tests/connector/credssp.rs                | 169 ++++++++++++++++++
  .../tests/connector/mod.rs                    |   1 +
- 3 files changed, 189 insertions(+)
+ 3 files changed, 188 insertions(+)
  create mode 100644 crates/ironrdp-testsuite-core/tests/connector/credssp.rs
 
 diff --git a/crates/ironrdp-connector/src/credssp.rs b/crates/ironrdp-connector/src/credssp.rs
-index 41302326..93eb1f83 100644
+index 03d48e05..9893875c 100644
 --- a/crates/ironrdp-connector/src/credssp.rs
 +++ b/crates/ironrdp-connector/src/credssp.rs
-@@ -9,8 +9,14 @@ use tracing::debug;
+@@ -9,6 +9,7 @@ use tracing::debug;
  
  use crate::{
      ConnectorError, ConnectorErrorKind, ConnectorResult, Credentials, ServerName, Written, custom_err, general_err,
 +    reason_err,
  };
  
+ /// Strategy for resolving the KDC to use for Kerberos authentication.
+@@ -28,6 +29,10 @@ impl From<KdcResolution> for sspi::KdcResolution {
+         }
+     }
+ }
 +/// Version 5 introduced nonce-bound public-key hashes, fixing the encryption oracle in CVE-2018-0886.
 +///
 +/// [MS-CSSP 3.1.5]: https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-cssp/385a7489-d46b-464c-b224-f7340e308a5c
 +const MIN_SERVER_VERSION: u32 = 5;
-+
+ 
  #[derive(Debug, Clone)]
  pub struct KerberosConfig {
-     pub kdc_proxy_url: Option<url::Url>,
-@@ -177,11 +183,22 @@ impl CredsspSequence {
+@@ -323,11 +328,22 @@ impl CredsspSequence {
  
      /// Returns Some(ts_request) when a TS request is received from server,
      /// and None when an early user auth result PDU is received instead.
@@ -53,7 +57,7 @@ index 41302326..93eb1f83 100644
                  Ok(Some(message))
              }
              CredsspState::EarlyUserAuthResult => {
-@@ -206,6 +223,8 @@ impl CredsspSequence {
+@@ -355,6 +371,8 @@ impl CredsspSequence {
          }
      }
  
@@ -238,7 +242,7 @@ index 00000000..2493787f
 +    assert_eq!(pub_key_auth.len(), SIGNATURE_LEN + HASH_LEN);
 +}
 diff --git a/crates/ironrdp-testsuite-core/tests/connector/mod.rs b/crates/ironrdp-testsuite-core/tests/connector/mod.rs
-index 79a675d4..5f9465e0 100644
+index ffea9e34..8ba29471 100644
 --- a/crates/ironrdp-testsuite-core/tests/connector/mod.rs
 +++ b/crates/ironrdp-testsuite-core/tests/connector/mod.rs
 @@ -3,6 +3,7 @@ use ironrdp_pdu::gcc;
@@ -246,6 +250,6 @@ index 79a675d4..5f9465e0 100644
  
  mod autodetect;
 +mod credssp;
+ mod debug_redaction;
+ mod display_data;
  mod early_capabilities;
- 
- fn test_config() -> ironrdp_connector::Config {

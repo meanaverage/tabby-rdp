@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: meanaverage <18336095+meanaverage@users.noreply.github.com>
 Date: Sun, 4 Oct 2026 16:46:40 -0700
-Subject: [PATCH 46/51] fix(egfx): bound the frames one message carries
+Subject: [PATCH] fix(egfx): bound the frames one message carries
 
 GraphicsPipelineClient::process returns the responses to the PDUs of a
 message together, once all of them are processed, and each EndFrame has
@@ -32,10 +32,13 @@ fails after 0.1 s, at 0.8 GB.
  2 files changed, 57 insertions(+), 1 deletion(-)
 
 diff --git a/crates/ironrdp-egfx/src/client.rs b/crates/ironrdp-egfx/src/client.rs
-index 98ada52d..c6439cef 100644
+index 6781d8d4..e8efa610 100644
 --- a/crates/ironrdp-egfx/src/client.rs
 +++ b/crates/ironrdp-egfx/src/client.rs
-@@ -83,3 +83,12 @@
+@@ -107,6 +107,15 @@ const MAX_DECOMPRESSED_BUFFER_CAPACITY: usize = 16384; // 16 KiB
+ /// would, compressed or not, such as a frame of uncompressed pixels for a surface two 8K monitors wide (253 MiB).
+ const MAX_MESSAGE_SIZE: usize = 256 * 1024 * 1024;
+ 
 +/// The most frames one message may end.
 +///
 +/// Each `EndFrame` is acknowledged, and `process` returns the acknowledgements of a message together, once all of it is
@@ -48,9 +51,9 @@ index 98ada52d..c6439cef 100644
  // ============================================================================
  // Surface Management
  // ============================================================================
-@@ -469,6 +478,9 @@ enum ClientState {
+@@ -516,6 +525,9 @@ enum ClientState {
  /// This client handles capability negotiation, surface tracking,
- /// H.264 AVC420 and RFX Progressive decode, and frame acknowledgment per [MS-RDPEGFX].
+ /// H.264 AVC420, AVC444 and RFX Progressive decode, and frame acknowledgment per [MS-RDPEGFX].
  ///
 +/// The frames a message ends are acknowledged in what `process` returns for it, and a message that ends more than
 +/// 65,536 frames fails: servers send one or a few in a message.
@@ -58,7 +61,7 @@ index 98ada52d..c6439cef 100644
  /// [MS-RDPEGFX]: https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-rdpegfx/da5c75f9-cd99-450c-98c4-014a496942b0
  pub struct GraphicsPipelineClient {
      handler: Box<dyn GraphicsPipelineHandler>,
-@@ -1621,11 +1633,20 @@ impl DvcProcessor for GraphicsPipelineClient {
+@@ -1085,11 +1097,20 @@ impl GraphicsPipelineClient {
  
          // Process each PDU as it is decoded, not all decoded first: a payload holds up to 256 MiB of PDUs, and decoded
          // they take several times that (the smallest PDU is 10 bytes, a decoded one 40 or more). In order behind any
@@ -81,11 +84,11 @@ index 98ada52d..c6439cef 100644
              responses.extend(self.process_queue()?);
              self.check_held()?;
 diff --git a/crates/ironrdp-testsuite-core/tests/egfx/client.rs b/crates/ironrdp-testsuite-core/tests/egfx/client.rs
-index ca033b42..dd310713 100644
+index 48d7e2ca..1f86bc68 100644
 --- a/crates/ironrdp-testsuite-core/tests/egfx/client.rs
 +++ b/crates/ironrdp-testsuite-core/tests/egfx/client.rs
-@@ -104,6 +104,16 @@ fn decode_caps_from_message(msg: &ironrdp_dvc::DvcMessage) -> CapabilitiesAdvert
-     }
+@@ -123,6 +123,16 @@ fn create_surface(surface_id: u16, width: u16, height: u16) -> GfxPdu {
+     })
  }
  
 +/// The frame a response acknowledges.
@@ -101,7 +104,7 @@ index ca033b42..dd310713 100644
  /// Create a client, send CapabilitiesConfirm V8 through process(), and create a surface.
  fn setup_active_client_with_surface(
      decoder: Option<Box<dyn H264Decoder>>,
-@@ -711,6 +721,31 @@ fn client_tracks_frame_count_across_multiple_frames() {
+@@ -1238,6 +1248,31 @@ fn client_tracks_frame_count_across_multiple_frames() {
      assert_eq!(client.total_frames_decoded(), 5);
  }
  

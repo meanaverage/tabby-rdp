@@ -1,8 +1,8 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: meanaverage <18336095+meanaverage@users.noreply.github.com>
 Date: Sun, 4 Oct 2026 17:17:35 -0700
-Subject: [PATCH 38/51] fix(graphics,egfx): allocate the ClearCodec image
- fallibly and convert it to RGBA in place
+Subject: [PATCH] fix(graphics,egfx): allocate the ClearCodec image fallibly
+ and convert it to RGBA in place
 
 The ClearCodec decoder allocated its output, width * height * 4 bytes,
 with vec! before reading the stream, and the EGFX client then copied
@@ -35,14 +35,14 @@ rather than aborting the tests.
 ---
  crates/ironrdp-egfx/src/client.rs             |  37 ++--
  crates/ironrdp-graphics/src/clearcodec/mod.rs |  15 +-
- .../ironrdp-testsuite-core/tests/peak_heap.rs | 182 +++++++++++++++++-
- 3 files changed, 207 insertions(+), 27 deletions(-)
+ .../ironrdp-testsuite-core/tests/peak_heap.rs | 180 +++++++++++++++++-
+ 3 files changed, 205 insertions(+), 27 deletions(-)
 
 diff --git a/crates/ironrdp-egfx/src/client.rs b/crates/ironrdp-egfx/src/client.rs
-index c6654249..a648b226 100644
+index 288734ea..a908f24a 100644
 --- a/crates/ironrdp-egfx/src/client.rs
 +++ b/crates/ironrdp-egfx/src/client.rs
-@@ -1347,20 +1347,20 @@ impl GraphicsPipelineClient {
+@@ -1797,20 +1797,20 @@ impl GraphicsPipelineClient {
          let dest_width = dest_rect.right - dest_rect.left;
          let dest_height = dest_rect.bottom - dest_rect.top;
  
@@ -66,7 +66,7 @@ index c6654249..a648b226 100644
              width: dest_width,
              height: dest_height,
          };
-@@ -1606,10 +1606,6 @@ fn bound_regions(
+@@ -2424,10 +2424,6 @@ fn bound_regions(
      regions
  }
  
@@ -77,7 +77,7 @@ index c6654249..a648b226 100644
  /// Widen tightly-packed RGB24 to RGBA, marking every pixel opaque.
  ///
  /// The RDP 6.0 Planar decoder emits three bytes per pixel; `BitmapUpdate` carries
-@@ -1626,13 +1622,20 @@ fn convert_rgb24_to_rgba(src: &[u8]) -> Result<Vec<u8>, std::collections::TryRes
+@@ -2444,13 +2440,20 @@ fn convert_rgb24_to_rgba(src: &[u8]) -> Result<Vec<u8>, std::collections::TryRes
      Ok(dst)
  }
  
@@ -104,7 +104,7 @@ index c6654249..a648b226 100644
  }
  
  /// Convert uncompressed 32bpp little-endian pixels to RGBA8888
-@@ -2127,16 +2130,16 @@ mod tests {
+@@ -2981,16 +2984,16 @@ mod tests {
      }
  
      #[test]
@@ -160,7 +160,7 @@ index 69ea4914..29305435 100644
              self.decode_composite(composite, &mut output, width, height)?;
          }
 diff --git a/crates/ironrdp-testsuite-core/tests/peak_heap.rs b/crates/ironrdp-testsuite-core/tests/peak_heap.rs
-index 2f94646e..26e9ca54 100644
+index 2f94646e..58db5d17 100644
 --- a/crates/ironrdp-testsuite-core/tests/peak_heap.rs
 +++ b/crates/ironrdp-testsuite-core/tests/peak_heap.rs
 @@ -1,5 +1,6 @@
@@ -358,7 +358,7 @@ index 2f94646e..26e9ca54 100644
  #[test]
  fn clearcodec_bands_past_the_destination_take_no_memory() {
      // 256 bands of 65536 columns each, 32 MiB, over a 2x2 destination: columns 0 and 1 carry
-@@ -118,6 +240,52 @@ fn clearcodec_bands_past_the_destination_take_no_memory() {
+@@ -118,6 +240,50 @@ fn clearcodec_bands_past_the_destination_take_no_memory() {
      assert!(peak < 1024 * 1024, "decoding the layer took {peak} bytes");
  }
  
@@ -399,12 +399,10 @@ index 2f94646e..26e9ca54 100644
 +
 +        let result = with_heap_limit(limit, || client.process(0, command));
 +
-+        let Err(error) = result else {
-+            panic!("the command decoded in {limit} bytes");
-+        };
-+        // The error comes from a fallible allocation.
-+        let error = error.report().to_string();
-+        assert!(error.contains("memory allocation failed"), "{error}");
++        // The allocation fails rather than aborting, and the update it was for is dropped: an
++        // undecodable surface update doesn't end the session.
++        assert!(result.is_ok(), "{:?}", result.as_ref().err());
++        assert_eq!(client.dropped_updates(), 1, "the command decoded in {limit} bytes");
 +    }
 +}
 +

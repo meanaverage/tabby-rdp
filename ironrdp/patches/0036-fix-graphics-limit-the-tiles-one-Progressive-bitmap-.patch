@@ -1,8 +1,8 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: meanaverage <18336095+meanaverage@users.noreply.github.com>
 Date: Sun, 4 Oct 2026 13:28:56 -0700
-Subject: [PATCH 36/51] fix(graphics): limit the tiles one Progressive bitmap
- decodes or redraws
+Subject: [PATCH] fix(graphics): limit the tiles one Progressive bitmap decodes
+ or redraws
 
 Each REGION block of a Progressive bitmap redraws every tile of the
 frame that its rectangles cover, whether that block decoded it or an
@@ -23,10 +23,10 @@ most 256 MiB of tiles.
  1 file changed, 103 insertions(+)
 
 diff --git a/crates/ironrdp-graphics/src/progressive.rs b/crates/ironrdp-graphics/src/progressive.rs
-index e25b9637..9dea7ccd 100644
+index 2c258283..76116ec8 100644
 --- a/crates/ironrdp-graphics/src/progressive.rs
 +++ b/crates/ironrdp-graphics/src/progressive.rs
-@@ -1185,6 +1185,13 @@ const MAX_REGION_CLIPPING_WORK: usize = 1 << 20;
+@@ -1186,6 +1186,13 @@ const MAX_REGION_CLIPPING_WORK: usize = 1 << 20;
  /// surfaces the EGFX compositor displays at most, which is two 8K monitors.
  pub const MAX_PROGRESSIVE_BYTES: usize = 1 << 30;
  
@@ -40,7 +40,7 @@ index e25b9637..9dea7ccd 100644
  /// Error type for progressive decoding operations.
  #[derive(Debug)]
  pub enum ProgressiveDecodeError {
-@@ -1207,6 +1214,8 @@ pub enum ProgressiveDecodeError {
+@@ -1208,6 +1215,8 @@ pub enum ProgressiveDecodeError {
      /// Keeping the state the stream asks for would take the decoder past its memory limit,
      /// [`MAX_PROGRESSIVE_BYTES`].
      MemoryLimitExceeded { limit: usize },
@@ -49,7 +49,7 @@ index e25b9637..9dea7ccd 100644
  }
  
  impl core::fmt::Display for ProgressiveDecodeError {
-@@ -1235,6 +1244,9 @@ impl core::fmt::Display for ProgressiveDecodeError {
+@@ -1236,6 +1245,9 @@ impl core::fmt::Display for ProgressiveDecodeError {
              Self::MemoryLimitExceeded { limit } => {
                  write!(f, "progressive decoder state would exceed its {limit}-byte limit")
              }
@@ -59,7 +59,7 @@ index e25b9637..9dea7ccd 100644
          }
      }
  }
-@@ -1270,6 +1282,17 @@ fn charge_region_clipping_work(used: &mut usize, units: usize) -> Result<(), Pro
+@@ -1271,6 +1283,17 @@ fn charge_region_clipping_work(used: &mut usize, units: usize) -> Result<(), Pro
      }
  }
  
@@ -74,11 +74,11 @@ index e25b9637..9dea7ccd 100644
 +    }
 +}
 +
- /// Memory a [`ProgressiveDecoder`] holds for its codec contexts, tiles and sub-band references,
+ /// Memory a [`ProgressiveDecoder`] holds for its surfaces' tile grids, tiles and sub-band references,
  /// counted against a limit.
  #[derive(Debug)]
-@@ -1379,6 +1402,8 @@ pub struct ProgressiveDecoder {
-     /// Bytes held by `contexts` (their tile grids and tiles) and `references`, against
+@@ -1372,6 +1395,8 @@ pub struct ProgressiveDecoder {
+     /// Bytes held by `surfaces` (their tile grids and tiles) and `references`, against
      /// [`MAX_PROGRESSIVE_BYTES`].
      memory: MemoryBudget,
 +    /// [`MAX_TILES_PER_BITMAP`], or less in tests.
@@ -86,7 +86,7 @@ index e25b9637..9dea7ccd 100644
  }
  
  impl ProgressiveDecoder {
-@@ -1394,6 +1419,7 @@ impl ProgressiveDecoder {
+@@ -1387,6 +1412,7 @@ impl ProgressiveDecoder {
                  used: 0,
                  limit: MAX_PROGRESSIVE_BYTES,
              },
@@ -94,7 +94,7 @@ index e25b9637..9dea7ccd 100644
          }
      }
  
-@@ -1509,6 +1535,11 @@ impl ProgressiveDecoder {
+@@ -1498,6 +1524,11 @@ impl ProgressiveDecoder {
  
          let mut decoded_tiles = Vec::new();
          let mut region_clipping_work = 0;
@@ -106,7 +106,7 @@ index e25b9637..9dea7ccd 100644
  
          // Process REGION blocks only inside the first FRAME_BEGIN/FRAME_END
          // pair in this bitmap stream. Codec state persists across RDPGFX
-@@ -1541,6 +1572,7 @@ impl ProgressiveDecoder {
+@@ -1530,6 +1561,7 @@ impl ProgressiveDecoder {
                      region,
                      use_reduce_extrapolate,
                  )?;
@@ -114,15 +114,15 @@ index e25b9637..9dea7ccd 100644
                  for tile in tiles {
                      let key = (tile.x_idx, tile.y_idx);
                      frame_tiles.insert(key);
-@@ -1607,6 +1639,7 @@ impl ProgressiveDecoder {
-                     let Some(tile_state) = context.surface.get(x_idx, y_idx) else {
+@@ -1597,6 +1629,7 @@ impl ProgressiveDecoder {
+                     let Some(tile_state) = surface.get(x_idx, y_idx) else {
                          continue;
                      };
 +                    count_bitmap_tiles(&mut bitmap_tiles, 1, max_tiles_per_bitmap)?;
                      let mut pixels = vec![0u8; usize::from(TILE_DIM) * usize::from(TILE_DIM) * TILE_BYTES_PER_PIXEL];
                      tile_state.reconstruct_to_rgba(&mut pixels);
                      DecodedTile {
-@@ -4307,4 +4340,74 @@ mod tests {
+@@ -4405,4 +4438,74 @@ mod tests {
          decoder.delete_surface(2);
          assert_eq!(decoder.memory.used, 0);
      }

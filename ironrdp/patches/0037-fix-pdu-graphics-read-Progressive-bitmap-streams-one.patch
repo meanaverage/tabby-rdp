@@ -1,8 +1,8 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: meanaverage <18336095+meanaverage@users.noreply.github.com>
 Date: Sun, 4 Oct 2026 16:08:23 -0700
-Subject: [PATCH 37/51] fix(pdu,graphics): read Progressive bitmap streams one
- block at a time
+Subject: [PATCH] fix(pdu,graphics): read Progressive bitmap streams one block
+ at a time
 
 The Progressive decoder collected a bitmap's whole stream before
 decoding any of it: every block, and every tile block of every REGION
@@ -36,10 +36,10 @@ reading them.
  3 files changed, 622 insertions(+), 76 deletions(-)
 
 diff --git a/crates/ironrdp-graphics/src/progressive.rs b/crates/ironrdp-graphics/src/progressive.rs
-index 9dea7ccd..fc24b86b 100644
+index 76116ec8..8429f0f1 100644
 --- a/crates/ironrdp-graphics/src/progressive.rs
 +++ b/crates/ironrdp-graphics/src/progressive.rs
-@@ -1293,6 +1293,77 @@ fn count_bitmap_tiles(count: &mut usize, tiles: usize, limit: usize) -> Result<(
+@@ -1294,6 +1294,77 @@ fn count_bitmap_tiles(count: &mut usize, tiles: usize, limit: usize) -> Result<(
      }
  }
  
@@ -114,10 +114,10 @@ index 9dea7ccd..fc24b86b 100644
 +    }
 +}
 +
- /// Memory a [`ProgressiveDecoder`] holds for its codec contexts, tiles and sub-band references,
+ /// Memory a [`ProgressiveDecoder`] holds for its surfaces' tile grids, tiles and sub-band references,
  /// counted against a limit.
  #[derive(Debug)]
-@@ -1454,9 +1525,19 @@ impl ProgressiveDecoder {
+@@ -1448,9 +1519,19 @@ impl ProgressiveDecoder {
          surface_height: u16,
          bitmap_data: &[u8],
      ) -> Result<Vec<DecodedTile>, ProgressiveDecodeError> {
@@ -140,10 +140,10 @@ index 9dea7ccd..fc24b86b 100644
  
          // Extract the band-layout flag from the CONTEXT block when present.
          // Per MS-RDPEGFX 2.2.4.2 the SYNC + CONTEXT blocks establish a codec
-@@ -1474,10 +1555,7 @@ impl ProgressiveDecoder {
-         // deletes the previous one, and never repeats SYNC + CONTEXT, so a per-context lookup
-         // alone rejects the new context. The retained value is scoped to its surface and
-         // released with it. Only error when no source is available at all.
+@@ -1467,10 +1548,7 @@ impl ProgressiveDecoder {
+         // deletes the previous one, and never repeats SYNC + CONTEXT. The retained value is
+         // scoped to its surface and released with it. Only error when no source is available
+         // at all.
 -        let signalled = blocks.iter().find_map(|block| match block {
 -            ProgressiveBlock::Context(ctx) => Some(ctx.uses_reduce_extrapolate()),
 -            _ => None,
@@ -152,7 +152,7 @@ index 9dea7ccd..fc24b86b 100644
          if let Some(flag) = signalled {
              self.surface_context_flags.insert(surface_id, flag);
          }
-@@ -1544,32 +1622,29 @@ impl ProgressiveDecoder {
+@@ -1533,32 +1611,29 @@ impl ProgressiveDecoder {
          // Process REGION blocks only inside the first FRAME_BEGIN/FRAME_END
          // pair in this bitmap stream. Codec state persists across RDPGFX
          // frames, while frame_tiles persists only across payloads in one frame.
@@ -190,7 +190,7 @@ index 9dea7ccd..fc24b86b 100644
 +            for tile_block in tile_blocks {
                  let tiles = decode_tile_block(
                      surface_id,
-                     &mut context.surface,
+                     surface,
                      references,
                      memory,
 -                    tile_block,
@@ -200,7 +200,7 @@ index 9dea7ccd..fc24b86b 100644
                      use_reduce_extrapolate,
                  )?;
                  count_bitmap_tiles(&mut bitmap_tiles, tiles.len(), max_tiles_per_bitmap)?;
-@@ -1751,7 +1826,7 @@ fn decode_tile_block(
+@@ -1733,7 +1808,7 @@ fn decode_tile_block(
      references: &mut BTreeMap<SubBandDiffingTileKey, Box<DecDwtQ>>,
      memory: &mut MemoryBudget,
      tile_block: &ironrdp_pdu::codecs::rfx::progressive::ProgressiveTile<'_>,
@@ -209,7 +209,7 @@ index 9dea7ccd..fc24b86b 100644
      use_reduce_extrapolate: bool,
  ) -> Result<Vec<DecodedTile>, ProgressiveDecodeError> {
      use ironrdp_pdu::codecs::rfx::progressive::ProgressiveTile;
-@@ -4410,4 +4485,66 @@ mod tests {
+@@ -4508,4 +4583,66 @@ mod tests {
              }
          }
      }
@@ -269,7 +269,7 @@ index 9dea7ccd..fc24b86b 100644
 +            Err(ProgressiveDecodeError::TileLimitExceeded { limit: 8 })
 +        ));
 +        // Nothing was decoded or kept.
-+        assert!(decoder.contexts.is_empty());
++        assert!(decoder.surfaces.is_empty());
 +        assert_eq!(decoder.memory.used, 0);
 +
 +        // Tile blocks after the frame are read, but neither decoded nor counted.

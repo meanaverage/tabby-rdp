@@ -236,7 +236,7 @@ async function connect (mode: string) {
     const callbacks: Record<string, (...args: any[]) => any> = {}
     const sent: ClipboardData[] = []
     class SessionBuilder { }
-    for (const name of ['proxyAddress', 'destination', 'serverDomain', 'password', 'authToken', 'username', 'renderCanvas',
+    for (const name of ['proxyAddress', 'webSocketProtocols', 'destination', 'serverDomain', 'password', 'authToken', 'username', 'renderCanvas',
         'setCursorStyleCallbackContext', 'setCursorStyleCallback', 'canvasResizedCallback', 'desktopSize', 'extension',
         'remoteClipboardChangedCallback', 'forceClipboardUpdateCallback']) {
         (SessionBuilder.prototype as any)[name] = function (arg: any) {

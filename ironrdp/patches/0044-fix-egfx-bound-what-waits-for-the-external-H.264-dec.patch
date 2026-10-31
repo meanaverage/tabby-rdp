@@ -1,8 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: meanaverage <18336095+meanaverage@users.noreply.github.com>
 Date: Sun, 4 Oct 2026 13:19:04 -0700
-Subject: [PATCH 44/51] fix(egfx): bound what waits for the external H.264
- decoder
+Subject: [PATCH] fix(egfx): bound what waits for the external H.264 decoder
 
 With an external decoder, the commands after an H.264 frame wait for
 its pixels, and the pixels of frames decoded ahead of their turn wait
@@ -45,19 +44,19 @@ out last.
  2 files changed, 246 insertions(+), 25 deletions(-)
 
 diff --git a/crates/ironrdp-egfx/src/client.rs b/crates/ironrdp-egfx/src/client.rs
-index ff022586..25abeb17 100644
+index cff8b41d..e9bba7ae 100644
 --- a/crates/ironrdp-egfx/src/client.rs
 +++ b/crates/ironrdp-egfx/src/client.rs
-@@ -55,7 +55,7 @@
- 
- use std::collections::{BTreeMap, VecDeque};
+@@ -61,7 +61,7 @@
+ use std::collections::btree_map::Entry;
+ use std::collections::{BTreeMap, BTreeSet, VecDeque};
  
 -use ironrdp_core::{Decode as _, ReadCursor, impl_as_any};
 +use ironrdp_core::{Decode as _, Encode as _, ReadCursor, impl_as_any};
  use ironrdp_dvc::{DvcClientProcessor, DvcMessage, DvcProcessor};
  use ironrdp_graphics::clearcodec::ClearCodecDecoder;
  use ironrdp_graphics::progressive::{ProgressiveDecoder, TILE_BYTES_PER_PIXEL, TILE_DIM};
-@@ -257,6 +257,30 @@ enum Queued {
+@@ -286,6 +286,30 @@ enum Queued {
      },
  }
  
@@ -88,7 +87,7 @@ index ff022586..25abeb17 100644
  // ============================================================================
  // Handler Trait
  // ============================================================================
-@@ -480,6 +504,12 @@ pub struct GraphicsPipelineClient {
+@@ -539,6 +563,12 @@ pub struct GraphicsPipelineClient {
      h264_results: BTreeMap<u32, Option<Vec<u8>>>,
      /// Commands waiting behind a frame the external decoder has not finished.
      queue: VecDeque<Queued>,
@@ -101,7 +100,7 @@ index ff022586..25abeb17 100644
      /// `EndFrame`s in `queue`: frames received but not yet processed.
      queued_frame_ends: u32,
      /// Surface sizes as of the commands received so far, which can be ahead of `surfaces` while commands wait in
-@@ -518,6 +548,8 @@ impl GraphicsPipelineClient {
+@@ -583,6 +613,8 @@ impl GraphicsPipelineClient {
              h264_frames: Vec::new(),
              h264_results: BTreeMap::new(),
              queue: VecDeque::new(),
@@ -110,7 +109,7 @@ index ff022586..25abeb17 100644
              queued_frame_ends: 0,
              received_surfaces: BTreeMap::new(),
          }
-@@ -533,6 +565,10 @@ impl GraphicsPipelineClient {
+@@ -612,6 +644,10 @@ impl GraphicsPipelineClient {
      /// wait until then: surface commands read and write the pixels the frame produces, and the acknowledgement
      /// tells the server the frame was shown, which paces what it sends. Frames can be decoded ahead (all taken
      /// frames can be in flight at once); their pixels are applied in order.
@@ -121,7 +120,7 @@ index ff022586..25abeb17 100644
      #[must_use]
      pub fn with_external_h264(mut self) -> Self {
          self.external_h264 = true;
-@@ -542,7 +578,13 @@ impl GraphicsPipelineClient {
+@@ -621,7 +657,13 @@ impl GraphicsPipelineClient {
      /// Takes the AVC420 frames to decode, in the order received (see [`Self::with_external_h264`]).
      #[must_use]
      pub fn take_h264_frames(&mut self) -> Vec<H264Frame> {
@@ -136,7 +135,7 @@ index ff022586..25abeb17 100644
      }
  
      /// Hands back a frame from [`Self::take_h264_frames`], and processes what waited for it.
-@@ -551,25 +593,27 @@ impl GraphicsPipelineClient {
+@@ -630,25 +672,27 @@ impl GraphicsPipelineClient {
      /// the frame was not decoded (a decoder that is waiting for a key frame, say), which leaves its regions as they
      /// were. Returns the messages to send, frame acknowledgements among them.
      pub fn complete_h264_frame(&mut self, id: u32, pixels: Option<Vec<u8>>) -> PduResult<Vec<DvcMessage>> {
@@ -175,7 +174,7 @@ index ff022586..25abeb17 100644
      }
  
      // ========================================================================
-@@ -659,8 +703,11 @@ impl GraphicsPipelineClient {
+@@ -815,8 +859,11 @@ impl GraphicsPipelineClient {
                          Codec1Type::Avc420 | Codec1Type::Avc444 | Codec1Type::Avc444v2
                      ) =>
              {
@@ -189,7 +188,7 @@ index ff022586..25abeb17 100644
                  return Ok(());
              }
              other => other,
-@@ -668,7 +715,24 @@ impl GraphicsPipelineClient {
+@@ -824,7 +871,24 @@ impl GraphicsPipelineClient {
          if matches!(pdu, GfxPdu::EndFrame(_)) {
              self.queued_frame_ends = self.queued_frame_ends.saturating_add(1);
          }
@@ -215,7 +214,7 @@ index ff022586..25abeb17 100644
          Ok(())
      }
  
-@@ -684,22 +748,27 @@ impl GraphicsPipelineClient {
+@@ -840,22 +904,27 @@ impl GraphicsPipelineClient {
              if !ready {
                  break;
              }
@@ -248,7 +247,7 @@ index ff022586..25abeb17 100644
              }
          }
          Ok(responses)
-@@ -777,6 +846,7 @@ impl GraphicsPipelineClient {
+@@ -933,6 +1002,7 @@ impl GraphicsPipelineClient {
                  regions = regions.len(),
                  "H.264 access unit handed out"
              );
@@ -256,7 +255,7 @@ index ff022586..25abeb17 100644
              self.h264_frames.push(H264Frame {
                  id,
                  surface_id: pdu.surface_id,
-@@ -1557,11 +1627,15 @@ impl DvcProcessor for GraphicsPipelineClient {
+@@ -1020,11 +1090,15 @@ impl GraphicsPipelineClient {
              }
          }
  
@@ -272,11 +271,11 @@ index ff022586..25abeb17 100644
 -        self.process_queue()
 +        Ok(responses)
      }
- }
  
-@@ -2708,4 +2782,62 @@ mod tests {
-                 .unwrap();
-         });
+     fn handle_pdu(&mut self, pdu: GfxPdu) -> PduResult<Vec<DvcMessage>> {
+@@ -4222,4 +4296,62 @@ mod tests {
+         assert_eq!(ack.total_frames_decoded, 4);
+         assert_eq!(ack.queue_depth, QueueDepth::Unavailable);
      }
 +
 +    /// Frame ids wrap around; the pending frames are those handed out last, whatever their ids.
@@ -338,7 +337,7 @@ index ff022586..25abeb17 100644
 +    }
  }
 diff --git a/crates/ironrdp-testsuite-core/tests/egfx/external_h264.rs b/crates/ironrdp-testsuite-core/tests/egfx/external_h264.rs
-index b19610fe..2a7ef301 100644
+index 496853e7..b7e063d4 100644
 --- a/crates/ironrdp-testsuite-core/tests/egfx/external_h264.rs
 +++ b/crates/ironrdp-testsuite-core/tests/egfx/external_h264.rs
 @@ -7,8 +7,8 @@ use ironrdp_egfx::client::{GraphicsPipelineClient, GraphicsPipelineHandler};
@@ -352,7 +351,7 @@ index b19610fe..2a7ef301 100644
  };
  use ironrdp_graphics::zgfx::wrap_uncompressed;
  use ironrdp_pdu::geometry::ExclusiveRectangle;
-@@ -612,3 +612,92 @@ fn a_surface_created_behind_a_waiting_frame_bounds_its_own_frames() {
+@@ -616,3 +616,92 @@ fn a_surface_created_behind_a_waiting_frame_bounds_its_own_frames() {
      assert_eq!(frames.len(), 2);
      assert_eq!(frames[1].regions, [rect(0, 0, 32, 4)]);
  }

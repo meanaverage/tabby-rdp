@@ -15,10 +15,10 @@ Subject: [PATCH] fix(egfx): bound callback pixels and readback concurrency and
  7 files changed, 330 insertions(+), 21 deletions(-)
 
 diff --git a/crates/ironrdp-egfx/src/client.rs b/crates/ironrdp-egfx/src/client.rs
-index 125a9523..d848162b 100644
+index 506c08aa..b13cc5c1 100644
 --- a/crates/ironrdp-egfx/src/client.rs
 +++ b/crates/ironrdp-egfx/src/client.rs
-@@ -604,6 +604,13 @@ impl GraphicsPipelineClient {
+@@ -690,6 +690,13 @@ impl GraphicsPipelineClient {
          frames
      }
  
@@ -33,10 +33,10 @@ index 125a9523..d848162b 100644
      ///
      /// `pixels` holds RGBA8888 for each of the frame's regions in turn, row-major and tightly packed; `None` means
 diff --git a/crates/ironrdp-session/src/active_stage.rs b/crates/ironrdp-session/src/active_stage.rs
-index b80186a6..fd3db9b7 100644
+index 929a719b..cab2b6b0 100644
 --- a/crates/ironrdp-session/src/active_stage.rs
 +++ b/crates/ironrdp-session/src/active_stage.rs
-@@ -328,6 +328,13 @@ impl ActiveStage {
+@@ -369,6 +369,13 @@ impl ActiveStage {
              .unwrap_or_default()
      }
  
@@ -51,10 +51,10 @@ index b80186a6..fd3db9b7 100644
      /// (see [`GraphicsPipelineClient::complete_h264_frame`]).
      ///
 diff --git a/crates/ironrdp-testsuite-core/tests/egfx/external_h264.rs b/crates/ironrdp-testsuite-core/tests/egfx/external_h264.rs
-index 9aa96b04..c744e09a 100644
+index 9229e92e..16d6e74b 100644
 --- a/crates/ironrdp-testsuite-core/tests/egfx/external_h264.rs
 +++ b/crates/ironrdp-testsuite-core/tests/egfx/external_h264.rs
-@@ -710,3 +710,27 @@ fn a_frame_names_the_surfaces_whose_streams_ended_before_it() {
+@@ -749,3 +749,27 @@ fn a_frame_names_the_surfaces_whose_streams_ended_before_it() {
          .collect();
      assert_eq!(ended, [(1, vec![]), (2, vec![]), (2, vec![1, 2]), (4, vec![2])]);
  }
@@ -83,15 +83,15 @@ index 9aa96b04..c744e09a 100644
 +    }
 +}
 diff --git a/crates/ironrdp-web/src/h264.rs b/crates/ironrdp-web/src/h264.rs
-index 1318ff0b..067d368c 100644
+index 1318ff0b..4721ce0c 100644
 --- a/crates/ironrdp-web/src/h264.rs
 +++ b/crates/ironrdp-web/src/h264.rs
 @@ -14,6 +14,9 @@
  //!
  //! [`GraphicsPipelineClient::with_external_h264`]: ironrdp_egfx::client::GraphicsPipelineClient::with_external_h264
  
++use core::sync::atomic::{AtomicUsize, Ordering};
 +use std::sync::Arc;
-+use std::sync::atomic::{AtomicUsize, Ordering};
 +
  use anyhow::Context as _;
  use futures_channel::mpsc;
@@ -214,10 +214,10 @@ index 1318ff0b..067d368c 100644
 +    }
 +}
 diff --git a/crates/ironrdp-web/src/session.rs b/crates/ironrdp-web/src/session.rs
-index 67f864f6..793ec674 100644
+index 532c5279..ff828d94 100644
 --- a/crates/ironrdp-web/src/session.rs
 +++ b/crates/ironrdp-web/src/session.rs
-@@ -665,6 +665,7 @@ pub(crate) enum RdpInputEvent {
+@@ -722,6 +722,7 @@ pub(crate) enum RdpInputEvent {
          id: u32,
          pixels: Option<Vec<u8>>,
          error: Option<String>,
@@ -225,7 +225,7 @@ index 67f864f6..793ec674 100644
      },
      FastPath(FastPathInputEvents),
      Resize {
-@@ -1045,7 +1046,7 @@ impl iron_remote_desktop::Session for Session {
+@@ -1102,7 +1103,7 @@ impl iron_remote_desktop::Session for Session {
                          RdpInputEvent::AudioInputUplink(uplink) => {
                              vec![ActiveStageOutput::ResponseFrame(active_stage.encode_dvc_messages(uplink.into_messages())?)]
                          }
@@ -234,7 +234,7 @@ index 67f864f6..793ec674 100644
                              if let Some(error) = error {
                                  return Err(anyhow::anyhow!("H.264 decoding failed: {error}").into());
                              }
-@@ -1087,6 +1088,7 @@ impl iron_remote_desktop::Session for Session {
+@@ -1144,6 +1145,7 @@ impl iron_remote_desktop::Session for Session {
                  for frame in active_stage.take_graphics_h264_frames() {
                      h264.decode(frame)?;
                  }

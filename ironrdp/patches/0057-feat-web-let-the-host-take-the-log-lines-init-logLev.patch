@@ -15,7 +15,7 @@ writer. Without one, nothing changes.
  2 files changed, 75 insertions(+), 14 deletions(-)
 
 diff --git a/crates/iron-remote-desktop/src/lib.rs b/crates/iron-remote-desktop/src/lib.rs
-index d5fb2829..9b5c795b 100644
+index 7fe20e29..7c6f3b30 100644
 --- a/crates/iron-remote-desktop/src/lib.rs
 +++ b/crates/iron-remote-desktop/src/lib.rs
 @@ -111,9 +111,9 @@ macro_rules! make_bridge {
@@ -30,7 +30,7 @@ index d5fb2829..9b5c795b 100644
              <$api as $crate::RemoteDesktopApi>::post_setup();
          }
  
-@@ -451,7 +451,9 @@ pub mod internal {
+@@ -456,7 +456,9 @@ pub mod internal {
      pub use web_sys;
  
      #[doc(hidden)]
@@ -41,7 +41,7 @@ index d5fb2829..9b5c795b 100644
          // When the `console_error_panic_hook` feature is enabled, we can call the
          // `set_panic_hook` function at least once during initialization, and then
          // we will get better error messages if our code ever panics.
-@@ -462,11 +464,55 @@ pub mod internal {
+@@ -467,11 +469,55 @@ pub mod internal {
          console_error_panic_hook::set_once();
  
          if let Ok(level) = log_level.parse::<tracing::Level>() {
@@ -99,7 +99,7 @@ index d5fb2829..9b5c795b 100644
          use tracing_subscriber::filter::LevelFilter;
          use tracing_subscriber::fmt::time::UtcTime;
          use tracing_subscriber::prelude::*;
-@@ -475,14 +521,26 @@ pub mod internal {
+@@ -480,14 +526,26 @@ pub mod internal {
          static INIT: std::sync::Once = std::sync::Once::new();
  
          INIT.call_once(|| {
@@ -134,7 +134,7 @@ index d5fb2829..9b5c795b 100644
      }
  }
 diff --git a/web-client/iron-remote-desktop-rdp/src/main.ts b/web-client/iron-remote-desktop-rdp/src/main.ts
-index 55328f19..9216ef5e 100644
+index c664f886..1c8e95ca 100644
 --- a/web-client/iron-remote-desktop-rdp/src/main.ts
 +++ b/web-client/iron-remote-desktop-rdp/src/main.ts
 @@ -17,10 +17,13 @@ import type { H264Done, H264Frame } from './H264Decoder';

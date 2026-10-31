@@ -1,43 +1,32 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: meanaverage <18336095+meanaverage@users.noreply.github.com>
 Date: Sun, 4 Oct 2026 13:26:34 -0700
-Subject: [PATCH 35/51] fix(graphics): cap the memory the Progressive decoder
- keeps at 1 GiB
+Subject: [PATCH] fix(graphics): cap the memory the Progressive decoder keeps
+ at 1 GiB
 
-The RemoteFX Progressive decoder keeps the state a server asks for: a
-codec context, with a tile grid sized for its surface, for every
-(surface, codec context id) the server names; a 36 KiB TileState for
-every tile it fills; and a 24 KiB sub-band reference for every tile
-position of a surface. Nothing bounded any of it, and only
-DeleteEncodingContext, DeleteSurface or a reset freed it. A server could
-open codec contexts on a 32768x32768 surface with empty payloads, 2 MiB
-of tile grid each (1 MiB in the WebAssembly build), or fill tiles at
-about 60 KiB per tile block of a few dozen bytes, until the WebAssembly
-instance every session shares ran out of memory: on 64-bit, 600 such
-codec contexts held 1.26 GB.
+The RemoteFX Progressive decoder keeps the state a server asks for: a tile
+grid sized for each surface it decodes into; a 36 KiB TileState for every
+tile it fills; and a 24 KiB sub-band reference for every tile position of
+a surface. Nothing bounded any of it, and only DeleteSurface or a reset
+freed it. A server could fill tiles at about 60 KiB per tile block of a
+few dozen bytes, or create many large surfaces, until the WebAssembly
+instance every session shares ran out of memory.
 
-The decoder now counts what it holds (codec contexts, tile grids, tiles
-and references) and refuses a codec context, grid, tile or reference
-that would take it past MAX_PROGRESSIVE_BYTES, 1 GiB, with
-ProgressiveDecodeError::MemoryLimitExceeded, which ends the session the
-way a malformed tile does. Deleting a codec context or a surface,
-resetting, and resizing a surface give the memory back. 1 GiB holds
-every tile of the 256 MiB of 32 bpp surfaces the EGFX compositor
-displays at most (64 Mi pixels, two 8K monitors), at about 60 KiB a
-tile.
+The decoder now counts what it holds (tile grids, tiles and references)
+and refuses a grid, tile or reference that would take it past
+MAX_PROGRESSIVE_BYTES, 1 GiB, with ProgressiveDecodeError::MemoryLimitExceeded,
+which drops the update the way a malformed tile does. Deleting a surface,
+resetting, and resizing a surface give the memory back; deleting a codec
+context releases nothing, since its surface's tiles stay (as upstream
+keeps them since #2117). 1 GiB holds every tile of the 256 MiB of 32 bpp
+surfaces the EGFX compositor displays at most (64 Mi pixels, two 8K
+monitors), at about 60 KiB a tile.
 
-A codec context is charged the size of its map entry and of its grid's
-slots, and CONTEXT_OVERHEAD_BYTES, 512, for what holding them takes
-besides: B-tree nodes about half full, for the context and, while an
+A surface's tile grid is charged the size of its map entry and of its
+slots, and SURFACE_OVERHEAD_BYTES, 512, for what holding them takes
+besides: B-tree nodes about half full, for the surface and, while an
 RDPGFX frame is open, its frame_tiles entry, and the grid's smallest
-allocation. An empty codec context on a one-tile surface takes about 150
-bytes (110 in the WebAssembly build) for a size of 48 (32): charged its
-size alone, codec contexts that a server opens with empty payloads
-inside a frame would hold more than three times the limit before
-reaching it, 3.1 GiB (3.4 GiB of WebAssembly memory). With the 512
-bytes, the 1.9 million it takes to reach the limit hold 274 MiB (209 MiB
-of WebAssembly memory). Windows and GNOME Remote Desktop open one or two
-codec contexts per surface.
+allocation.
 
 For the count to match what is allocated, references are now boxed: a
 B-tree node holds eleven values, and with 24 KiB values, the empty slots
@@ -45,14 +34,14 @@ of half-full nodes took up to as much memory again (a 4096-tile surface
 held 326 MB, now 252 MB). A TILE_UPGRADE for a tile without a first pass
 no longer allocates an empty tile.
 ---
- crates/ironrdp-graphics/src/progressive.rs | 423 +++++++++++++++++++--
- 1 file changed, 390 insertions(+), 33 deletions(-)
+ crates/ironrdp-graphics/src/progressive.rs | 443 +++++++++++++++++++--
+ 1 file changed, 406 insertions(+), 37 deletions(-)
 
 diff --git a/crates/ironrdp-graphics/src/progressive.rs b/crates/ironrdp-graphics/src/progressive.rs
-index 5ea16f38..e25b9637 100644
+index fc890793..2c258283 100644
 --- a/crates/ironrdp-graphics/src/progressive.rs
 +++ b/crates/ironrdp-graphics/src/progressive.rs
-@@ -1120,6 +1120,12 @@ impl SurfaceTiles {
+@@ -1121,6 +1121,12 @@ impl SurfaceTiles {
          self.tiles[idx].as_deref()
      }
  
@@ -65,11 +54,11 @@ index 5ea16f38..e25b9637 100644
      /// Reset all tiles (e.g., on context reset or surface resize).
      pub fn reset(&mut self) {
          for tile in &mut self.tiles {
-@@ -1170,6 +1176,15 @@ pub const MAX_SURFACE_DIM: u16 = 32768;
+@@ -1171,6 +1177,15 @@ pub const MAX_SURFACE_DIM: u16 = 32768;
  /// large `numRects` solely because many rectangles collapse to a simple region.
  const MAX_REGION_CLIPPING_WORK: usize = 1 << 20;
  
-+/// Most memory a [`ProgressiveDecoder`] holds for its codec contexts, tiles and sub-band
++/// Most memory a [`ProgressiveDecoder`] holds for its surfaces' tile grids, tiles and sub-band
 +/// references, in bytes.
 +///
 +/// The server chooses the surfaces, codec contexts and tiles the decoder keeps state for, and
@@ -81,7 +70,7 @@ index 5ea16f38..e25b9637 100644
  /// Error type for progressive decoding operations.
  #[derive(Debug)]
  pub enum ProgressiveDecodeError {
-@@ -1189,6 +1204,9 @@ pub enum ProgressiveDecodeError {
+@@ -1190,6 +1205,9 @@ pub enum ProgressiveDecodeError {
      MissingTileReference { x_idx: u16, y_idx: u16 },
      /// Surface dimensions exceed [`MAX_SURFACE_DIM`] per axis.
      SurfaceTooLarge { width: u16, height: u16 },
@@ -91,7 +80,7 @@ index 5ea16f38..e25b9637 100644
  }
  
  impl core::fmt::Display for ProgressiveDecodeError {
-@@ -1214,6 +1232,9 @@ impl core::fmt::Display for ProgressiveDecodeError {
+@@ -1215,6 +1233,9 @@ impl core::fmt::Display for ProgressiveDecodeError {
                       (MS-RDPEGFX 2.2.2.14 normative ceiling: 32766)"
                  )
              }
@@ -101,11 +90,11 @@ index 5ea16f38..e25b9637 100644
          }
      }
  }
-@@ -1249,11 +1270,73 @@ fn charge_region_clipping_work(used: &mut usize, units: usize) -> Result<(), Pro
+@@ -1250,6 +1271,63 @@ fn charge_region_clipping_work(used: &mut usize, units: usize) -> Result<(), Pro
      }
  }
  
-+/// Memory a [`ProgressiveDecoder`] holds for its codec contexts, tiles and sub-band references,
++/// Memory a [`ProgressiveDecoder`] holds for its surfaces' tile grids, tiles and sub-band references,
 +/// counted against a limit.
 +#[derive(Debug)]
 +struct MemoryBudget {
@@ -140,69 +129,59 @@ index 5ea16f38..e25b9637 100644
 +/// Bytes charged for a sub-band reference: its coefficients, and its entry in the map.
 +const REFERENCE_BYTES: usize = size_of::<DecDwtQ>() + size_of::<(SubBandDiffingTileKey, Box<DecDwtQ>)>();
 +
-+/// Bytes charged for a codec context on top of the size of its map entry and of its grid's slots.
++/// Bytes charged for a surface's tile grid on top of the size of its map entry and of its slots.
 +///
-+/// Those sizes leave out what holding them takes: the B-tree nodes of `contexts`, and of
++/// Those sizes leave out what holding them takes: the B-tree nodes of `surfaces`, and of
 +/// `frame_tiles` while an RDPGFX frame is open, have room for eleven entries and are about half
-+/// full, and the grid's allocation takes 16 bytes or more even for one slot. An empty codec
-+/// context on a one-tile surface is 48 bytes in size (32 in the WebAssembly build) and takes about
-+/// 150 (110): charged their size alone, codec contexts that a server opens with empty payloads
-+/// would hold three times the limit by the time they reached it. With 512 bytes more, they hold at
-+/// most about a quarter of it. Windows and GNOME Remote Desktop open one or two codec contexts per
-+/// surface.
-+const CONTEXT_OVERHEAD_BYTES: usize = 512;
++/// full, and the grid's allocation takes 16 bytes or more even for one slot. An empty grid for a
++/// one-tile surface is a few dozen bytes in size and takes about three times that: charged their
++/// size alone, grids for many small surfaces would hold several times the limit by the time they
++/// reached it. With 512 bytes more, they hold at most about a quarter of it.
++const SURFACE_OVERHEAD_BYTES: usize = 512;
 +
- /// Per-context progressive state, identified by `(surface_id, codec_context_id)`.
- struct ProgressiveContext {
-     surface: SurfaceTiles,
- }
- 
-+impl ProgressiveContext {
-+    /// Bytes charged for a codec context whose tile grid has `tile_count` slots, before any tile
-+    /// is filled.
-+    fn grid_bytes(tile_count: usize) -> usize {
-+        (size_of::<((u16, u32), Self)>() + CONTEXT_OVERHEAD_BYTES)
-+            .saturating_add(tile_count.saturating_mul(size_of::<Option<Box<TileState>>>()))
-+    }
++/// Bytes charged for a surface whose tile grid has `tile_count` slots, before any tile is filled.
++fn surface_grid_bytes(tile_count: usize) -> usize {
++    (size_of::<(u16, SurfaceTiles)>() + SURFACE_OVERHEAD_BYTES)
++        .saturating_add(tile_count.saturating_mul(size_of::<Option<Box<TileState>>>()))
++}
 +
-+    /// Bytes charged for this codec context: its tile grid and the tiles filled in it.
-+    fn held_bytes(&self) -> usize {
-+        let filled_tiles = self.surface.tiles.iter().filter(|tile| tile.is_some()).count();
-+        Self::grid_bytes(self.surface.tiles.len()).saturating_add(filled_tiles.saturating_mul(size_of::<TileState>()))
-+    }
++/// Bytes charged for a surface: its tile grid and the tiles filled in it.
++fn surface_held_bytes(surface: &SurfaceTiles) -> usize {
++    let filled_tiles = surface.tiles.iter().filter(|tile| tile.is_some()).count();
++    surface_grid_bytes(surface.tiles.len()).saturating_add(filled_tiles.saturating_mul(size_of::<TileState>()))
 +}
 +
  /// High-level progressive bitmap decoder for EGFX WireToSurface2 processing.
  ///
- /// Maintains per-context progressive state and surface-scoped sub-band
-@@ -1261,7 +1344,9 @@ struct ProgressiveContext {
- /// MS-RDPEGFX section 3.3.1.1 associates each codec context with a surface, so
- /// two surfaces can reuse a codec context ID without sharing progressive state.
+ /// Maintains progressive tile state and sub-band references per surface across
+@@ -1259,7 +1337,9 @@ fn charge_region_clipping_work(used: &mut usize, units: usize) -> Result<(), Pro
+ /// context. FreeRDP likewise keeps one progressive tile grid per surface.
+ /// Two surfaces never share progressive state.
  /// Feed it progressive bitmap data from `WireToSurface2Pdu.bitmap_data` and get
 -/// back decoded RGBA tiles for compositing. Call [`Self::begin_frame`] and
-+/// back decoded RGBA tiles for compositing. The codec contexts, tiles and references it keeps
++/// back decoded RGBA tiles for compositing. The tile grids, tiles and references it keeps
 +/// take at most [`MAX_PROGRESSIVE_BYTES`]: past that, [`Self::decode_bitmap`] fails with
 +/// [`ProgressiveDecodeError::MemoryLimitExceeded`]. Call [`Self::begin_frame`] and
  /// [`Self::end_frame`] around an RDPGFX frame so REGION blocks in separate
  /// bitmap payloads can share tiles.
  ///
-@@ -1286,10 +1371,14 @@ struct ProgressiveContext {
+@@ -1284,10 +1364,14 @@ fn charge_region_clipping_work(used: &mut usize, units: usize) -> Result<(), Pro
  /// ```
  pub struct ProgressiveDecoder {
-     contexts: BTreeMap<(u16, u32), ProgressiveContext>,
+     surfaces: BTreeMap<u16, SurfaceTiles>,
 -    references: BTreeMap<SubBandDiffingTileKey, DecDwtQ>,
 +    /// Boxed, so that a map node's unused slots each take a pointer, not 24 KiB.
 +    references: BTreeMap<SubBandDiffingTileKey, Box<DecDwtQ>>,
-     frame_tiles: BTreeMap<(u16, u32), BTreeSet<(u16, u16)>>,
+     frame_tiles: BTreeMap<u16, BTreeSet<(u16, u16)>>,
      frame_active: bool,
      surface_context_flags: BTreeMap<u16, bool>,
-+    /// Bytes held by `contexts` (their tile grids and tiles) and `references`, against
++    /// Bytes held by `surfaces` (their tile grids and tiles) and `references`, against
 +    /// [`MAX_PROGRESSIVE_BYTES`].
 +    memory: MemoryBudget,
  }
  
  impl ProgressiveDecoder {
-@@ -1301,6 +1390,10 @@ impl ProgressiveDecoder {
+@@ -1299,6 +1383,10 @@ impl ProgressiveDecoder {
              frame_tiles: BTreeMap::new(),
              frame_active: false,
              surface_context_flags: BTreeMap::new(),
@@ -213,44 +192,48 @@ index 5ea16f38..e25b9637 100644
          }
      }
  
-@@ -1377,13 +1470,19 @@ impl ProgressiveDecoder {
+@@ -1375,16 +1463,21 @@ impl ProgressiveDecoder {
              self.frame_tiles.clear();
          }
  
--        let (contexts, references, all_frame_tiles) = (&mut self.contexts, &mut self.references, &mut self.frame_tiles);
-+        let (contexts, references, all_frame_tiles, memory) = (
-+            &mut self.contexts,
+-        let (surfaces, references, all_frame_tiles) = (&mut self.surfaces, &mut self.references, &mut self.frame_tiles);
++        let (surfaces, references, all_frame_tiles, memory) = (
++            &mut self.surfaces,
 +            &mut self.references,
 +            &mut self.frame_tiles,
 +            &mut self.memory,
 +        );
  
-         // Get or create the context for this (surface_id, codec_context_id).
-         let context = match contexts.entry((surface_id, codec_context_id)) {
+         // Every codec context on a surface decodes into the surface's tile grid.
+         let surface = match surfaces.entry(surface_id) {
              Entry::Occupied(e) => e.into_mut(),
-             Entry::Vacant(e) => {
-                 let surface = SurfaceTiles::new(surface_width, surface_height, use_reduce_extrapolate)?;
-+                memory.charge(ProgressiveContext::grid_bytes(surface.tiles.len()))?;
-                 e.insert(ProgressiveContext { surface })
-             }
+-            Entry::Vacant(e) => e.insert(SurfaceTiles::new(
+-                surface_width,
+-                surface_height,
+-                use_reduce_extrapolate,
+-            )?),
++            Entry::Vacant(e) => {
++                let surface = SurfaceTiles::new(surface_width, surface_height, use_reduce_extrapolate)?;
++                memory.charge(surface_grid_bytes(surface.tiles.len()))?;
++                e.insert(surface)
++            }
          };
-@@ -1394,7 +1493,12 @@ impl ProgressiveDecoder {
-         let surface_resized =
-             context.surface.tiles_wide != expected_wide || context.surface.tiles_high != expected_high;
-         if surface_resized {
--            context.surface = SurfaceTiles::new(surface_width, surface_height, use_reduce_extrapolate)?;
-+            let surface = SurfaceTiles::new(surface_width, surface_height, use_reduce_extrapolate)?;
-+            memory.replace(
-+                context.held_bytes(),
-+                ProgressiveContext::grid_bytes(surface.tiles.len()),
-+            )?;
-+            context.surface = surface;
-         }
-         context.surface.use_reduce_extrapolate = use_reduce_extrapolate;
  
-@@ -1432,9 +1536,9 @@ impl ProgressiveDecoder {
+         // If surface dimensions changed, reallocate the tile grid.
+@@ -1392,7 +1485,9 @@ impl ProgressiveDecoder {
+         let expected_high = surface_height.div_ceil(TILE_DIM);
+         let surface_resized = surface.tiles_wide != expected_wide || surface.tiles_high != expected_high;
+         if surface_resized {
+-            *surface = SurfaceTiles::new(surface_width, surface_height, use_reduce_extrapolate)?;
++            let resized = SurfaceTiles::new(surface_width, surface_height, use_reduce_extrapolate)?;
++            memory.replace(surface_held_bytes(surface), surface_grid_bytes(resized.tiles.len()))?;
++            *surface = resized;
+         }
+         surface.use_reduce_extrapolate = use_reduce_extrapolate;
+ 
+@@ -1430,9 +1525,9 @@ impl ProgressiveDecoder {
                      surface_id,
-                     &mut context.surface,
+                     surface,
                      references,
 +                    memory,
                      tile_block,
@@ -260,33 +243,17 @@ index 5ea16f38..e25b9637 100644
                      use_reduce_extrapolate,
                  )?;
                  for tile in tiles {
-@@ -1529,7 +1633,9 @@ impl ProgressiveDecoder {
-     /// Called when the server sends RDPGFX_DELETE_ENCODING_CONTEXT, which
-     /// identifies both the surface and codec context.
-     pub fn delete_context(&mut self, surface_id: u16, codec_context_id: u32) {
--        self.contexts.remove(&(surface_id, codec_context_id));
-+        if let Some(context) = self.contexts.remove(&(surface_id, codec_context_id)) {
-+            self.memory.release(context.held_bytes());
-+        }
-         self.frame_tiles.remove(&(surface_id, codec_context_id));
-     }
- 
-@@ -1538,10 +1644,22 @@ impl ProgressiveDecoder {
+@@ -1536,15 +1631,30 @@ impl ProgressiveDecoder {
      /// Call this when discarding a surface so a subsequent surface with the
      /// same ID cannot inherit stale Progressive tile state.
      pub fn delete_surface(&mut self, surface_id: u16) {
--        self.contexts
--            .retain(|(context_surface_id, _), _| *context_surface_id != surface_id);
+-        self.surfaces.remove(&surface_id);
 -        self.references
 -            .retain(|(reference_surface_id, _, _), _| *reference_surface_id != surface_id);
-+        let mut released = 0usize;
-+        self.contexts.retain(|(context_surface_id, _), context| {
-+            let retained = *context_surface_id != surface_id;
-+            if !retained {
-+                released = released.saturating_add(context.held_bytes());
-+            }
-+            retained
-+        });
++        let mut released = self
++            .surfaces
++            .remove(&surface_id)
++            .map_or(0, |surface| surface_held_bytes(&surface));
 +        self.references.retain(|(reference_surface_id, _, _), _| {
 +            let retained = *reference_surface_id != surface_id;
 +            if !retained {
@@ -295,23 +262,22 @@ index 5ea16f38..e25b9637 100644
 +            retained
 +        });
 +        self.memory.release(released);
-         self.frame_tiles
-             .retain(|(context_surface_id, _), _| *context_surface_id != surface_id);
+         self.frame_tiles.remove(&surface_id);
          self.surface_context_flags.remove(&surface_id);
-@@ -1549,6 +1667,12 @@ impl ProgressiveDecoder {
+     }
  
-     /// Reset codec-context state while retaining surface sub-band references.
+     /// Reset tile state while retaining surface sub-band references.
      pub fn reset(&mut self) {
 +        let released = self
-+            .contexts
++            .surfaces
 +            .values()
-+            .map(ProgressiveContext::held_bytes)
++            .map(surface_held_bytes)
 +            .fold(0, usize::saturating_add);
 +        self.memory.release(released);
-         self.contexts.clear();
+         self.surfaces.clear();
          self.frame_tiles.clear();
          self.frame_active = false;
-@@ -1591,14 +1715,16 @@ fn progressive_quant_for(
+@@ -1587,14 +1697,16 @@ fn progressive_quant_for(
  fn decode_tile_block(
      surface_id: u16,
      surface: &mut SurfaceTiles,
@@ -331,7 +297,7 @@ index 5ea16f38..e25b9637 100644
      match tile_block {
          ProgressiveTile::Simple(tile) => {
              let x_idx = tile.x_idx;
-@@ -1611,13 +1737,16 @@ fn decode_tile_block(
+@@ -1607,13 +1719,16 @@ fn decode_tile_block(
              let reference_key = (surface_id, x_idx, y_idx);
              let reference = if is_difference {
                  Some(
@@ -349,7 +315,7 @@ index 5ea16f38..e25b9637 100644
              let tile_state = surface
                  .get_or_create(x_idx, y_idx)
                  .ok_or(ProgressiveDecodeError::TileOutOfBounds { x_idx, y_idx })?;
-@@ -1647,7 +1776,7 @@ fn decode_tile_block(
+@@ -1643,7 +1758,7 @@ fn decode_tile_block(
                      use_reduce_extrapolate,
                  },
              )?;
@@ -358,7 +324,7 @@ index 5ea16f38..e25b9637 100644
  
              let mut pixels = vec![0u8; usize::from(TILE_DIM) * usize::from(TILE_DIM) * TILE_BYTES_PER_PIXEL];
              tile_state.reconstruct_to_rgba(&mut pixels);
-@@ -1671,13 +1800,16 @@ fn decode_tile_block(
+@@ -1667,13 +1782,16 @@ fn decode_tile_block(
              let reference_key = (surface_id, x_idx, y_idx);
              let reference = if is_difference {
                  Some(
@@ -376,7 +342,7 @@ index 5ea16f38..e25b9637 100644
              let tile_state = surface
                  .get_or_create(x_idx, y_idx)
                  .ok_or(ProgressiveDecodeError::TileOutOfBounds { x_idx, y_idx })?;
-@@ -1706,7 +1838,7 @@ fn decode_tile_block(
+@@ -1702,7 +1820,7 @@ fn decode_tile_block(
                      use_reduce_extrapolate,
                  },
              )?;
@@ -385,7 +351,7 @@ index 5ea16f38..e25b9637 100644
  
              let mut pixels = vec![0u8; usize::from(TILE_DIM) * usize::from(TILE_DIM) * TILE_BYTES_PER_PIXEL];
              tile_state.reconstruct_to_rgba(&mut pixels);
-@@ -1723,14 +1855,14 @@ fn decode_tile_block(
+@@ -1719,14 +1837,14 @@ fn decode_tile_block(
              let x_idx = tile.x_idx;
              let y_idx = tile.y_idx;
  
@@ -406,7 +372,7 @@ index 5ea16f38..e25b9637 100644
  
              let pq = progressive_quant_for(tile.quality, prog_quant_vals)?;
  
-@@ -1740,7 +1872,7 @@ fn decode_tile_block(
+@@ -1736,7 +1854,7 @@ fn decode_tile_block(
                  [pq.y_quant, pq.cb_quant, pq.cr_quant],
                  tile.quality,
              )?;
@@ -415,7 +381,7 @@ index 5ea16f38..e25b9637 100644
  
              let mut pixels = vec![0u8; usize::from(TILE_DIM) * usize::from(TILE_DIM) * TILE_BYTES_PER_PIXEL];
              tile_state.reconstruct_to_rgba(&mut pixels);
-@@ -1755,6 +1887,26 @@ fn decode_tile_block(
+@@ -1751,6 +1869,26 @@ fn decode_tile_block(
      }
  }
  
@@ -442,9 +408,9 @@ index 5ea16f38..e25b9637 100644
  impl Default for ProgressiveDecoder {
      fn default() -> Self {
          Self::new()
-@@ -2203,14 +2355,17 @@ mod tests {
+@@ -2204,14 +2342,17 @@ mod tests {
          assert!(result.is_ok());
-         assert_eq!(decoder.contexts.len(), 1);
+         assert_eq!(decoder.surfaces.len(), 1);
          assert_eq!(decoder.references.len(), 1);
 -        let reference = *decoder
 +        let reference = **decoder
@@ -453,7 +419,7 @@ index 5ea16f38..e25b9637 100644
              .expect("original tile reference should be retained");
  
          decoder.reset();
-         assert!(decoder.contexts.is_empty());
+         assert!(decoder.surfaces.is_empty());
 -        assert_eq!(decoder.references.get(&(1, 0, 0)), Some(&reference));
 +        assert_eq!(
 +            decoder.references.get(&(1, 0, 0)).map(|reference| &**reference),
@@ -462,7 +428,15 @@ index 5ea16f38..e25b9637 100644
  
          assert!(
              decoder
-@@ -3653,7 +3808,7 @@ mod tests {
+@@ -2237,6 +2378,7 @@ mod tests {
+         assert!(decoder.decode_bitmap(2, 0, 800, 600, &stream).is_ok());
+         assert_eq!(decoder.surfaces.len(), 2);
+ 
++        // Deleting a codec context releases nothing: the tile state is the surface's.
+         decoder.delete_context(1, 0);
+         assert_eq!(decoder.surfaces.len(), 2);
+ 
+@@ -3650,7 +3792,7 @@ mod tests {
                  &first_tile_stream(0, &original_data, base_quant, progressive_quant, true),
              )
              .expect("original first-pass tile should decode");
@@ -471,7 +445,7 @@ index 5ea16f38..e25b9637 100644
              .references
              .get(&(1, 0, 0))
              .expect("original tile should retain a reference");
-@@ -3673,7 +3828,7 @@ mod tests {
+@@ -3670,7 +3812,7 @@ mod tests {
                  ),
              )
              .expect("upgrade tile should decode");
@@ -480,7 +454,16 @@ index 5ea16f38..e25b9637 100644
              .references
              .get(&(1, 0, 0))
              .expect("upgrade should update the retained reference");
-@@ -3735,7 +3890,7 @@ mod tests {
+@@ -3761,7 +3903,7 @@ mod tests {
+                     &first_tile_stream(0, &first_data, base_quant, progressive_quant, true),
+                 )
+                 .expect("first-pass tile should decode");
+-            let first_reference = *decoder
++            let first_reference = **decoder
+                 .references
+                 .get(&(1, 0, 0))
+                 .expect("first-pass tile should retain a reference");
+@@ -3821,7 +3963,7 @@ mod tests {
          decoder
              .decode_bitmap(1, 7, 64, 64, &simple_tile_stream(0, original_components, true))
              .expect("original tile should decode");
@@ -489,7 +472,7 @@ index 5ea16f38..e25b9637 100644
              .references
              .get(&(1, 0, 0))
              .expect("original tile reference should be retained");
-@@ -3772,7 +3927,10 @@ mod tests {
+@@ -3858,7 +4000,10 @@ mod tests {
              }
          }
  
@@ -501,7 +484,7 @@ index 5ea16f38..e25b9637 100644
  
          decoder.delete_surface(1);
          assert!(!decoder.references.contains_key(&(1, 0, 0)));
-@@ -3797,7 +3955,7 @@ mod tests {
+@@ -3883,7 +4028,7 @@ mod tests {
          decoder
              .decode_bitmap(1, 7, 64, 64, &simple_tile_stream(0, original_components, true))
              .expect("original tile should decode");
@@ -510,7 +493,7 @@ index 5ea16f38..e25b9637 100644
              .references
              .get(&(1, 0, 0))
              .expect("original tile reference should be retained");
-@@ -3805,7 +3963,10 @@ mod tests {
+@@ -3891,7 +4036,10 @@ mod tests {
          decoder
              .decode_bitmap(1, 7, 128, 64, &minimal_progressive_stream(true))
              .expect("resized surface should decode");
@@ -522,19 +505,14 @@ index 5ea16f38..e25b9637 100644
  
          decoder
              .decode_bitmap(
-@@ -3950,4 +4111,200 @@ mod tests {
+@@ -4036,4 +4184,225 @@ mod tests {
              }
          }
      }
 +
 +    /// Bytes of decoder state, counted the way the decoder charges them.
 +    fn held_bytes(decoder: &ProgressiveDecoder) -> usize {
-+        decoder
-+            .contexts
-+            .values()
-+            .map(ProgressiveContext::held_bytes)
-+            .sum::<usize>()
-+            + decoder.references.len() * REFERENCE_BYTES
++        decoder.surfaces.values().map(surface_held_bytes).sum::<usize>() + decoder.references.len() * REFERENCE_BYTES
 +    }
 +
 +    fn simple_tile_stream_at(x_idx: u16, y_idx: u16, include_context: bool) -> Vec<u8> {
@@ -563,7 +541,7 @@ index 5ea16f38..e25b9637 100644
 +    #[test]
 +    fn decoder_refuses_codec_contexts_past_its_memory_limit() {
 +        // A codec context on a surface at the cap holds a 512x512-slot tile grid.
-+        let grid_bytes = ProgressiveContext::grid_bytes(512 * 512);
++        let grid_bytes = surface_grid_bytes(512 * 512);
 +        let mut decoder = ProgressiveDecoder::new();
 +        decoder.memory.limit = 4 * grid_bytes;
 +
@@ -578,7 +556,8 @@ index 5ea16f38..e25b9637 100644
 +                )
 +                .is_ok()
 +        );
-+        // The surface's CONTEXT block serves its later codec contexts: an empty payload opens one.
++        // The surface's CONTEXT block serves its later codec contexts (an empty payload opens one), which
++        // share the surface's tile grid and take no grid of their own.
 +        for codec_context_id in 1..4 {
 +            assert!(
 +                decoder
@@ -586,18 +565,56 @@ index 5ea16f38..e25b9637 100644
 +                    .is_ok()
 +            );
 +        }
++        assert_eq!(decoder.surfaces.len(), 1);
++        // Surfaces at the cap take a grid each, until the limit.
++        for surface_id in 2..5 {
++            assert!(
++                decoder
++                    .decode_bitmap(
++                        surface_id,
++                        0,
++                        MAX_SURFACE_DIM,
++                        MAX_SURFACE_DIM,
++                        &minimal_progressive_stream(true)
++                    )
++                    .is_ok()
++            );
++        }
 +        assert!(matches!(
-+            decoder.decode_bitmap(1, 4, MAX_SURFACE_DIM, MAX_SURFACE_DIM, &[]),
++            decoder.decode_bitmap(
++                5,
++                0,
++                MAX_SURFACE_DIM,
++                MAX_SURFACE_DIM,
++                &minimal_progressive_stream(true)
++            ),
 +            Err(ProgressiveDecodeError::MemoryLimitExceeded { .. })
 +        ));
-+        assert_eq!(decoder.contexts.len(), 4);
++        assert_eq!(decoder.surfaces.len(), 4);
 +        assert_eq!(decoder.memory.used, held_bytes(&decoder));
 +
-+        // Deleting a codec context makes room for another.
++        // Deleting a codec context frees nothing; deleting a surface makes room for another.
 +        decoder.delete_context(1, 0);
++        assert!(matches!(
++            decoder.decode_bitmap(
++                5,
++                0,
++                MAX_SURFACE_DIM,
++                MAX_SURFACE_DIM,
++                &minimal_progressive_stream(true)
++            ),
++            Err(ProgressiveDecodeError::MemoryLimitExceeded { .. })
++        ));
++        decoder.delete_surface(1);
 +        assert!(
 +            decoder
-+                .decode_bitmap(1, 4, MAX_SURFACE_DIM, MAX_SURFACE_DIM, &[])
++                .decode_bitmap(
++                    5,
++                    0,
++                    MAX_SURFACE_DIM,
++                    MAX_SURFACE_DIM,
++                    &minimal_progressive_stream(true)
++                )
 +                .is_ok()
 +        );
 +        assert_eq!(decoder.memory.used, held_bytes(&decoder));
@@ -624,22 +641,13 @@ index 5ea16f38..e25b9637 100644
 +        .unwrap();
 +        decoder.decode_bitmap(1, 0, 1, 1, &context).unwrap();
 +
-+        // Empty payloads open more codec contexts on the one-tile surface, until the limit.
-+        let error = (1..)
-+            .find_map(|codec_context_id| decoder.decode_bitmap(1, codec_context_id, 1, 1, &[]).err())
-+            .unwrap();
-+
-+        assert!(
-+            matches!(error, ProgressiveDecodeError::MemoryLimitExceeded { .. }),
-+            "{error}"
-+        );
-+        // Such a codec context takes about 150 bytes on 64-bit targets.
-+        let contexts = decoder.contexts.len();
-+        assert!(
-+            contexts * 150 <= decoder.memory.limit,
-+            "{contexts} codec contexts fit in {} bytes",
-+            decoder.memory.limit
-+        );
++        // Empty payloads open more codec contexts on the one-tile surface: they share its tile state and its
++        // frame tiles, so however many there are, the surface is charged once.
++        for codec_context_id in 1..1_000 {
++            decoder.decode_bitmap(1, codec_context_id, 1, 1, &[]).unwrap();
++        }
++        assert_eq!(decoder.surfaces.len(), 1);
++        assert_eq!(decoder.frame_tiles.len(), 1);
 +        assert_eq!(decoder.memory.used, held_bytes(&decoder));
 +    }
 +
@@ -647,7 +655,7 @@ index 5ea16f38..e25b9637 100644
 +    fn decoder_refuses_tiles_past_its_memory_limit() {
 +        let mut decoder = ProgressiveDecoder::new();
 +        // Room for a 2x1-tile grid and one tile with its sub-band reference.
-+        decoder.memory.limit = ProgressiveContext::grid_bytes(2) + size_of::<TileState>() + REFERENCE_BYTES;
++        decoder.memory.limit = surface_grid_bytes(2) + size_of::<TileState>() + REFERENCE_BYTES;
 +
 +        assert!(
 +            decoder
@@ -664,7 +672,7 @@ index 5ea16f38..e25b9637 100644
 +            decoder.decode_bitmap(1, 0, 128, 64, &simple_tile_stream_at(1, 0, false)),
 +            Err(ProgressiveDecodeError::MemoryLimitExceeded { .. })
 +        ));
-+        assert!(decoder.contexts[&(1, 0)].surface.get(1, 0).is_none());
++        assert!(decoder.surfaces[&1].get(1, 0).is_none());
 +        assert_eq!(decoder.memory.used, held_bytes(&decoder));
 +
 +        decoder.delete_surface(1);
@@ -685,8 +693,8 @@ index 5ea16f38..e25b9637 100644
 +        let tiles = decoder.decode_bitmap(1, 0, 64, 64, &stream).unwrap();
 +
 +        assert!(tiles.is_empty());
-+        assert!(decoder.contexts[&(1, 0)].surface.get(0, 0).is_none());
-+        assert_eq!(decoder.memory.used, ProgressiveContext::grid_bytes(1));
++        assert!(decoder.surfaces[&1].get(0, 0).is_none());
++        assert_eq!(decoder.memory.used, surface_grid_bytes(1));
 +    }
 +
 +    #[test]
