@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.7.0-rc.1 (unreleased)
+
+**Changed**
+- Start 0.7.0 previews from the 0.6.2 development branch, to move to IronRDP's latest release.
+
 ## 0.6.2 (unreleased)
 
 **Changed**
