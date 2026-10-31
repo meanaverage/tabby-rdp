@@ -12,8 +12,8 @@ export function freeRDPClipboardLog (mode: ClipboardMode): string {
  * while the desktop has the focus (and Tabby is the app in front): this computer's is read then, every 100 ms, and only
  * a change is sent; what the server's gets is written here then, or, from a desktop without the focus, the latest of
  * it once it has the focus again; and it is remembered, so that it isn't sent straight back. A desktop in the
- * background can't change this computer's clipboard. View only: the desktop's text still comes here, but this
- * computer's doesn't go there.
+ * background can't change this computer's clipboard. In view only no clipboard goes either way, and what the desktop's
+ * clipboard gets meanwhile is dropped.
  *
  * The ways are asked on every turn: a narrowing while connected (see RemoteDesktopService.applyClipboard) stops the
  * sending at once, and is passed on to the helper (`narrow`), which drops what it was holding for the server.
@@ -28,8 +28,8 @@ export class FreeRDPClipboard {
     constructor (
         private readonly io: { read: () => string, write: (text: string) => void, send: (text: string) => void, narrow: (ways: ClipboardWays) => void },
         private readonly ways: () => ClipboardWays,
-        /** `focused`: the desktop has the focus; `typing`: and isn't view only. */
-        private readonly focus: { focused: () => boolean, typing: () => boolean },
+        /** `focused`: the desktop has the focus; `viewOnly`: it is in view only. */
+        private readonly focus: { focused: () => boolean, viewOnly: () => boolean },
         private readonly interval = 100,
     ) {
         // The ways the connection was set up with, which the helper has.
@@ -48,6 +48,10 @@ export class FreeRDPClipboard {
             this.told = ways
             this.io.narrow(ways)
         }
+        if (this.focus.viewOnly()) {
+            this.pending = undefined
+            return
+        }
         if (!this.focus.focused()) {
             return
         }
@@ -59,7 +63,7 @@ export class FreeRDPClipboard {
                 this.io.write(text)
             }
         }
-        if (!ways.toRemote || !this.focus.typing()) {
+        if (!ways.toRemote) {
             return
         }
         let text: string
@@ -76,7 +80,7 @@ export class FreeRDPClipboard {
 
     /** Text the server's clipboard got, if it may come: written here now with the focus, else once it has it. */
     remote (text: string): void {
-        if (!this.ways().fromRemote) {
+        if (!this.ways().fromRemote || this.focus.viewOnly()) {
             return
         }
         if (this.focus.focused()) {

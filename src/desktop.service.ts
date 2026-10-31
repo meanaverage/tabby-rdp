@@ -4361,7 +4361,7 @@ export class RemoteDesktopService {
             write: text => this.platform.setClipboard({ text }),
             send: text => { if (!native.sendClipboardText(text)) { session.log.push('clipboard: text larger than 1 MiB is not sent') } },
             narrow: ways => native.narrowClipboard(ways),
-        }, () => this.clipboardWaysOf(session), { focused: () => ui.isFocused(), typing: () => ui.hasKeyboard() })
+        }, () => this.clipboardWaysOf(session), { focused: () => ui.isFocused(), viewOnly: () => ui.isViewOnly() })
         const { username, domain } = signInParts(endpoint.credentials.username, endpoint.domain ?? spec.domain ?? '')
         const gateway = spec.gateway ? parseGateway(spec.gateway) : null
         session.status(`Connecting to ${spec.name} with FreeRDP…`)

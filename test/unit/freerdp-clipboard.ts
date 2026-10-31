@@ -1,5 +1,5 @@
-// FreeRDP's text clipboard (FreeRDPClipboard): the clipboard goes only while the desktop has the focus (this computer's
-// text not in view only), this computer's text only when it changed and may go, the server's only when it may come,
+// FreeRDP's text clipboard (FreeRDPClipboard): the clipboard goes only while the desktop has the focus and not in view
+// only, this computer's text only when it changed and may go, the server's only when it may come,
 // nothing is sent straight back, a narrowing is passed on to the helper, and nothing is read before the connection is up.
 // Reads the built plugin: npm run build && npm run test:unit
 import { test } from 'node:test'
@@ -19,7 +19,7 @@ function fixture (ways: Ways = { toRemote: true, fromRemote: true }, interval = 
         write: (text: string) => { state.local = text },
         send: (text: string) => { state.sent.push(text) },
         narrow: (next: Ways) => { state.narrowed.push(next) },
-    }, () => state.ways, { focused: () => state.focused, typing: () => state.focused && !state.viewOnly }, interval)
+    }, () => state.ways, { focused: () => state.focused, viewOnly: () => state.viewOnly }, interval)
     return { state, clipboard }
 }
 
@@ -104,16 +104,23 @@ test('a narrowing while connected stops the sending at once and is passed on to 
     assert.deepEqual(state.narrowed.at(-1), { toRemote: false, fromRemote: false })
 })
 
-test('view only: the desktop\'s text still comes here, but this computer\'s isn\'t read or sent', t => {
+test('view only: no clipboard either way, and what came meanwhile is dropped', t => {
     const { state, clipboard } = fixture()
     t.after(() => clipboard.stop())
+    state.focused = false
+    clipboard.remote('before')
+    state.focused = true
     state.viewOnly = true
     state.local = 'secret'
+    clipboard.remote('theirs')
     clipboard.poll()
     assert.equal(state.reads, 0)
-    clipboard.remote('theirs')
-    assert.equal(state.local, 'theirs')
+    assert.equal(state.local, 'secret')
     assert.deepEqual(state.sent, [])
+    state.viewOnly = false
+    clipboard.poll()
+    assert.equal(state.local, 'secret', 'nothing from view only is written afterwards')
+    assert.deepEqual(state.sent, ['secret'], 'this computer\'s clipboard goes again once view only ends')
 })
 
 test('a clipboard that can\'t be read sends nothing', t => {
