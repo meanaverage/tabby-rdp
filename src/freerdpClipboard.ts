@@ -9,9 +9,11 @@ export function freeRDPClipboardLog (mode: ClipboardMode): string {
 /**
  * Text through FreeRDP's clipboard channel: the helper's 'P' message offers this computer's text to the server, and 'T'
  * brings what the server's clipboard gets. As IronRDP's component does (see clipboard.ts), the clipboard goes only
- * while the desktop has the keyboard (and Tabby has the focus): this computer's is read then, every 100 ms, and only a
- * change is sent; what the server's got meanwhile is written here then, the latest of it, and remembered, so that it
- * isn't sent straight back. A desktop in the background can't change this computer's clipboard.
+ * while the desktop has the focus (and Tabby is the app in front): this computer's is read then, every 100 ms, and only
+ * a change is sent; what the server's gets is written here then, or, from a desktop without the focus, the latest of
+ * it once it has the focus again; and it is remembered, so that it isn't sent straight back. A desktop in the
+ * background can't change this computer's clipboard. View only: the desktop's text still comes here, but this
+ * computer's doesn't go there.
  *
  * The ways are asked on every turn: a narrowing while connected (see RemoteDesktopService.applyClipboard) stops the
  * sending at once, and is passed on to the helper (`narrow`), which drops what it was holding for the server.
@@ -26,7 +28,8 @@ export class FreeRDPClipboard {
     constructor (
         private readonly io: { read: () => string, write: (text: string) => void, send: (text: string) => void, narrow: (ways: ClipboardWays) => void },
         private readonly ways: () => ClipboardWays,
-        private readonly hasKeyboard: () => boolean,
+        /** `focused`: the desktop has the focus; `typing`: and isn't view only. */
+        private readonly focus: { focused: () => boolean, typing: () => boolean },
         private readonly interval = 100,
     ) {
         // The ways the connection was set up with, which the helper has.
@@ -38,14 +41,14 @@ export class FreeRDPClipboard {
         this.timer ??= setInterval(() => this.poll(), this.interval)
     }
 
-    /** One turn: passes a narrowing on, then, with the keyboard, writes what came and sends what changed here. */
+    /** One turn: passes a narrowing on, then, with the focus, writes what came and sends what changed here. */
     poll (): void {
         const ways = this.ways()
         if (ways.toRemote !== this.told.toRemote || ways.fromRemote !== this.told.fromRemote) {
             this.told = ways
             this.io.narrow(ways)
         }
-        if (!this.hasKeyboard()) {
+        if (!this.focus.focused()) {
             return
         }
         if (this.pending !== undefined) {
@@ -56,7 +59,7 @@ export class FreeRDPClipboard {
                 this.io.write(text)
             }
         }
-        if (!ways.toRemote) {
+        if (!ways.toRemote || !this.focus.typing()) {
             return
         }
         let text: string
@@ -71,9 +74,16 @@ export class FreeRDPClipboard {
         }
     }
 
-    /** Text the server's clipboard got: written here on the next turn with the keyboard, if it may come. */
+    /** Text the server's clipboard got, if it may come: written here now with the focus, else once it has it. */
     remote (text: string): void {
-        if (this.ways().fromRemote) {
+        if (!this.ways().fromRemote) {
+            return
+        }
+        if (this.focus.focused()) {
+            this.pending = undefined
+            this.last = text
+            this.io.write(text)
+        } else {
             this.pending = text
         }
     }

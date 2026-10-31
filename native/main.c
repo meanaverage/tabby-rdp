@@ -255,7 +255,8 @@ static UINT32 clipboard_ways(Context* c) {
     LeaveCriticalSection(&c->clipboardLock);
     return ways;
 }
-/* Under offerLock: offers the text, or withdraws an offer when there's none or it may no longer go. */
+/* Under offerLock: offers the text, or an empty list when there's none or it may no longer go. FreeRDP sends only
+ * the first empty list, so a withdrawn offer may stay announced; its data requests are refused all the same. */
 static UINT clipboard_offer_locked(Context* c, CliprdrClientContext* cliprdr) {
     CLIPRDR_FORMAT text = { CF_UNICODETEXT, NULL };
     CLIPRDR_FORMAT_LIST list = { 0 };
@@ -331,7 +332,7 @@ static UINT clipboard_server_data_response(CliprdrClientContext* cliprdr, const 
     Context* c = cliprdr->custom;
     /* Bounded before it is scanned or converted: UTF-8 of more than one IPC frame wouldn't be sent anyway. */
     if (!(response->common.msgFlags & CB_RESPONSE_OK) || !(clipboard_ways(c) & CLIPBOARD_FROM_REMOTE) || !response->requestedFormatData ||
-        response->common.dataLen > 2u * MAX_COMMAND)
+        response->common.dataLen > 2u * MAX_COMMAND + sizeof(WCHAR))
         return CHANNEL_RC_OK;
     size_t chars = response->common.dataLen / sizeof(WCHAR), length = 0;
     const WCHAR* text = (const WCHAR*)response->requestedFormatData;
@@ -540,6 +541,9 @@ int main(int argc, char** argv) {
     BOOLSET(NSCodec, TRUE); BOOLSET(RemoteFxCodec, TRUE);
     /* No clipboard channel at all when the clipboard is off either way. */
     BOOLSET(RedirectClipboard, c->clipboard != 0); BOOLSET(AudioPlayback, FALSE); BOOLSET(DeviceRedirection, FALSE);
+    /* FreeRDP filters the channel by these too: text only, the ways the parent asked for, never files. */
+    NUM(ClipboardFeatureMask, ((c->clipboard & CLIPBOARD_TO_REMOTE) ? CLIPRDR_FLAG_LOCAL_TO_REMOTE : 0) |
+        ((c->clipboard & CLIPBOARD_FROM_REMOTE) ? CLIPRDR_FLAG_REMOTE_TO_LOCAL : 0));
     BOOLSET(SupportMultitransport, FALSE); /* The parent supplies one authenticated TCP transport. */
     for (int i = 1; i <= 3; i++) { memset(fields[i], 0, strlen(fields[i])); free(fields[i]); }
     free_command(start);

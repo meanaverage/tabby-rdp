@@ -107,8 +107,10 @@ export class FreeRDPView {
 
     setVisibility (visible: boolean): void { this.visible = visible; if (!visible) { this.releaseInput() } }
     setReadOnly (readOnly: boolean): void { this.readOnly = readOnly; if (readOnly) { this.releaseInput() } }
-    /** Whether keys typed now go to the desktop: shown, not view only, focused, and Tabby the app in front. */
-    hasKeyboard (): boolean { return this.visible && !this.readOnly && document.activeElement === this.element && document.hasFocus() }
+    /** Whether the desktop has the focus: shown, focused, and Tabby the app in front. */
+    isFocused (): boolean { return this.visible && document.activeElement === this.element && document.hasFocus() }
+    /** Whether keys typed now go to the desktop: focused, and not view only. */
+    hasKeyboard (): boolean { return this.isFocused() && !this.readOnly }
     setKeyboardUnicodeMode (unicode: boolean): void { this.unicode = unicode }
     setScale (scale: number): void { this.scale = scale; this.fit() }
     resize (width: number, height: number, scale = 100): void { this.native.send('R', numbers(width, height, scale)) }
