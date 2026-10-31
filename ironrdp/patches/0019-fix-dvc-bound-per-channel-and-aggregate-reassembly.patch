@@ -109,7 +109,7 @@ index f1d233d4..25d6c0b0 100644
          Ok(Vec::new())
      }
 diff --git a/crates/ironrdp-dvc/src/client.rs b/crates/ironrdp-dvc/src/client.rs
-index 6a9fef2e..b579779b 100644
+index 4d303cc5..41614ee4 100644
 --- a/crates/ironrdp-dvc/src/client.rs
 +++ b/crates/ironrdp-dvc/src/client.rs
 @@ -127,9 +127,13 @@ impl DynamicVirtualChannel {
@@ -128,7 +128,7 @@ index 6a9fef2e..b579779b 100644
          if let Some(complete_data) = complete_data {
              self.channel_processor.process(channel_id, &complete_data)
          } else {
-@@ -601,9 +605,8 @@ impl DrdynvcClient {
+@@ -615,9 +619,8 @@ impl DrdynvcClient {
          let channel_id = data.channel_id();
          let messages = self
              .dynamic_channels
@@ -140,7 +140,7 @@ index 6a9fef2e..b579779b 100644
  
          encode_dvc_messages(channel_id, messages, ChannelFlags::empty()).map_err(|e| encode_err!(e))
      }
-@@ -745,6 +748,12 @@ struct DynamicChannelSet {
+@@ -767,6 +770,12 @@ struct DynamicChannelSet {
      listeners: BTreeMap<DynamicChannelName, ListenerEntry>,
      active_channels: BTreeMap<DynamicChannelId, DynamicVirtualChannel>,
      type_id_to_channel_id: BTreeMap<TypeId, DynamicChannelId>,
@@ -153,7 +153,7 @@ index 6a9fef2e..b579779b 100644
  }
  
  impl DynamicChannelSet {
-@@ -754,6 +763,8 @@ impl DynamicChannelSet {
+@@ -776,6 +785,8 @@ impl DynamicChannelSet {
              listeners: BTreeMap::new(),
              active_channels: BTreeMap::new(),
              type_id_to_channel_id: BTreeMap::new(),
@@ -162,7 +162,7 @@ index 6a9fef2e..b579779b 100644
          }
      }
  
-@@ -804,6 +815,9 @@ impl DynamicChannelSet {
+@@ -826,6 +837,9 @@ impl DynamicChannelSet {
  
          let mut channel = DynamicVirtualChannel::from_boxed(channel);
          let _messages = channel.start(channel_id)?;
@@ -172,7 +172,7 @@ index 6a9fef2e..b579779b 100644
          self.active_channels.insert(channel_id, channel);
          Ok(())
      }
-@@ -821,11 +835,15 @@ impl DynamicChannelSet {
+@@ -843,11 +857,15 @@ impl DynamicChannelSet {
          }
  
          let dvc = DynamicVirtualChannel::from_boxed(processor);
@@ -189,7 +189,7 @@ index 6a9fef2e..b579779b 100644
                  e.into_mut()
              }
              alloc::collections::btree_map::Entry::Vacant(e) => e.insert(dvc),
-@@ -833,6 +851,16 @@ impl DynamicChannelSet {
+@@ -855,6 +873,16 @@ impl DynamicChannelSet {
          Some(dvc)
      }
  
@@ -206,7 +206,7 @@ index 6a9fef2e..b579779b 100644
      fn get_by_type_id(&self, type_id: TypeId) -> Option<&DynamicVirtualChannel> {
          self.type_id_to_channel_id
              .get(&type_id)
-@@ -860,6 +888,8 @@ impl DynamicChannelSet {
+@@ -882,6 +910,8 @@ impl DynamicChannelSet {
  
      fn remove_by_channel_id(&mut self, id: DynamicChannelId) -> Option<DynamicVirtualChannel> {
          self.active_channels.remove(&id).inspect(|dvc| {
@@ -425,7 +425,7 @@ index 88ed9e0c..40a59780 100644
          self.channel_id = Some(channel_id);
          self.state = State::WaitVersion;
 diff --git a/crates/ironrdp-testsuite-core/tests/dvc/client.rs b/crates/ironrdp-testsuite-core/tests/dvc/client.rs
-index 03b2ff5f..1590fde6 100644
+index 715f1bae..66fad0f5 100644
 --- a/crates/ironrdp-testsuite-core/tests/dvc/client.rs
 +++ b/crates/ironrdp-testsuite-core/tests/dvc/client.rs
 @@ -1,11 +1,16 @@
@@ -621,6 +621,6 @@ index 03b2ff5f..1590fde6 100644
 +    assert!(client.process(&data_first(2, mib(1) + 1, b"first")).is_err());
 +}
 +
+ // oracle: regression #2005 - GNOME Remote Desktop sends AUDIO_PLAYBACK_DVC data right after its Create Request,
+ // before it reads the client's decline.
  #[test]
- fn data_for_a_channel_the_client_declined_is_dropped() {
-     // A server can send data on a channel before it sees the client decline it in the Create

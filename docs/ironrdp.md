@@ -15,7 +15,7 @@ IronRDP has a change, released, the patch for it goes:
 
 | Change | Upstream |
 |---|---|
-| Keep the session when a server sends data on a channel the client declined | [Devolutions/IronRDP#2005](https://github.com/Devolutions/IronRDP/pull/2005) (open) |
+| Keep the session when a server sends data on a channel the client declined | [Devolutions/IronRDP#2341](https://github.com/Devolutions/IronRDP/pull/2341) (open). It replaced our first attempt, [#2005](https://github.com/Devolutions/IronRDP/pull/2005), which dropped data for any channel that wasn't open |
 | Fit the web component to its container, not the whole window | [Devolutions/IronRDP#2006](https://github.com/Devolutions/IronRDP/pull/2006) (open) |
 | Set up the clipboard before signaling `ready`, so it works for apps that connect right away | [Devolutions/IronRDP#2018](https://github.com/Devolutions/IronRDP/pull/2018), merged and released; no longer a patch |
 | Echo the correct size in the sound channel's Training Confirm | Ours, [#2019](https://github.com/Devolutions/IronRDP/pull/2019), was closed for [#2294](https://github.com/Devolutions/IronRDP/pull/2294) (not ours), the same fix, merged; taken as #2294's commit until it is released |

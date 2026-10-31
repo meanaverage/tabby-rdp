@@ -160,10 +160,10 @@ index c820a672..fb67781a 100644
          if self.state != CliprdrState::Initialization {
              error!("Attempted to start clipboard static virtual channel in invalid state");
 diff --git a/crates/ironrdp-dvc/src/client.rs b/crates/ironrdp-dvc/src/client.rs
-index 7b286355..6a9fef2e 100644
+index f5697412..4d303cc5 100644
 --- a/crates/ironrdp-dvc/src/client.rs
 +++ b/crates/ironrdp-dvc/src/client.rs
-@@ -182,7 +182,7 @@ impl DrdynvcClient {
+@@ -183,7 +183,7 @@ impl DrdynvcClient {
      pub fn new() -> Self {
          Self {
              dynamic_channels: DynamicChannelSet::new(),

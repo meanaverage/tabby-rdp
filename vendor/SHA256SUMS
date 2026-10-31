@@ -3,7 +3,7 @@
 # Node.js v26.8.2, on aarch64-apple-darwin. Check from the repository's root: sha256sum -c vendor/SHA256SUMS
 # (or shasum -a 256 -c vendor/SHA256SUMS).
 9668758ea58ad67255ff54196ee62350704c2e33e55473f907b2699488676491  ironrdp/BASE_COMMIT
-6c95163e3effad26ff0bc243975a35162e59d3d6ba7158e465f64194cadce4ef  ironrdp/patches/0001-fix-dvc-drop-data-for-a-channel-that-is-not-open-ins.patch
+5ccd75d882162477de85210054109735d91dadd3f395ed6836997ef8db1ff5ef  ironrdp/patches/0001-fix-dvc-drop-data-for-a-channel-the-client-declined-.patch
 daa722404f337d066b388a7cb38f8d3ea61b40c8c6aaccc9b994934471c74234  ironrdp/patches/0002-fix-web-fit-the-canvas-to-the-host-element-not-the-w.patch
 d219ec46cf5194e857d8367b084ea1911be1ff4d20d3ef39621eb57f85d08e73  ironrdp/patches/0004-fix-rdpsnd-echo-the-server-s-wPackSize-in-the-Traini.patch
 edbc7a5587c5829ec1846bb99ddcc1306ec369fd5b22f237817232fe0b877e00  ironrdp/patches/0005-feat-web-graphics-pipeline-EGFX-per-connection-and-f.patch
@@ -17,8 +17,8 @@ ff335232e7add6ba313e58aab30cbdb192084eb40f98aec999d501d4d647baf8  ironrdp/patche
 867935a42e27c657ea32a487abea8688956e041f6da6c3db80f2820078df4f0b  ironrdp/patches/0014-fix-web-read-H.264-pictures-correctly-where-WebKit-i.patch
 8af642e76ca856aa9552234c0b28839c4dd49ed42f1862f25e59e0a8260f6a13  ironrdp/patches/0015-feat-web-drive-redirection-through-a-JavaScript-file.patch
 d1e4a5741d01c6632a59a4c983d77e99de666935f9f92ead7fe2e67f6b7f9ba6  ironrdp/patches/0017-perf-web-read-H.264-regions-that-are-far-apart-one-b.patch
-aa88a4965c2beae4700f413815116f4d9f923e7e139e834879318b87c03ac386  ironrdp/patches/0018-fix-svc-bound-all-static-channel-reassembly-paths.patch
-d94f2d02d9063de999b5295b6a845deaf8604555c785e30cd902fea95177d622  ironrdp/patches/0019-fix-dvc-bound-per-channel-and-aggregate-reassembly.patch
+fa896eaabfb15f310883551d9c6ac1de1caa33165382a0c84f6fcc7a63320bcb  ironrdp/patches/0018-fix-svc-bound-all-static-channel-reassembly-paths.patch
+af3ab3b0a6dfa7f815ee31f0fa0fe5e107eae6d0fc1d42f3924ed589d09e568c  ironrdp/patches/0019-fix-dvc-bound-per-channel-and-aggregate-reassembly.patch
 1b3fa09329bbf20c28f023b5abc5bbfa2c5cb5605ce4477b87259123728f8538  ironrdp/patches/0020-fix-web-bound-queued-drive-requests-and-bytes.patch
 9d6294fe175d4b0f053e025c373618b1baecfa19b71e8f8634bc4332eff8dbf5  ironrdp/patches/0025-fix-connector-require-nonce-bound-CredSSP-version-5-.patch
 1df5d7b285af94d2f0d1418524da981b6cab1cb5bed6a7a600f5215624615946  ironrdp/patches/0027-fix-cliprdr-cap-clipboard-formats-and-format-names.patch
@@ -51,7 +51,7 @@ eae28852748b9d373c2cc941a26005b62b44668543bf12706befaa9422674dd8  ironrdp/patche
 5f02fe4afbc2ee3e4c260b9859f6911e3877f8ffa64030f893aba890b637fd6b  ironrdp/patches/0056-fix-pdu-keep-license-keying-material-and-licenses-ou.patch
 5f739f9019ba02284b587ec3f8a175ac142ba2fba24456ac6cb6f0b8c7113848  ironrdp/patches/0057-feat-web-let-the-host-take-the-log-lines-init-logLev.patch
 871037c93900c95d5a904340c8d09a5b0c6f7ccb2578b84320f298b5ad173b81  vendor/IRONRDP-LICENSE
-4770753ce9173c2eaac2eb500feb924feba819692db348f9491e62be4b2e437b  vendor/iron-remote-desktop-rdp.js
+127679b31aa0e159f03a6837e28e07052f860153bae8b7ca2d4b9c8c585cda1e  vendor/iron-remote-desktop-rdp.js
 08ac62aff528b721b9ab5472c567089a273c18a0e0ca4dc06764f738caa2256a  vendor/iron-remote-desktop.js
-79f489d3ef7d40961d828087ebbe8469f447ebf3ad8b00db175740a645dcbd48  vendor/ironrdp_web_bg.wasm
-5c5be9ece919472ce022063035721f7287de714c58ebbc6fb3b7738eea25e33e  vendor/ironrdp-factory.js
+83543b23bf0b6d57291089c1879656500737485afca46226491c93787c275873  vendor/ironrdp_web_bg.wasm
+b4c7ef6c8a9e940f8f096b907d67a8cc443e4e87d1a8f59459c6be05cf683b7d  vendor/ironrdp-factory.js
