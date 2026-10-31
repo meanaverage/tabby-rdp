@@ -115,6 +115,7 @@ function stubComponent (compose = true) {
         setEnableClipboard (enable: boolean) {
             calls.push(`setEnableClipboard(${enable})`)
         },
+        async setClipboardPaused () { },
     }
     return { ui, calls }
 }
@@ -162,6 +163,15 @@ test('a component that doesn\'t compose the hooks can\'t be kept from sending: t
         assert.equal(setUpClipboard(own.ui, { onUploadStarted () { }, onUploadFinished () { } }, mode, () => true).mode, 'off')
     }
     assert.throws(() => setUpClipboard({ enableFileTransfer () { } }, {}, 'off', () => false), /can't turn its clipboard off/)
+})
+
+test('a component that can\'t pause its clipboard can\'t keep it out of view only: the clipboard is off then', () => {
+    for (const mode of ['both', 'fromRemote']) {
+        const { ui, calls } = stubComponent()
+        delete (ui as any).setClipboardPaused
+        assert.equal(setUpClipboard(ui, {}, mode, () => true).mode, 'off')
+        assert.deepEqual(calls, ['enableFileTransfer', 'suppress', 'setEnableClipboard(false)'])
+    }
 })
 
 // ---- the vendored component --------------------------------------------------------------------------------------
@@ -266,6 +276,8 @@ async function connect (mode: string) {
         username: 'u', extensions: [], desktopSize: { width: 1024, height: 768 } })
     return {
         set,
+        /** The component's API, as the plugin gets it. */
+        ui,
         builder,
         callbacks,
         provider,
@@ -374,6 +386,53 @@ test('the component, narrowed while a read of this computer\'s clipboard is unde
         release()
         await sleep(350)
         assert.deepEqual(c.sent(), ['copied here'])
+    } finally {
+        c.close()
+    }
+})
+
+test('the component in view only: no clipboard either way, what was offered withdrawn, and offered again after', async () => {
+    const c = await connect('both')
+    try {
+        await sleep(250)
+        assert.deepEqual(c.sent(), ['copied here'])
+        await c.ui.setClipboardPaused(true)
+        assert.deepEqual(c.sent(), ['copied here', ''], 'withdrawn: it was the latest there')
+        const reads = browser.reads
+        await sleep(350)
+        assert.equal(browser.reads, reads, 'this computer\'s clipboard isn\'t read')
+        await assert.rejects(c.ui.sendClipboardData(), 'nor sent on request (paste to all)')
+        await c.ui.setClipboardPaused(false)
+        await sleep(350)
+        assert.deepEqual(c.sent(), ['copied here', '', 'copied here'], 'offered again once view only ends')
+    } finally {
+        c.close()
+    }
+})
+
+test('the component in view only: the remote\'s copies are dropped and left alone; copies here go once it ends', async () => {
+    const c = await connect('both')
+    try {
+        await sleep(250)
+        await c.ui.setClipboardPaused(true)
+        c.remoteCopies('copied there')
+        c.clipboard.flushFocused()
+        await sleep(350)
+        assert.equal(browser.writes.length, 0, 'what the remote copies isn\'t written here')
+        // That copy is the latest there now: resuming doesn't offer this computer's clipboard over it.
+        await c.ui.setClipboardPaused(false)
+        await sleep(350)
+        assert.deepEqual(c.sent(), ['copied here', ''])
+        assert.equal(browser.writes.length, 0, 'nor is it written once view only ends')
+        // Not withdrawn (the remote's own copy is the latest there); what is copied here meanwhile goes once view only
+        // ends, as it would once the desktop had the focus again.
+        await c.ui.setClipboardPaused(true)
+        browser.local = 'copied while watching'
+        await sleep(350)
+        assert.deepEqual(c.sent(), ['copied here', ''])
+        await c.ui.setClipboardPaused(false)
+        await sleep(350)
+        assert.deepEqual(c.sent(), ['copied here', '', 'copied while watching'])
     } finally {
         c.close()
     }

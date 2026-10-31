@@ -26,7 +26,7 @@ screenshots, scaling, reconnect and the display-control channel. It uses the plu
 Gateway transports, credential store and certificate/NLA prompts. Each attempt has its own native process.
 
 The preview shares clipboard **text** the ways the clipboard setting allows (both ways, only from the remote desktop, or
-off, which leaves the clipboard channel out); in view only, no clipboard goes either way. It does **not** yet implement pictures and files on the clipboard, audio
+off, which leaves the clipboard channel out); in [view only](../docs/sharing.md#view-only), no clipboard goes either way, as with IronRDP. It does **not** yet implement pictures and files on the clipboard, audio
 playback/capture, shared folders, or Hyper-V VMConnect.
 The supplied build uses native bitmap decoding (and the graphics pipeline for GNOME), with optional H.264 codecs
 disabled. The macOS/Linux builds omit Kerberos/GSSAPI and use NTLM. Windows can use native SSPI; Kerberos and domain-policy behavior are not qualified. Hyper-V consoles that

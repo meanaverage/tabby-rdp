@@ -15,6 +15,10 @@
  *   connection: see RemoteDesktopService.applyClipboard); the plugin's own sending (paste to all, files) checks the
  *   ways as well.
  * The other way only, from this computer to the remote desktop, isn't offered.
+ *
+ * View only (see DesktopSession.pauseClipboard) pauses the component's clipboard: nothing goes either way meanwhile,
+ * what the remote copies is dropped, and what this computer offered is withdrawn if it is still the latest there. A
+ * component that can't pause it gets no clipboard at all, as one that can't stop its reading.
  */
 
 /** The ways the clipboard can go between this computer and a remote desktop. */
@@ -70,6 +74,8 @@ export function narrowest (...modes: ClipboardMode[]): ClipboardMode {
 export interface ClipboardComponent {
     enableFileTransfer (provider: ClipboardProvider): unknown
     setEnableClipboard (enable: boolean): void
+    /** For view only (IronRDP patch 60); checked for here, called by DesktopSession.pauseClipboard. */
+    setClipboardPaused? (paused: boolean): Promise<void>
 }
 
 /** What setUpClipboard uses of the file transfer provider (IronRDP's RdpFileTransferProvider). */
@@ -100,8 +106,10 @@ export function setUpClipboard (ui: ClipboardComponent, provider: ClipboardProvi
     ui.enableFileTransfer(provider)
     const stop = provider.onUploadStarted
     const resume = provider.onUploadFinished
-    // Without the hooks composed (a component that doesn't), its reading can't be stopped: nothing goes either way.
-    const applied: ClipboardMode = typeof stop === 'function' && typeof resume === 'function' && stop !== own ? mode : 'off'
+    // Without the hooks composed (a component that doesn't), its reading can't be stopped, nor without the pause can
+    // view only keep the clipboard out: nothing goes either way.
+    const applied: ClipboardMode = typeof stop === 'function' && typeof resume === 'function' && stop !== own &&
+        typeof ui.setClipboardPaused === 'function' ? mode : 'off'
     provider.onUploadFinished = () => {
         if (sending()) {
             resume?.call(provider)

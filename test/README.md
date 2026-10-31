@@ -188,7 +188,7 @@ system keychain doesn't answer (Linux without an unlocked keyring), the keychain
 | [keyboard](suites/keyboard.ts) | Tabby shortcuts kept off the covered console, ⌘ as Ctrl, no stuck keys, the shortcuts that stay Tabby's. |
 | [focus](suites/focus.ts) | A desktop next to a terminal: the pointer over it (also in a maximized pane's margin) leaves the keyboard in the terminal, a click hands it over, leaving its tab for Settings takes it away, and leaving by the tab's shortcut leaves no modifier held on the remote (through the terminal `desk` opens). |
 | [actions](suites/actions.ts) | Send keys (also from the console), ⌃⌘ with a key as Super with it, View only (label, mouse, keys, across a reconnect), screenshots to Downloads and the clipboard, actual size with a fixed resolution. |
-| [clipboard](suites/clipboard.ts) | Text both ways, through the terminal `desk` opens. |
+| [clipboard](suites/clipboard.ts) | Text both ways, through the terminal `desk` opens; in view only, none either way (the desktop's clipboard read and set from its console with xclip or wl-clipboard). |
 | [files](suites/files.ts) | Files both ways with Files (Nautilus): copy there and save here; drop here and paste there. |
 | [audio](suites/audio.ts) | A tone played on the desktop arrives as sound; with sound off, none is set up. |
 | [microphone](suites/microphone.ts) | Recording on the desktop opens the microphone here, a tone fed in as the microphone arrives there, and it is released when the recording stops; with the setting off, none is set up. |
