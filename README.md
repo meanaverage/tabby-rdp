@@ -135,7 +135,7 @@ In an RDP profile tab's **…** menu, choose **RDP client** to switch that profi
 | Client | Availability | Capabilities |
 |---|---|---|
 | IronRDP (default) | macOS, Windows and Linux | The features above, subject to the server's capabilities |
-| FreeRDP (experimental) | macOS ARM64; Windows and Linux ARM64/x64 native helpers | In-tab display, keyboard/mouse, scaling, resize, view only, screenshots and reconnect. Clipboard, files, audio, shared folders, Hyper-V and H.264 are pending. |
+| FreeRDP (experimental) | macOS ARM64; Windows and Linux ARM64/x64 native helpers | In-tab display, keyboard/mouse, clipboard text, scaling, resize, view only, screenshots and reconnect. Clipboard pictures and files, file transfer, audio, shared folders, Hyper-V and H.264 are pending. |
 
 Windows Server performance has **not been benchmarked**. See [FreeRDP builds, licensing and capability notes](native/README.md).
 To try the preview, open **Settings › Remote Desktop › Updates**, choose **Preview**, and install the offered version.

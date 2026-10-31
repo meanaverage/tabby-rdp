@@ -107,6 +107,22 @@ export class FreeRDPView {
 
     setVisibility (visible: boolean): void { this.visible = visible; if (!visible) { this.releaseInput() } }
     setReadOnly (readOnly: boolean): void { this.readOnly = readOnly; if (readOnly) { this.releaseInput() } }
+    /** Whether the desktop has the focus: shown, focused, and Tabby the app in front. */
+    isFocused (): boolean { return this.visible && document.activeElement === this.element && document.hasFocus() }
+    isViewOnly (): boolean { return this.readOnly }
+    /** Sends this computer's clipboard text to the desktop now (set by the service; see FreeRDPClipboard.sendNow). */
+    clipboardSender?: () => void
+    /** Paste to all: this computer's clipboard to the desktop, focus or not, as IronRDP's component does. */
+    async sendClipboardData (): Promise<void> {
+        if (!this.clipboardSender) { throw new Error('no clipboard channel') }
+        this.clipboardSender()
+    }
+    /** Paste to all: Ctrl+V in whatever window is active on the desktop. */
+    ctrlV (): void {
+        if (this.readOnly) { return }
+        const ctrl = { scan: SCANS.ControlLeft, text: '' }, v = { scan: SCANS.KeyV, text: '' }
+        this.key(ctrl, false); this.key(v, false); this.key(v, true); this.key(ctrl, true)
+    }
     setKeyboardUnicodeMode (unicode: boolean): void { this.unicode = unicode }
     setScale (scale: number): void { this.scale = scale; this.fit() }
     resize (width: number, height: number, scale = 100): void { this.native.send('R', numbers(width, height, scale)) }

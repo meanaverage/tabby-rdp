@@ -15,7 +15,7 @@ await suite('freerdp', async t => {
         await H.inZone(() => RD.injector.get(require('tabby-core').ProfilesService).openNewTabForProfile({
             id: 'rdp:freerdp-test', type: 'rdp', name: 'FreeRDP test', options: {
                 host: ${JSON.stringify(address.host)}, port: ${address.port}, kind: ${JSON.stringify(t.env.direct.kind)},
-                username: ${JSON.stringify(t.env.direct.user)}, client: 'freerdp', glyphCache: false, relaxOrderChecks: false,
+                username: ${JSON.stringify(t.env.direct.user)}, client: 'freerdp', glyphCache: false, bitmapCache: false, relaxOrderChecks: false,
                 clipboard: 'off', via: '', gateway: '', account: null
             }
         }))
@@ -134,10 +134,83 @@ await suite('freerdp', async t => {
             log.includes('FreeRDP drawing order checks: strict') && H.canvas(H.nativePane)?.colors > 2;
     `, 10), await t.ev('return H.canvas(H.nativePane)'))
     await t.ev('H.inZone(() => RD.desktop.disconnect(H.nativePane))')
+    await t.ev('H.nativePane.profile.options.bitmapCache = true; H.inZone(() => RD.desktop.showDesktop(H.nativePane))')
+    t.check('FreeRDP reconnects with bitmap caching and strict drawing-order checks', await settle())
+    t.check('bitmap caching keeps order validation strict and draws pixels', !!await t.waitFor(`
+        const log = H.session(H.nativePane).log;
+        return log.includes('FreeRDP bitmap caching: enabled (experimental)') &&
+            log.includes('FreeRDP drawing order checks: strict') && H.canvas(H.nativePane)?.colors > 2;
+    `, 10), await t.ev('return H.canvas(H.nativePane)'))
+    await t.ev('H.inZone(() => RD.desktop.disconnect(H.nativePane))')
     await t.ev('H.nativePane.profile.options.relaxOrderChecks = true; H.inZone(() => RD.desktop.showDesktop(H.nativePane))')
     t.check('FreeRDP reconnects with relaxed drawing-order checks and remembered trust decisions', await settle())
     t.check('reconnect has a new process and fresh pixels', !!await t.waitFor(`return H.session(H.nativePane)?.ui?.native?.child?.pid !== H.nativePid && H.canvas(H.nativePane)?.colors > 2`, 10))
     await t.dump('H.nativePane', 'freerdp-reconnected')
+    if (t.env.direct.kind === 'windows') {
+        await t.ev('H.inZone(() => RD.desktop.disconnect(H.nativePane))')
+        await t.ev(`H.nativePane.profile.options.clipboard = 'both'; H.inZone(() => RD.desktop.showDesktop(H.nativePane))`)
+        t.check('FreeRDP reconnects with the clipboard both ways', await settle())
+        t.check('its clipboard is set up for text both ways', !!await t.waitFor(`return H.session(H.nativePane).log.some(line => line.startsWith('clipboard: both ways'))`, 5))
+        await t.sleep(3000)
+        await t.clickDesktop('H.nativePane')
+        await t.escape()
+        await t.tap('Meta')
+        await t.sleep(3000)
+        await t.type('notepad')
+        await t.sleep(2000)
+        await t.enter()
+        await t.sleep(4000)
+        await t.clickDesktop('H.nativePane')  // Notepad opens over the middle of the screen: give it the keyboard
+        await t.press('n', ['Control'])
+        await t.sleep(1500)
+        const copyBack = async (expected: string) => {
+            let got = ''
+            for (let attempt = 0; attempt < 2 && !got.includes(expected); attempt++) {
+                await t.press('a', ['Control'])
+                await t.press('c', ['Control'])
+                for (let i = 0; i < 25 && !got.includes(expected); i++) {
+                    await t.sleep(200)
+                    got = await t.clipboard() ?? ''
+                }
+            }
+            return got
+        }
+        // Windows → here: typed in Notepad, copied there.
+        const marker = `fclip${Date.now() % 100000}`
+        await t.type(marker)
+        await t.clipboard('placeholder')
+        // Changing the clipboard here and copying there within moments makes the two clipboards race for ownership,
+        // which Windows can lose track of; a pause keeps the steps apart, as a person's would be.
+        await t.sleep(800)
+        const copied = await copyBack(marker)
+        t.check('FreeRDP clipboard Windows → here: text copied in Notepad', copied.includes(marker), copied.slice(0, 80))
+        // Here → Windows: pasted into Notepad, then marked there, so that only a paste that worked comes back this way.
+        const pasted = `fpaste${Date.now() % 100000}`
+        await t.sleep(800)
+        await t.clipboard(pasted)
+        await t.sleep(800)
+        await t.press('a', ['Control'])
+        await t.press('v', ['Control'])
+        await t.sleep(800)
+        await t.type('-x')
+        const round = await copyBack(`${pasted}-x`)
+        t.check('FreeRDP clipboard here → Windows: pasted into Notepad', round.includes(`${pasted}-x`), round.slice(0, 80))
+        // Paste to all: this computer's text sent to the desktop and Ctrl+V pressed there by the plugin, not typed here.
+        const toAll = `fall${Date.now() % 100000}`
+        await t.clipboard(toAll)
+        await t.sleep(300)
+        await t.press('a', ['Control'])
+        const targets = await t.ev<number>('return H.inZone(() => RD.desktop.pasteToAll(H.nativePane))')
+        await t.sleep(1500)
+        await t.type('-y')
+        const all = await copyBack(`${toAll}-y`)
+        t.check('FreeRDP paste to all: pasted into Notepad', targets >= 1 && all.includes(`${toAll}-y`), { targets, got: all.slice(0, 80) })
+        // Leave nothing for Notepad to restore: clear the tab and close it.
+        await t.press('a', ['Control'])
+        await t.key('Delete', 'Delete', 46)
+        await t.press('w', ['Control'])
+        await t.ev(`H.nativePane.profile.options.clipboard = 'off'`)
+    }
     await t.ev(`
         H.inZone(() => RD.desktop.disconnect(H.nativePane))
         H.nativePane.profile.options.client = 'ironrdp'

@@ -1474,10 +1474,10 @@ test('why a certificate can\'t be verified starts from where its chain stands, w
     // organisations' certificates.
     for (const gateway of [undefined, 'gw.example']) {
         const made = await question('INVALID_PURPOSE', 'unknown authority', gateway)
-        assert.match(made, untrusted, gateway)
-        assert.match(made, /, and it is marked for other uses than a server's \(its extended key usage\)\./, gateway)
-        assert.doesNotMatch(made, /as some organisations'/, gateway)
-        assert.match(made, marked, gateway)
+        assert.match(made, untrusted, gateway ?? 'direct')
+        assert.match(made, /, and it is marked for other uses than a server's \(its extended key usage\)\./, gateway ?? 'direct')
+        assert.doesNotMatch(made, /as some organisations'/, gateway ?? 'direct')
+        assert.match(made, marked, gateway ?? 'direct')
     }
     // An issuer named, its certificate not sent (or never the one that signed): the same, in its own words.
     const named = await question('UNABLE_TO_VERIFY_LEAF_SIGNATURE', 'incomplete', 'gw.example')
@@ -2253,6 +2253,16 @@ test('glyph caching is opt-in and independent of relaxed drawing order checks', 
     assert.equal(settings.glyphCache, true)
     assert.equal(settings.relaxOrderChecks, false)
     assert.equal(service({ relaxOrderChecks: true }).svc.settings().glyphCache, false)
+})
+
+test('bitmap caching is opt-in and independent of glyph caching and relaxed drawing order checks', () => {
+    assert.equal(service().svc.settings().bitmapCache, false)
+    assert.equal(service({ bitmapCache: 'true' }).svc.settings().bitmapCache, false)
+    const settings = service({ bitmapCache: true }).svc.settings()
+    assert.equal(settings.bitmapCache, true)
+    assert.equal(settings.glyphCache, false)
+    assert.equal(settings.relaxOrderChecks, false)
+    assert.equal(service({ glyphCache: true, relaxOrderChecks: true }).svc.settings().bitmapCache, false)
 })
 
 test('a global FreeRDP default preserves discovered Hyper-V consoles; explicit unsupported overrides fail before credentials', async () => {

@@ -5,7 +5,8 @@
 import { createRequire } from 'node:module'
 import { readFileSync, writeFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
-const ts = createRequire(import.meta.url)(process.env.TRD_TYPESCRIPT_PATH || 'typescript')
+// TypeScript 7 supplies the CLI but has no compiler API; use Microsoft's compatibility package for this AST tool.
+const ts = createRequire(import.meta.url)(process.env.TRD_TYPESCRIPT_PATH || '@typescript/typescript6')
 
 export function makeFactory (source) {
     const ast = ts.createSourceFile('ironrdp.js', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS)

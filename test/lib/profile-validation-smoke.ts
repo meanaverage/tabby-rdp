@@ -51,7 +51,7 @@ export async function profileValidationSmoke (t: TestContext): Promise<void> {
         const saved = H.config.store.profiles.find(p => p.id === 'rdp:validation-smoke').options;
         return !document.querySelector('.modal') && saved.host === 'new.example' && saved.port === 3390 && saved.gateway === 'new-gateway.example:444';
     `, 5))
-    for (const key of ['glyphCache', 'relaxOrderChecks']) for (const [choice, expected] of [['on', true], ['off', false], ['', null]] as const) {
+    for (const key of ['glyphCache', 'bitmapCache', 'relaxOrderChecks']) for (const [choice, expected] of [['on', true], ['off', false], ['', null]] as const) {
         await ev(`H.inZone(() => [...document.querySelectorAll('.trd-settings [data-list=desktops] .trd-row')]
             .find(r => r.textContent.includes('Validation smoke')).querySelector('button').click())`)
         if (!await waitFor(`return !!document.querySelector('.modal rdp-profile-settings [name=${key}]')`, 5)) {

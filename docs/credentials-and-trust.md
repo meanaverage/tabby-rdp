@@ -47,6 +47,24 @@ address (**Sign in again…** in the desktop's menu replaces it). The desktop's 
 the password goes only to the machine it was saved for: a removal keeps it (Settings › Remote Desktop › Certificates can
 forget it), and a new address leaves it at the old one too, as well as taking it along.
 
+## How a user name is sent
+
+Both clients send a user name the same way, whether it comes from a profile or a saved account. (An RD Gateway's own
+sign-in still splits its account's name at the first backslash, and doesn't know the leading-backslash rule below.)
+
+| User name | Sent as |
+|---|---|
+| `DOMAIN\user` | Domain `DOMAIN`, user name `user`. The domain field is not used. |
+| `user@domain.example` or `user` | The user name as typed, with the domain field (the saved account's, or the desktop's) if it is set. |
+| A PAM proxy's bracketed name, such as senhasegura's `vault-user[DOMAIN\target-user@device]` | The whole name as typed, with the domain field if it is set. A name with a square bracket before its backslash is not split there, because the proxy reads its target from the whole user name. |
+| `\` followed by any name, such as `\DOMAIN\user@target:login` | Everything after the first backslash, as typed, with no domain, even if the domain field is set. Use this for a proxy whose user name has a backslash that must not be split, such as WALLIX Bastion's. |
+
+The last two are sent whole in the RDP sign-in, the one a PAM proxy reads its target from. Where the server uses Network
+Level Authentication, IronRDP's sign-in to the server itself (NTLM or Kerberos) reads the name again: it splits it at
+its first backslash, and refuses it when the rest still has a `@` or another backslash, as both examples above do, so
+the connection fails before the session starts. PAM proxies that route by the user name usually sign in without NLA,
+which avoids this.
+
 ## Direct connection certificates
 
 A direct connection is a plain TCP connection from this computer, encrypted with TLS like any RDP client's, with nothing

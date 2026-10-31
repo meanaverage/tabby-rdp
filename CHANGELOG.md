@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.6.1
+
+**Added**
+- Clipboard text with the experimental FreeRDP client: both ways, only from the remote desktop, or off, as the clipboard setting (or a desktop's own) says. As with IronRDP, this computer's clipboard is read only while the desktop has the focus, and turning the clipboard off leaves the clipboard channel out of the connection. Unlike IronRDP, view only shares no clipboard in either direction. **Paste to all desktops** includes FreeRDP desktops, with text. Pictures and files on the clipboard still need IronRDP.
+- A default-off **Bitmap caching (experimental)** setting for FreeRDP, next to glyph caching and relaxed drawing order checks, with the same per-connection overrides. It may help a PAM login screen where a picture, such as a logo, stays blank: some proxies draw pictures from cached bitmaps even when the client did not announce support for them. Not yet verified against a PAM proxy.
+
+**Fixed**
+- A PAM proxy's bracketed user name, such as senhasegura's `vault-user[DOMAIN\target-user@device]`, now reaches the proxy whole, with both clients ([#122](https://github.com/meanaverage/tabby-rdp/issues/122)). It was split at the backslash inside the brackets, so the proxy received a domain of `vault-user[DOMAIN` and a user name of `target-user@device]`, and couldn't find its target. `DOMAIN\user` is still split as before. With Network Level Authentication, IronRDP's NTLM or Kerberos sign-in still splits such a name at its backslash, and refuses one whose rest still has a `@` or backslash; PAM proxies that route by user name usually sign in without NLA. Not yet verified against a senhasegura proxy.
+- A user name starting with a backslash now names no domain: everything after that backslash is sent as typed, without the domain field. This gives a way to send a proxy's user name that has a backslash outside brackets, such as WALLIX Bastion's `DOMAIN\user@target:login`, without it being split. The leading backslash was previously sent as part of the user name.
+
+**Changed**
+- Update build and QA dependencies, including Angular and Node declarations, TypeScript 7 with its compiler-API compatibility package, Playwright, WebSocket test fixtures and standalone Electron checks. These development tools are excluded from plugin installations.
+
 ## 0.6.0
 
 **Added**

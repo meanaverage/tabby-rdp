@@ -88,6 +88,11 @@ export function askDesktop (pane: HTMLElement, options: DesktopFormOptions): Pro
                     <option value="on">Enable glyph caching (experimental)</option>
                     <option value="off">Disable glyph caching</option>
                 </select>` + `
+                <select class="form-control" name="bitmapCache" aria-label="Bitmap caching (FreeRDP)" title="Experimental bitmap caching for servers or PAM login screens with missing pictures or logos. May cause display artifacts; applies on reconnect.">
+                    <option value="">Bitmap caching: as in Settings</option>
+                    <option value="on">Enable bitmap caching (experimental)</option>
+                    <option value="off">Disable bitmap caching</option>
+                </select>` + `
                 <select class="form-control" name="relaxOrderChecks" aria-label="Relax drawing order checks (FreeRDP)" title="For a black screen or unannounced drawing order from a server or PAM proxy. Applies on the next FreeRDP connection.">
                     <option value="">Drawing order checks: as in Settings</option>
                     <option value="on">Relax drawing order checks (FreeRDP)</option>
@@ -118,7 +123,7 @@ export function askDesktop (pane: HTMLElement, options: DesktopFormOptions): Pro
     const client = field<HTMLSelectElement>('client')
     client.append(new Option('RDP client: as in Settings', ''), ...Object.entries(RDP_CLIENT_LABELS).map(([id, label]) => new Option(label, id)))
     client.value = ownRDPClient(initial.client) ?? ''
-    for (const key of ['glyphCache', 'relaxOrderChecks'] as const) {
+    for (const key of ['glyphCache', 'bitmapCache', 'relaxOrderChecks'] as const) {
         field<HTMLSelectElement>(key).value = initial[key] === true ? 'on' : initial[key] === false ? 'off' : ''
     }
     // A VM saved from the host's list is xrdp on the host's word (see xrdpFromHost), which is a choice of its own here:
@@ -252,10 +257,12 @@ export function askDesktop (pane: HTMLElement, options: DesktopFormOptions): Pro
                 client: ownRDPClient(client.value),
                 glyphCache: field<HTMLSelectElement>('glyphCache').value === 'on' ? true
                     : field<HTMLSelectElement>('glyphCache').value === 'off' ? false : undefined,
+                bitmapCache: field<HTMLSelectElement>('bitmapCache').value === 'on' ? true
+                    : field<HTMLSelectElement>('bitmapCache').value === 'off' ? false : undefined,
                 relaxOrderChecks: field<HTMLSelectElement>('relaxOrderChecks').value === 'on' ? true
                     : field<HTMLSelectElement>('relaxOrderChecks').value === 'off' ? false : undefined,
             }
-            for (const key of ['username', 'domain', 'account', 'wake', 'gateway', 'gatewayAccount', 'clipboard', 'client', 'glyphCache', 'relaxOrderChecks'] as const) {
+            for (const key of ['username', 'domain', 'account', 'wake', 'gateway', 'gatewayAccount', 'clipboard', 'client', 'glyphCache', 'bitmapCache', 'relaxOrderChecks'] as const) {
                 if (entry[key] === undefined) {
                     delete entry[key]
                 }

@@ -28,6 +28,7 @@ export interface RDPProfile extends ConnectableProfile {
         /** Null follows Settings even through group defaults; applies to FreeRDP on reconnect. */
         relaxOrderChecks?: boolean | null
         glyphCache?: boolean | null
+        bitmapCache?: boolean | null
         /** The RDP server: as this computer sees it, or as the `via` host sees it. */
         host: string
         port: number
@@ -253,6 +254,16 @@ export class RDPProfileSettingsComponent implements ProfileSettingsComponent<RDP
                     Applies on the next FreeRDP connection.</div>
             </div>` + `
             <div class="mb-3">
+                <label>Bitmap caching (experimental)</label>
+                <select class="form-control" name="bitmapCache" aria-label="Bitmap caching (FreeRDP)">
+                    <option value="">As in Settings › Remote Desktop</option>
+                    <option value="on">Enable bitmap caching</option>
+                    <option value="off">Disable bitmap caching</option>
+                </select>
+                <div class="text-muted small">For servers or PAM login screens with missing pictures or logos. May cause display artifacts.
+                    Applies on the next FreeRDP connection.</div>
+            </div>` + `
+            <div class="mb-3">
                 <label>Drawing order checks (FreeRDP)</label>
                 <select class="form-control" name="relaxOrderChecks" aria-label="Drawing order checks (FreeRDP)">
                     <option value="">As in Settings › Remote Desktop</option>
@@ -284,7 +295,7 @@ export class RDPProfileSettingsComponent implements ProfileSettingsComponent<RDP
             ...Object.entries(RDP_CLIENT_LABELS).map(([id, label]) => new Option(label, id)))
         client.value = ownRDPClient(o.client) ?? ''
         client.addEventListener('change', () => { o.client = ownRDPClient(client.value) ?? '' })
-        for (const key of ['glyphCache', 'relaxOrderChecks'] as const) {
+        for (const key of ['glyphCache', 'bitmapCache', 'relaxOrderChecks'] as const) {
             const choice = field<HTMLSelectElement>(key)
             choice.value = o[key] === true ? 'on' : o[key] === false ? 'off' : ''
             choice.addEventListener('change', () => {
@@ -415,7 +426,7 @@ export class RDPProfilesService extends QuickConnectProfileProvider<RDPProfile> 
     override name = 'Remote desktop (RDP)'
     override settingsComponent = RDPProfileSettingsComponent
     override configDefaults = {
-        options: { host: '', port: 3389, kind: 'windows', username: '', domain: '', account: '', via: '', gateway: '', gatewayAccount: '', clipboard: '', client: '', glyphCache: null, relaxOrderChecks: null },
+        options: { host: '', port: 3389, kind: 'windows', username: '', domain: '', account: '', via: '', gateway: '', gatewayAccount: '', clipboard: '', client: '', glyphCache: null, bitmapCache: null, relaxOrderChecks: null },
         clearServiceMessagesOnConnect: false,
     }
 

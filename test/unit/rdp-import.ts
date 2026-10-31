@@ -106,17 +106,17 @@ async function importing (file: string, defaults: Record<string, unknown>, more:
 test('an imported profile sets every destination/sign-in option; clipboard, client and drawing checks follow defaults', async () => {
     // What the provider has a default for: each of them can also come from a group's defaults.
     const keys = Object.keys(new RDPProfilesService({}, {}).configDefaults.options)
-    assert.ok(keys.includes('account') && keys.includes('clipboard') && keys.includes('relaxOrderChecks') && keys.includes('glyphCache'), keys.join(', '))
+    assert.ok(keys.includes('account') && keys.includes('clipboard') && keys.includes('relaxOrderChecks') && keys.includes('glyphCache') && keys.includes('bitmapCache'), keys.join(', '))
     // A group whose defaults differ from what the file says in every one of them: a saved account (whose password would
     // go to the file's address without a sign-in prompt), a gateway, an SSH profile to go through, and so on.
     const defaults = {
         host: 'elsewhere.example', port: 3390, kind: 'xrdp', username: 'admin', domain: 'CORP', account: 'k3f9x2ab',
-        via: 'ssh:custom:jump', gateway: 'rdgw.example.com', gatewayAccount: 'k3f9x2ab', clipboard: 'fromRemote', client: 'freerdp', glyphCache: true, relaxOrderChecks: true,
+        via: 'ssh:custom:jump', gateway: 'rdgw.example.com', gatewayAccount: 'k3f9x2ab', clipboard: 'fromRemote', client: 'freerdp', glyphCache: true, bitmapCache: true, relaxOrderChecks: true,
     }
     assert.deepEqual(Object.keys(defaults).sort(), [...keys].sort(), 'a default for each')
     const { profile, options } = await imported('full address:s:pc17.corp.example\r\nusername:s:alice', defaults)
     const own = keys.filter(k => Object.prototype.hasOwnProperty.call(profile.options, k))
-    assert.deepEqual(keys.filter(k => !own.includes(k)).sort(), ['client', 'clipboard', 'glyphCache', 'relaxOrderChecks'], 'these choices follow defaults')
+    assert.deepEqual(keys.filter(k => !own.includes(k)).sort(), ['bitmapCache', 'client', 'clipboard', 'glyphCache', 'relaxOrderChecks'], 'these choices follow defaults')
     // In particular `account`, whose absence would adopt the group's or the global default saved account, the gateway's
     // account (its proof would go to the gateway the file named) and the kind (an xrdp one signs in without NLA, unasked):
     // null, none of them whatever the defaults, and Windows.
@@ -131,6 +131,7 @@ test('an imported profile sets every destination/sign-in option; clipboard, clie
     assert.equal(options.client, 'freerdp')
     assert.equal(options.relaxOrderChecks, true)
     assert.equal(options.glyphCache, true)
+    assert.equal(options.bitmapCache, true)
 })
 
 /**
@@ -142,7 +143,7 @@ function savedInEditor (options: Record<string, unknown>, defaults: Record<strin
     return Object.fromEntries(Object.entries(options).filter(([key, value]) => !(key in defaults && value == defaults[key])))
 }
 
-for (const key of ['relaxOrderChecks', 'glyphCache']) test(`profile ${key} overrides survive default cleanup and group inheritance`, () => {
+for (const key of ['relaxOrderChecks', 'glyphCache', 'bitmapCache']) test(`profile ${key} overrides survive default cleanup and group inheritance`, () => {
     const defaults = new RDPProfilesService({}, {}).configDefaults.options
     assert.equal(defaults[key], null, 'follow-global differs from both booleans under Tabby default cleanup')
     for (const value of [true, false]) {

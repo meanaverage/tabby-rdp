@@ -13,6 +13,7 @@ import { AudioPlayer } from './audio'
 import { IronRDPLoader } from './ironrdp'
 import { RDPClient, ownRDPClient, rdpClient, RDP_CLIENT_LABELS, isRDPElement } from './rdpClient'
 import { FreeRDPProcess, requireFreeRDP, hasFreeRDP } from './freerdp'
+import { FreeRDPClipboard, freeRDPClipboardLog } from './freerdpClipboard'
 import { FreeRDPView } from './freerdpView'
 import { createH264Decoder } from './h264'
 import { CLIPBOARD_LABELS, ClipboardMode, clipboardSetting, ClipboardWays, clipboardWays, narrowest, ownClipboard, setUpClipboard, splitPaste } from './clipboard'
@@ -20,7 +21,7 @@ import { ConnectionStatus, STYLE as STATS_STYLE } from './connectionStatus'
 import { Microphone } from './microphone'
 import { SharedDrives, SharedFolder, sharedFolders } from './drives'
 import { askDesktop, formatAddress } from './desktopForm'
-import { accountKey, accountsOf, ASK_GATEWAY_ACCOUNT, newAccountId, SavedAccount, signInName } from './accounts'
+import { accountKey, accountsOf, ASK_GATEWAY_ACCOUNT, newAccountId, SavedAccount, signInName, signInParts } from './accounts'
 import { ACCOUNT_REMEMBER_UNAVAILABLE, AccountRevisions } from './accountRevisions'
 import { NewAccountInput, STYLE as ACCOUNT_FORM_STYLE } from './accountForm'
 import { FileTransfer, STYLE as FILES_STYLE, uniquePath } from './fileTransfer'
@@ -238,6 +239,8 @@ export interface DesktopSettings {
     client: RDPClient
     /** FreeRDP only: experimental legacy glyph caching; a desktop may override this. Applies on reconnect. */
     glyphCache: boolean
+    /** FreeRDP only: experimental bitmap caching, for servers or PAM proxies that draw cached bitmaps; a desktop may override this. Applies on reconnect. */
+    bitmapCache: boolean
     /** FreeRDP only: accept unannounced drawing orders; a desktop may override this. Applies on reconnect. */
     relaxOrderChecks: boolean
     /** When the pane changes size: 'live' resizes the remote monitor in place, 'reconnect' reconnects at the new size, 'off' keeps the size. */
@@ -2623,6 +2626,7 @@ export class RemoteDesktopService {
             headerMinHeight: this.headerSize(store.headerMinHeight),
             client: rdpClient(store.client),
             glyphCache: store.glyphCache === true,
+            bitmapCache: store.bitmapCache === true,
             relaxOrderChecks: store.relaxOrderChecks === true,
             resize: ['live', 'reconnect', 'off'].includes(store.resize) ? store.resize : 'live',
             sharpness: store.sharpness === 'retina' ? 'retina' : 'standard',
@@ -4345,10 +4349,27 @@ export class RemoteDesktopService {
         const relaxOrderChecks = spec.relaxOrderChecks ?? this.settingsFor(session).relaxOrderChecks
         const glyphCache = spec.glyphCache ?? settings.glyphCache
         session.log.push(`FreeRDP glyph caching: ${glyphCache ? 'enabled (experimental)' : 'disabled'}`)
+        const bitmapCache = spec.bitmapCache ?? settings.bitmapCache
+        session.log.push(`FreeRDP bitmap caching: ${bitmapCache ? 'enabled (experimental)' : 'disabled'}`)
         session.log.push(`FreeRDP drawing order checks: ${relaxOrderChecks ? 'relaxed' : 'strict'}`)
-        session.log.push('FreeRDP preview: clipboard, audio, microphone and shared folders are unavailable')
-        session.clipboard = 'off'
-        const [domain, username] = /^([^\\]+)\\(.+)$/.exec(endpoint.credentials.username)?.slice(1) ?? [endpoint.domain ?? spec.domain ?? '', endpoint.credentials.username]
+        session.log.push('FreeRDP preview: pictures and files on the clipboard, audio, microphone and shared folders are unavailable')
+        // Text through the clipboard channel, the ways the settings let it go as they are now, for this connection.
+        session.clipboard = settings.clipboard
+        session.log.push(freeRDPClipboardLog(session.clipboard))
+        const clipboard = new FreeRDPClipboard({
+            read: () => this.platform.readClipboard(),
+            write: text => this.platform.setClipboard({ text }),
+            send: text => {
+                // Refused: what the helper held before is withdrawn too, so that a paste there doesn't get older text.
+                if (!native.sendClipboardText(text)) {
+                    native.sendClipboardText('')
+                    session.log.push('clipboard: text larger than 1 MiB, or with a NUL character in it, is not sent')
+                }
+            },
+            narrow: ways => native.narrowClipboard(ways),
+        }, () => this.clipboardWaysOf(session), { focused: () => ui.isFocused(), viewOnly: () => ui.isViewOnly() })
+        ui.clipboardSender = () => clipboard.sendNow()
+        const { username, domain } = signInParts(endpoint.credentials.username, endpoint.domain ?? spec.domain ?? '')
         const gateway = spec.gateway ? parseGateway(spec.gateway) : null
         session.status(`Connecting to ${spec.name} with FreeRDP…`)
         let connected = false
@@ -4363,6 +4384,9 @@ export class RemoteDesktopService {
                 autologon: spec.kind === 'xrdp',
                 relaxOrderChecks,
                 glyphCache,
+                bitmapCache,
+                clipboard: clipboardWays(session.clipboard),
+                remoteText: text => clipboard.remote(text),
                 open: async abort => {
                     const stream = gateway ? await this.throughGatewayStream(target, spec, session, gateway, endpoint, abort) : await target.openTcp(endpoint.host, endpoint.port)
                     if (abort.aborted) { stream.destroy(); throw new Error('Connection cancelled') }
@@ -4378,6 +4402,7 @@ export class RemoteDesktopService {
             if (!alive()) { return { connected: false } }
             connected = true
             onConnected(Date.now())
+            clipboard.start()
             session.remoteSize = { ...info, scale: 100 }
             session.graphics = 'FreeRDP native bitmaps'
             ui.setVisibility(session.visible)
@@ -4394,6 +4419,7 @@ export class RemoteDesktopService {
             return { connected, error: error?.message ?? String(error) }
         } finally {
             signal.removeEventListener('abort', stop)
+            clipboard.stop()
             native.shutdown()
         }
     }
@@ -4499,8 +4525,8 @@ export class RemoteDesktopService {
             const size = session.initialSize ?? remoteSizeFor(session.overlay.getBoundingClientRect(), settings)
             const { width, height } = size
 
-            // DOMAIN\user or user@domain go to the server as typed; only the former needs splitting.
-            const [domain, username] = /^([^\\]+)\\(.+)$/.exec(credentials.username)?.slice(1) ?? [endpoint.domain ?? spec.domain ?? '', credentials.username]
+            // DOMAIN\user is split; user@domain, a PAM proxy's bracketed name and a name after a leading \ go as typed.
+            const { username, domain } = signInParts(credentials.username, endpoint.domain ?? spec.domain ?? '')
             session.status(spec.id === OWN_DESKTOP ? `Connecting to ${target.label}…`
                 : target.direct ? `Connecting to ${spec.name}…` : `Connecting to ${spec.name} via ${target.label}…`)
             // The name the server is signed in to as: the SSH host's for its own desktop, and for its VMs' consoles.

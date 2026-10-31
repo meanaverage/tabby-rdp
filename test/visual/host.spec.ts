@@ -49,7 +49,7 @@ test(hostedSmoke ? 'Native Tabby settings smoke (no baseline qualification)' : '
             'tabby-rdp ' + JSON.parse(fs.readFileSync(new URL('../../package.json', import.meta.url), 'utf8')).version)
         await settings.locator('[data-tab=settings]').click()
         const soundToggle = settings.locator('[data-setting=sound]')
-        await expect(settings.locator('trd-settings-toggle toggle input[type=checkbox]')).toHaveCount(client.platform === 'darwin' ? 10 : 9)
+        await expect(settings.locator('trd-settings-toggle toggle input[type=checkbox]')).toHaveCount(client.platform === 'darwin' ? 11 : 10)
         await expect(settings.locator('[data-topic=settings] > h5')).toHaveText([
             'Connection', 'Display', 'Keyboard', 'Sound', 'Clipboard', 'Shared folders',
             'SSH hosts', 'FreeRDP compatibility', 'Diagnostics',
@@ -62,6 +62,14 @@ test(hostedSmoke ? 'Native Tabby settings smoke (no baseline qualification)' : '
         await expect(settings.locator('[data-setting=relaxOrderChecks]')).not.toBeChecked()
         await glyphCache.click()
         await expect.poll(() => page.evaluate(() => (window as any).__remoteDesktop.desktop.settings().glyphCache)).toBe(false)
+        const bitmapCache = settings.locator('[data-setting=bitmapCache]')
+        await expect(bitmapCache).toHaveAccessibleName('Bitmap caching (experimental)')
+        await expect(bitmapCache).not.toBeChecked()
+        await bitmapCache.click()
+        await expect.poll(() => page.evaluate(() => (window as any).__remoteDesktop.desktop.settings().bitmapCache)).toBe(true)
+        await expect(glyphCache).not.toBeChecked()
+        await bitmapCache.click()
+        await expect.poll(() => page.evaluate(() => (window as any).__remoteDesktop.desktop.settings().bitmapCache)).toBe(false)
         const orderChecks = settings.locator('[data-setting=relaxOrderChecks]')
         await expect(orderChecks).toHaveAccessibleName('Relax drawing order checks (FreeRDP)')
         await expect(orderChecks).not.toBeChecked()

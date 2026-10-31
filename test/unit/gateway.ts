@@ -181,7 +181,8 @@ function standIn (password: string, allow: (target: string) => number = () => 0,
         }
         socket.on('error', () => { })
         const control = clientFrames((opcode, payload) => opcode === 0xa && seen.pongs.push(payload.toString()))
-        socket.on('data', chunk => {
+        socket.on('data', data => {
+            const chunk = Buffer.from(data)
             if (upgraded) {
                 control(chunk)
                 return frames(chunk)
@@ -461,7 +462,8 @@ async function endless (...answers: string[]) {
         socket.on('error', () => { })
         const left = [...answers]
         let request = Buffer.alloc(0)
-        socket.on('data', chunk => {
+        socket.on('data', data => {
+            const chunk = Buffer.from(data)
             request = Buffer.concat([request, chunk])
             if (!left.length || request.indexOf('\r\n\r\n') < 0) {
                 return

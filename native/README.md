@@ -5,14 +5,15 @@ desktop form have an override. An empty override follows Settings. Existing conf
 Changes apply on the next connection; use Reconnect to compare clients on the same desktop. Accounts, certificate
 trust and desktop identities are shared between the clients.
 
-**Settings › Remote Desktop › Settings › FreeRDP compatibility** groups two independent options:
+**Settings › Remote Desktop › Settings › FreeRDP compatibility** groups three independent options:
 
 | Option | Default | Use |
 |---|---|---|
 | Glyph caching (experimental) | Off | Older RDP servers or PAM login screens that send text as cached glyphs. May cause display artifacts; enable only for connections that need it. |
+| Bitmap caching (experimental) | Off | Servers or PAM login screens that draw pictures, such as a logo, from cached bitmaps. May cause display artifacts; enable only for connections that need it. |
 | Relax drawing order checks | Off | Servers or PAM proxies that send orders the client did not announce. Useful when the native log reports an unannounced order. |
 
-Each RDP profile or configured desktop can follow Settings, enable either option, or explicitly disable it.
+Each RDP profile or configured desktop can follow Settings, enable any of these options, or explicitly disable it.
 Changes apply on the next FreeRDP connection. IronRDP uses its own graphics capabilities.
 
 An RDP profile tab's ellipsis/right-click menu also has **RDP client**: **Follow default**, **IronRDP**, or
@@ -24,7 +25,9 @@ The initial FreeRDP preview renders inside the Tabby tab and supports keyboard, 
 screenshots, scaling, reconnect and the display-control channel. It uses the plugin's existing direct, SSH and RD
 Gateway transports, credential store and certificate/NLA prompts. Each attempt has its own native process.
 
-The preview does **not** yet implement clipboard, audio playback/capture, shared folders, or Hyper-V VMConnect.
+The preview shares clipboard **text** the ways the clipboard setting allows (both ways, only from the remote desktop, or
+off, which leaves the clipboard channel out); in view only, no clipboard goes either way. It does **not** yet implement pictures and files on the clipboard, audio
+playback/capture, shared folders, or Hyper-V VMConnect.
 The supplied build uses native bitmap decoding (and the graphics pipeline for GNOME), with optional H.264 codecs
 disabled. The macOS/Linux builds omit Kerberos/GSSAPI and use NTLM. Windows can use native SSPI; Kerberos and domain-policy behavior are not qualified. Hyper-V consoles that
 inherit the global client setting continue to use IronRDP. A synced global FreeRDP default also uses IronRDP on a computer without its native helper; an explicit desktop/profile choice still reports the missing build. It has not been benchmarked against IronRDP on Windows Server. Native decoding alone does not establish
