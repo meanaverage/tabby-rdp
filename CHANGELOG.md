@@ -4,6 +4,8 @@
 
 **Changed**
 - Start the next development version from stable 0.6.1.
+- **View only shares no clipboard, with either client** ([#150](https://github.com/meanaverage/tabby-rdp/issues/150)). With the default IronRDP client, the clipboard went on both ways in view only, so what you copied here reached a desktop you were only watching, and what was copied there replaced what was on your clipboard. Now nothing goes either way while the "View only" label shows, as with the experimental FreeRDP client and most clients that have a view-only mode: what you copy here doesn't reach the desktop, and what you had copied before is withdrawn from its clipboard (a desktop that keeps its own copy of what it is offered, as GNOME does, still has it); what is copied there (text, pictures or files) isn't put on your clipboard or offered for saving, also not once view only ends; files can't be sent or dropped meanwhile. When view only ends, the clipboard goes as before, and what you had copied is offered again.
+- Entering view only withdraws only what this computer offered, with either client: the desktop is sent an empty clipboard only when its latest copy came from here, so a copy of its own is left alone.
 
 ## 0.6.1
 

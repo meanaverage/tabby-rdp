@@ -36,7 +36,7 @@ await suite('actions', async t => {
         await H.inZone(() => target.click())
         return true`)
     const SEND = 'Send keys'
-    const VIEW_ONLY = 'View only (no keyboard or mouse input)'
+    const VIEW_ONLY = 'View only (no keyboard, mouse or clipboard)'
     const SCREENSHOT = 'Save a screenshot (to Downloads and the clipboard)'
 
     check('SSH tab connected', await ev('H.pane = await H.openSSH(); return !!H.pane'))

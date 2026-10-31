@@ -13,7 +13,9 @@ export function freeRDPClipboardLog (mode: ClipboardMode): string {
  * a change is sent; what the server's gets is written here then, or, from a desktop without the focus, the latest of
  * it once it has the focus again; and it is remembered, so that it isn't sent straight back. A desktop in the
  * background can't change this computer's clipboard. In view only no clipboard goes either way, and what the desktop's
- * clipboard gets meanwhile is dropped.
+ * clipboard gets meanwhile is dropped. Entering it withdraws what this side offered, if that is still the latest on the
+ * server's clipboard (a copy of the server's own since is left alone); leaving it offers that again. Which copy is the
+ * latest is known only from the text the helper passes on: a server copy without text isn't seen.
  *
  * The ways are asked on every turn: a narrowing while connected (see RemoteDesktopService.applyClipboard) stops the
  * sending at once, and is passed on to the helper (`narrow`), which drops what it was holding for the server.
@@ -26,6 +28,10 @@ export class FreeRDPClipboard {
     private last: string | undefined
     private pending: string | undefined
     private paused = false
+    /** Whether the latest on the server's clipboard is what this side offered, as far as this side knows. */
+    private offered = false
+    /** Whether entering view only withdrew what this side offered, which leaving it offers again. */
+    private withdrawn = false
     private lastRemote: { text: string, at: number } | undefined
     private timer: ReturnType<typeof setInterval> | undefined
     private told: ClipboardWays
@@ -55,19 +61,26 @@ export class FreeRDPClipboard {
             this.io.narrow(ways)
         }
         if (this.focus.viewOnly()) {
-            // Entering view only: what the helper still holds for the server is withdrawn, and the clipboard here is
-            // offered again once view only ends.
+            // Entering view only: what the helper still holds for the server is withdrawn, if it is still the latest
+            // there, and the clipboard here is offered again once view only ends.
             if (!this.paused) {
                 this.paused = true
-                this.last = undefined
-                if (ways.toRemote) {
+                if (this.offered && ways.toRemote) {
+                    this.offered = false
+                    this.withdrawn = true
                     this.io.send('')
                 }
             }
             this.pending = undefined
             return
         }
-        this.paused = false
+        if (this.paused) {
+            this.paused = false
+            if (this.withdrawn) {
+                this.withdrawn = false
+                this.last = undefined
+            }
+        }
         if (!this.focus.focused()) {
             return
         }
@@ -90,12 +103,16 @@ export class FreeRDPClipboard {
         }
         if (text !== this.last) {
             this.last = text
+            this.offered = text !== ''
             this.io.send(text)
         }
     }
 
     /** Text the server's clipboard got, if it may come: written here now with the focus, else once it has it. */
     remote (text: string): void {
+        // The server's own copy: the latest there, which leaving view only doesn't overwrite.
+        this.offered = false
+        this.withdrawn = false
         if (!this.ways().fromRemote || this.focus.viewOnly()) {
             return
         }
@@ -122,6 +139,7 @@ export class FreeRDPClipboard {
         }
         const text = this.io.read()
         this.last = text
+        this.offered = text !== ''
         this.io.send(text)
     }
 
