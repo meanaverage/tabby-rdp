@@ -179,18 +179,32 @@ await suite('freerdp', async t => {
         const marker = `fclip${Date.now() % 100000}`
         await t.type(marker)
         await t.clipboard('placeholder')
+        // Changing the clipboard here and copying there within moments makes the two clipboards race for ownership,
+        // which Windows can lose track of; a pause keeps the steps apart, as a person's would be.
+        await t.sleep(800)
         const copied = await copyBack(marker)
         t.check('FreeRDP clipboard Windows → here: text copied in Notepad', copied.includes(marker), copied.slice(0, 80))
         // Here → Windows: pasted into Notepad, then marked there, so that only a paste that worked comes back this way.
         const pasted = `fpaste${Date.now() % 100000}`
+        await t.sleep(800)
         await t.clipboard(pasted)
-        await t.sleep(600)
+        await t.sleep(800)
         await t.press('a', ['Control'])
         await t.press('v', ['Control'])
         await t.sleep(800)
         await t.type('-x')
         const round = await copyBack(`${pasted}-x`)
         t.check('FreeRDP clipboard here → Windows: pasted into Notepad', round.includes(`${pasted}-x`), round.slice(0, 80))
+        // Paste to all: this computer's text sent to the desktop and Ctrl+V pressed there by the plugin, not typed here.
+        const toAll = `fall${Date.now() % 100000}`
+        await t.clipboard(toAll)
+        await t.sleep(300)
+        await t.press('a', ['Control'])
+        const targets = await t.ev<number>('return H.inZone(() => RD.desktop.pasteToAll(H.nativePane))')
+        await t.sleep(1500)
+        await t.type('-y')
+        const all = await copyBack(`${toAll}-y`)
+        t.check('FreeRDP paste to all: pasted into Notepad', targets >= 1 && all.includes(`${toAll}-y`), { targets, got: all.slice(0, 80) })
         // Leave nothing for Notepad to restore: clear the tab and close it.
         await t.press('a', ['Control'])
         await t.key('Delete', 'Delete', 46)
