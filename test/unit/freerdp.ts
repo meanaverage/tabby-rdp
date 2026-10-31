@@ -116,16 +116,43 @@ test('IPC start keeps glyph caching, bitmap caching and relaxed checks independe
     const options = { host: 'pc', username: 'user', password: 'pass', domain: '', width: 800, height: 600, pipeline: false }
     const relay = { port: 1234, token: 'a'.repeat(64) }
     const strict = freeRDPStart(options, relay)
-    assert.deepEqual(strict.subarray(-32), numbers(1234, 800, 600, 0, 0, 0, 0, 0))
+    assert.deepEqual(strict.subarray(-36), numbers(1234, 800, 600, 0, 0, 0, 0, 0, 0))
     for (const glyphCache of [false, true]) {
         for (const bitmapCache of [false, true]) {
             for (const relaxOrderChecks of [false, true]) {
                 const start = freeRDPStart({ ...options, glyphCache, bitmapCache, relaxOrderChecks }, relay)
-                assert.deepEqual(start.subarray(-32), numbers(1234, 800, 600, 0, 0, +relaxOrderChecks, +glyphCache, +bitmapCache))
-                assert.deepEqual(strict.subarray(0, -32), start.subarray(0, -32))
+                assert.deepEqual(start.subarray(-36), numbers(1234, 800, 600, 0, 0, +relaxOrderChecks, +glyphCache, +bitmapCache, 0))
+                assert.deepEqual(strict.subarray(0, -36), start.subarray(0, -36))
             }
         }
     }
+})
+
+test('IPC start carries the clipboard\'s ways, and none leaves the channel out', () => {
+    const options = { host: 'pc', username: 'user', password: 'pass', domain: '', width: 800, height: 600, pipeline: false }
+    const relay = { port: 1234, token: 'a'.repeat(64) }
+    const last = (clipboard?: { toRemote: boolean, fromRemote: boolean }) => freeRDPStart({ ...options, clipboard }, relay).readUInt32BE(freeRDPStart(options, relay).length - 4)
+    assert.equal(last(), 0)
+    assert.equal(last({ toRemote: false, fromRemote: false }), 0)
+    assert.equal(last({ toRemote: false, fromRemote: true }), 2)
+    assert.equal(last({ toRemote: true, fromRemote: true }), 3)
+})
+
+test('clipboard text: the server\'s arrives as UTF-8, this computer\'s goes only once connected and within one frame', () => {
+    const native = new FreeRDPProcess(), writes: Buffer[] = [], got: string[] = []
+    native.child = { stdin: { writableLength: 0, write: (data: Buffer) => writes.push(data) } }
+    assert.equal(native.sendClipboardText('before'), true)
+    assert.equal(writes.length, 0, 'nothing goes before the sign-in has finished')
+    native.receive('D', numbers(800, 600), {})
+    assert.equal(native.sendClipboardText('héllo ✓'), true)
+    assert.equal(String.fromCharCode(writes[0][0]), 'P')
+    assert.equal(writes[0].subarray(5).toString('utf8'), 'héllo ✓')
+    assert.equal(native.sendClipboardText('a\0b'), false)
+    assert.equal(native.sendClipboardText('x'.repeat(1024 * 1024 + 1)), false)
+    assert.equal(writes.length, 1)
+    native.receive('T', Buffer.from('from the server ✓'), { remoteText: (text: string) => got.push(text) })
+    native.receive('T', Buffer.alloc(0), { remoteText: (text: string) => got.push(text) })
+    assert.deepEqual(got, ['from the server ✓', ''])
 })
 
 test('certificate stores can exceed one IPC frame while retaining a bounded total', () => {
@@ -222,7 +249,7 @@ test('only explicit credential rejection triggers a saved-password retry', () =>
 test('native input waits until authentication has finished without delaying security decisions', () => {
     const native = new FreeRDPProcess(), writes: Buffer[] = []
     native.child = { stdin: { writableLength: 0, write: (data: Buffer) => writes.push(data) } }
-    for (const type of ['M', 'K', 'R', 'N', 'C']) native.send(type, Buffer.from([1]))
+    for (const type of ['M', 'K', 'R', 'P', 'N', 'C']) native.send(type, Buffer.from([1]))
     assert.deepEqual(writes.map(data => String.fromCharCode(data[0])), ['N', 'C'])
     native.receive('D', numbers(800, 600), {})
     for (const type of ['M', 'K', 'R']) native.send(type, Buffer.alloc(12))

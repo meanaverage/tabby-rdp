@@ -7,6 +7,7 @@ import { Duplex } from 'stream'
 import { rootCertificates } from 'tls'
 import { ByteQueue } from './byteQueue'
 import { certificateAuthorities, certificateDetails, CertificateDetails } from './authorities'
+import { ClipboardWays } from './clipboard'
 
 const MAX_FRAME = 1024 * 1024
 const MAX_AUTHORITIES = 16 * 1024 * 1024
@@ -103,8 +104,8 @@ export function numbers (...values: number[]): Buffer {
     return out
 }
 
-/** The native helper's IPC 5 start message: six strings followed by eight uint32 fields. */
-export function freeRDPStart (options: Pick<FreeRDPOptions, 'host' | 'username' | 'password' | 'domain' | 'width' | 'height' | 'pipeline' | 'autologon' | 'relaxOrderChecks' | 'glyphCache' | 'bitmapCache'>,
+/** The native helper's IPC 6 start message: six strings followed by nine uint32 fields, the last the clipboard's ways. */
+export function freeRDPStart (options: Pick<FreeRDPOptions, 'host' | 'username' | 'password' | 'domain' | 'width' | 'height' | 'pipeline' | 'autologon' | 'relaxOrderChecks' | 'glyphCache' | 'bitmapCache' | 'clipboard'>,
     relay: { port: number, token: string }): Buffer {
     const strings = [options.host, options.username, options.password, options.domain, '', relay.token]
     const fields = strings.map(value => {
@@ -113,7 +114,8 @@ export function freeRDPStart (options: Pick<FreeRDPOptions, 'host' | 'username' 
         return Buffer.concat([numbers(text.length), text])
     })
     return Buffer.concat([...fields, numbers(relay.port, options.width, options.height, +options.pipeline,
-        +!!options.autologon, +!!options.relaxOrderChecks, +!!options.glyphCache, +!!options.bitmapCache)])
+        +!!options.autologon, +!!options.relaxOrderChecks, +!!options.glyphCache, +!!options.bitmapCache,
+        (options.clipboard?.toRemote ? 1 : 0) | (options.clipboard?.fromRemote ? 2 : 0))])
 }
 
 /** Only a process holding the per-attempt token can open the SSH channel or gateway connection. */
@@ -204,6 +206,10 @@ interface FreeRDPOptions {
     relaxOrderChecks?: boolean
     glyphCache?: boolean
     bitmapCache?: boolean
+    /** The ways text goes through the clipboard channel; none (the channel left out) when absent. */
+    clipboard?: ClipboardWays
+    /** Text the server's clipboard got. */
+    remoteText?: (text: string) => void
     open: (signal: AbortSignal) => Promise<Duplex>
     certificate: (fingerprint: string, valid: boolean, reason: string, details?: CertificateDetails) => void
     withoutNla: () => void
@@ -297,6 +303,8 @@ export class FreeRDPProcess {
             this.send('N', Buffer.from([+accepted]))
         } else if (type === 'F') {
             options.frame(decodeNativeFrame(data))
+        } else if (type === 'T') {
+            options.remoteText?.(data.toString('utf8'))
         } else if (type === 'B' && data.length === 0) {
             this.frameCount++
         } else if (type === 'D' && data.length === 8 && !this.connected) {
@@ -316,10 +324,18 @@ export class FreeRDPProcess {
         if (this.closed || !this.child) { return }
         // During freerdp_connect the helper reads certificate/NLA decisions directly from stdin. User input
         // must not get ahead of those replies and be mistaken for a refusal.
-        if (!this.connected && ['K', 'M', 'R'].includes(type)) { return }
+        if (!this.connected && ['K', 'M', 'R', 'P'].includes(type)) { return }
         // A child that has stalled must not accumulate an unbounded queue of mouse/keyboard events.
         if (this.child.stdin.writableLength > MAX_FRAME) { this.fail(new Error('FreeRDP input stopped responding')); return }
         this.child.stdin.write(ipcFrame(type, payload))
+    }
+
+    /** Offers this computer's clipboard text to the server; text larger than one IPC frame isn't sent. */
+    sendClipboardText (text: string): boolean {
+        const data = Buffer.from(text, 'utf8')
+        if (data.length > MAX_FRAME || text.includes('\0')) { return false }
+        this.send('P', data)
+        return true
     }
 
     async run (): Promise<{ reason: () => string | undefined }> {

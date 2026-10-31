@@ -67,7 +67,7 @@ The Settings tab groups everyday controls first, followed by SSH integration, Fr
 
 | Setting | Default | Behavior |
 |---|---|---|
-| Clipboard sharing (`clipboard`) | Both ways (`both`) | Or only from the remote desktop to this computer (`fromRemote`), or off (`off`), for text, pictures and files alike; a desktop's own (`clipboard` in its profile or its `desktops` entry) takes its place ([Clipboard](sharing.md#clipboard)). Applies in full on the next connection; narrowing it also stops the sending at once to open desktops that follow it. |
+| Clipboard sharing (`clipboard`) | Both ways (`both`) | Or only from the remote desktop to this computer (`fromRemote`), or off (`off`), for text, pictures and files alike (FreeRDP shares text only); a desktop's own (`clipboard` in its profile or its `desktops` entry) takes its place ([Clipboard](sharing.md#clipboard)). Applies in full on the next connection; narrowing it also stops the sending at once to open desktops that follow it. |
 | Shared folders (`sharedFolders`) | None | `[{ path, name, readOnly }]`: folders shared as drives with every remote desktop ([Shared folders](sharing.md#shared-folders)). Applies on the next connection. |
 
 ### SSH hosts

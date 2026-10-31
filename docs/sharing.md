@@ -3,7 +3,8 @@
 # Clipboard, files and desktop controls
 
 These sharing features describe the default IronRDP client. The experimental FreeRDP preview currently supports
-display and input; clipboard, file transfer, shared drives and audio are pending. See [client capabilities](../native/README.md).
+display, input and clipboard text, the ways the clipboard setting below allows; pictures and files on the clipboard,
+file transfer, shared drives and audio are pending. See [client capabilities](../native/README.md).
 
 ## Clipboard
 

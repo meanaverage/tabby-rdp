@@ -13,6 +13,7 @@ import { AudioPlayer } from './audio'
 import { IronRDPLoader } from './ironrdp'
 import { RDPClient, ownRDPClient, rdpClient, RDP_CLIENT_LABELS, isRDPElement } from './rdpClient'
 import { FreeRDPProcess, requireFreeRDP, hasFreeRDP } from './freerdp'
+import { FreeRDPClipboard, freeRDPClipboardLog } from './freerdpClipboard'
 import { FreeRDPView } from './freerdpView'
 import { createH264Decoder } from './h264'
 import { CLIPBOARD_LABELS, ClipboardMode, clipboardSetting, ClipboardWays, clipboardWays, narrowest, ownClipboard, setUpClipboard, splitPaste } from './clipboard'
@@ -4351,8 +4352,15 @@ export class RemoteDesktopService {
         const bitmapCache = spec.bitmapCache ?? settings.bitmapCache
         session.log.push(`FreeRDP bitmap caching: ${bitmapCache ? 'enabled (experimental)' : 'disabled'}`)
         session.log.push(`FreeRDP drawing order checks: ${relaxOrderChecks ? 'relaxed' : 'strict'}`)
-        session.log.push('FreeRDP preview: clipboard, audio, microphone and shared folders are unavailable')
-        session.clipboard = 'off'
+        session.log.push('FreeRDP preview: pictures and files on the clipboard, audio, microphone and shared folders are unavailable')
+        // Text through the clipboard channel, the ways the settings let it go as they are now, for this connection.
+        session.clipboard = settings.clipboard
+        session.log.push(freeRDPClipboardLog(session.clipboard))
+        const clipboard = new FreeRDPClipboard({
+            read: () => this.platform.readClipboard(),
+            write: text => this.platform.setClipboard({ text }),
+            send: text => { if (!native.sendClipboardText(text)) { session.log.push('clipboard: text larger than 1 MiB is not sent') } },
+        }, () => this.clipboardWaysOf(session), () => ui.hasKeyboard())
         const { username, domain } = signInParts(endpoint.credentials.username, endpoint.domain ?? spec.domain ?? '')
         const gateway = spec.gateway ? parseGateway(spec.gateway) : null
         session.status(`Connecting to ${spec.name} with FreeRDP…`)
@@ -4369,6 +4377,8 @@ export class RemoteDesktopService {
                 relaxOrderChecks,
                 glyphCache,
                 bitmapCache,
+                clipboard: clipboardWays(session.clipboard),
+                remoteText: text => clipboard.remote(text),
                 open: async abort => {
                     const stream = gateway ? await this.throughGatewayStream(target, spec, session, gateway, endpoint, abort) : await target.openTcp(endpoint.host, endpoint.port)
                     if (abort.aborted) { stream.destroy(); throw new Error('Connection cancelled') }
@@ -4400,6 +4410,7 @@ export class RemoteDesktopService {
             return { connected, error: error?.message ?? String(error) }
         } finally {
             signal.removeEventListener('abort', stop)
+            clipboard.stop()
             native.shutdown()
         }
     }
