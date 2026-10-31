@@ -9,12 +9,12 @@
     "url": "https://github.com/openssl/openssl/releases/download/openssl-3.5.9/openssl-3.5.9.tar.gz",
     "sha256": "603f5602e2eef00d77fbd429d34dcd5822bb301757a1bc9cdb24c670f1eb859a"
   },
-  "version": "tabby-freerdp IPC 5; FreeRDP 3.32.2",
+  "version": "tabby-freerdp IPC 6; FreeRDP 3.32.2",
   "platform": "win32",
   "arch": "arm64",
   "buildSources": {
-    "native/main.c": "0ee1b524cc66abdcb2cd3a0d62d6bf5cd627ee6217793b3fd75d99a4c334f0ef",
-    "native/options.cmake": "228ae20f83200a8a76a6a05bf73deb2b9aa94487b0ffca023bbb8fefd76cd1b8",
+    "native/main.c": "cb9a1ccc88036509b7ec75c44da07bb5bc4d781a8a210ebb6f431b1560b71c90",
+    "native/options.cmake": "1cd7266438b9fd90ec88d0849ee27efeaffadfead3469af35331c0a7b7bca35f",
     "native/CMakeLists.txt": "659585c5dc95ef68bb755290be39fa1c517097728e784bb30ec74c616f6708aa",
     "scripts/build-freerdp.mjs": "bee69bc743102493457586fa49b5539fb02c9e1d7b52ef2b6306146a32a65118",
     "native/openssl-source.json": "50082e3fc1b171c9d708fd0437ecb291960e9567b3c9d6648f495f3fb2a3a009",
@@ -23,23 +23,23 @@
   "files": [
     {
       "path": "freerdp-client3.dll",
-      "sha256": "a800381028a7b8af09183be0a4b662d64a8fa46e1fa55d04b61b0b924fda2911"
+      "sha256": "878351a5482c4e97297107b87b9349be419de45027f9c3bfd72e46b81beac2d8"
     },
     {
       "path": "freerdp3.dll",
-      "sha256": "d97b2c6d064c42a05a05a411128f1a34006aefd0269598a4af8545d68ddc3e81"
+      "sha256": "97cc5d52c56de08aea70445fd130fe49e53e051f9c77fec9e66389f17e5cca9b"
     },
     {
       "path": "legacy.dll",
-      "sha256": "4d18a51a386efb1f4857aa53ba90dcf1c7773c0beaa87b1f1a1b7ab2764d14dd"
+      "sha256": "14c6580edc7f0de673bbccc3ebc962e8099b9f8fcfb6e3ce5d0ddafc648edbe5"
     },
     {
       "path": "libcrypto-3-arm64.dll",
-      "sha256": "454cc168fd1fb7285c75ce74b49cb3e1a829ec918de1ce011d85ba6e23828208"
+      "sha256": "bed607503a7a7ce740745bdab29008b1d906c1a48efa716a5240329778400a98"
     },
     {
       "path": "libssl-3-arm64.dll",
-      "sha256": "46995e63e531ce95f8427b3f3bf559b5be58c318ff860af3b9a2afec6b2e158d"
+      "sha256": "6c7b00888cc69a41c97d6dadfb75ba4e44dcb0702c66035c552130e4669fbe94"
     },
     {
       "path": "licenses/FreeRDP-LICENSE",
@@ -63,11 +63,11 @@
     },
     {
       "path": "tabby-freerdp.exe",
-      "sha256": "e3ebc93158dd2e5221fb39252edd52095d30697789bcae8788a19c9669499883"
+      "sha256": "b6e025348164b7dcd8972b0be77d23124e23f0eaee44811a11564237d9f3f03a"
     },
     {
       "path": "winpr3.dll",
-      "sha256": "7241aff677ed1f9a07b818be843c6dd366f52b1ee16e4a3f7d4c40b00ff45a54"
+      "sha256": "7ecab594184ddea8af02a4e66def21059b5a2d488700884454612b121cf76b8d"
     }
   ]
 }
