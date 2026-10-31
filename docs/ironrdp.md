@@ -26,9 +26,11 @@ IronRDP has a change, released, the patch for it goes:
 | Decode Windows' RemoteFX Progressive refinements | Fixed by [Devolutions/IronRDP#2134](https://github.com/Devolutions/IronRDP/pull/2134) (not ours), released; no longer a patch |
 | H.264 in the web client, decoded by the browser (WebCodecs) | Not submitted yet: waits for #1977 |
 | Microphone in the web client | Not submitted yet: waits for #2020 |
-| Keep clipboard sync working for the other desktops when one closes | Not submitted yet |
-| Sync the clipboard only for the desktop that has the focus | Not submitted yet |
-| Drive redirection in the web client, through a JavaScript file system | Not submitted yet |
+| Keep clipboard sync working for the other desktops when one closes | [Devolutions/IronRDP#2345](https://github.com/Devolutions/IronRDP/pull/2345) (open) |
+| Sync the clipboard only for the desktop that has the focus | Not submitted yet: follows #2345 |
+| Drive redirection in the web client, through a JavaScript file system | Not submitted yet; its fix for drive names, which Windows showed by their first letter, is [Devolutions/IronRDP#2342](https://github.com/Devolutions/IronRDP/pull/2342) (open) |
+| Limit the clipboard formats a server can list, and pick from them in one pass ([IronRDP's #2091](https://github.com/Devolutions/IronRDP/issues/2091)) | [Devolutions/IronRDP#2346](https://github.com/Devolutions/IronRDP/pull/2346) and [#2343](https://github.com/Devolutions/IronRDP/pull/2343) (open) |
+| Keep licensing keys and licenses out of debug logs | [Devolutions/IronRDP#2344](https://github.com/Devolutions/IronRDP/pull/2344) (open) |
 | Send chunked static-channel messages without CHANNEL_FLAG_SHOW_PROTOCOL, as Windows' drive redirector expects | Fixed by [Devolutions/IronRDP#2177](https://github.com/Devolutions/IronRDP/pull/2177) (not ours), released; no longer a patch |
 | Keep the bitmap cache across ResetGraphics (a live resize repaints from it) | [Devolutions/IronRDP#2011](https://github.com/Devolutions/IronRDP/pull/2011) (not ours), released; no longer a patch |
 | Keep Progressive tile state per surface across codec contexts | [Devolutions/IronRDP#2117](https://github.com/Devolutions/IronRDP/pull/2117) (not ours), released; no longer a patch |
