@@ -4360,6 +4360,7 @@ export class RemoteDesktopService {
             read: () => this.platform.readClipboard(),
             write: text => this.platform.setClipboard({ text }),
             send: text => { if (!native.sendClipboardText(text)) { session.log.push('clipboard: text larger than 1 MiB is not sent') } },
+            narrow: ways => native.narrowClipboard(ways),
         }, () => this.clipboardWaysOf(session), () => ui.hasKeyboard())
         const { username, domain } = signInParts(endpoint.credentials.username, endpoint.domain ?? spec.domain ?? '')
         const gateway = spec.gateway ? parseGateway(spec.gateway) : null
@@ -4394,6 +4395,7 @@ export class RemoteDesktopService {
             if (!alive()) { return { connected: false } }
             connected = true
             onConnected(Date.now())
+            clipboard.start()
             session.remoteSize = { ...info, scale: 100 }
             session.graphics = 'FreeRDP native bitmaps'
             ui.setVisibility(session.visible)

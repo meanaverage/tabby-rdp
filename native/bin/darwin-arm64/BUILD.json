@@ -9,7 +9,7 @@
   "platform": "darwin",
   "arch": "arm64",
   "buildSources": {
-    "native/main.c": "19bdee8728a1cb53c56b91ff4c4291cf7db3ea4b04f0bce9d82be4c72b85805e",
+    "native/main.c": "0d0ed6a7b842928eb2c05f14786d036384c9504977e9b180f729c9103a46a812",
     "native/options.cmake": "1cd7266438b9fd90ec88d0849ee27efeaffadfead3469af35331c0a7b7bca35f",
     "native/CMakeLists.txt": "659585c5dc95ef68bb755290be39fa1c517097728e784bb30ec74c616f6708aa",
     "scripts/build-freerdp.mjs": "bee69bc743102493457586fa49b5539fb02c9e1d7b52ef2b6306146a32a65118",
@@ -63,7 +63,7 @@
     },
     {
       "path": "tabby-freerdp",
-      "sha256": "702585cc8b6582fca31b16c2666a3962abb14d8003378fd7cc0a7581755008c5"
+      "sha256": "318a1523985f2bb161620aaeaa9151d30edac6066e3ae88a5793a97f7c391162"
     }
   ]
 }

@@ -324,10 +324,15 @@ export class FreeRDPProcess {
         if (this.closed || !this.child) { return }
         // During freerdp_connect the helper reads certificate/NLA decisions directly from stdin. User input
         // must not get ahead of those replies and be mistaken for a refusal.
-        if (!this.connected && ['K', 'M', 'R', 'P'].includes(type)) { return }
+        if (!this.connected && ['K', 'M', 'R', 'P', 'W'].includes(type)) { return }
         // A child that has stalled must not accumulate an unbounded queue of mouse/keyboard events.
         if (this.child.stdin.writableLength > MAX_FRAME) { this.fail(new Error('FreeRDP input stopped responding')); return }
         this.child.stdin.write(ipcFrame(type, payload))
+    }
+
+    /** Narrows the clipboard's ways while connected; the helper drops what may no longer go. */
+    narrowClipboard (ways: ClipboardWays): void {
+        this.send('W', numbers((ways.toRemote ? 1 : 0) | (ways.fromRemote ? 2 : 0)))
     }
 
     /** Offers this computer's clipboard text to the server; text larger than one IPC frame isn't sent. */

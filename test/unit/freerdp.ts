@@ -138,7 +138,7 @@ test('IPC start carries the clipboard\'s ways, and none leaves the channel out',
     assert.equal(last({ toRemote: true, fromRemote: true }), 3)
 })
 
-test('clipboard text: the server\'s arrives as UTF-8, this computer\'s goes only once connected and within one frame', () => {
+test('clipboard text: the server\'s arrives as UTF-8, this computer\'s goes only once connected and within one frame, and a narrowing goes as W', () => {
     const native = new FreeRDPProcess(), writes: Buffer[] = [], got: string[] = []
     native.child = { stdin: { writableLength: 0, write: (data: Buffer) => writes.push(data) } }
     assert.equal(native.sendClipboardText('before'), true)
@@ -150,6 +150,9 @@ test('clipboard text: the server\'s arrives as UTF-8, this computer\'s goes only
     assert.equal(native.sendClipboardText('a\0b'), false)
     assert.equal(native.sendClipboardText('x'.repeat(1024 * 1024 + 1)), false)
     assert.equal(writes.length, 1)
+    native.narrowClipboard({ toRemote: false, fromRemote: true })
+    assert.equal(String.fromCharCode(writes[1][0]), 'W')
+    assert.deepEqual(writes[1].subarray(5), numbers(2))
     native.receive('T', Buffer.from('from the server ✓'), { remoteText: (text: string) => got.push(text) })
     native.receive('T', Buffer.alloc(0), { remoteText: (text: string) => got.push(text) })
     assert.deepEqual(got, ['from the server ✓', ''])
@@ -249,7 +252,7 @@ test('only explicit credential rejection triggers a saved-password retry', () =>
 test('native input waits until authentication has finished without delaying security decisions', () => {
     const native = new FreeRDPProcess(), writes: Buffer[] = []
     native.child = { stdin: { writableLength: 0, write: (data: Buffer) => writes.push(data) } }
-    for (const type of ['M', 'K', 'R', 'P', 'N', 'C']) native.send(type, Buffer.from([1]))
+    for (const type of ['M', 'K', 'R', 'P', 'W', 'N', 'C']) native.send(type, Buffer.from([1]))
     assert.deepEqual(writes.map(data => String.fromCharCode(data[0])), ['N', 'C'])
     native.receive('D', numbers(800, 600), {})
     for (const type of ['M', 'K', 'R']) native.send(type, Buffer.alloc(12))
