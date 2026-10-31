@@ -179,12 +179,16 @@ await suite('freerdp', async t => {
         const marker = `fclip${Date.now() % 100000}`
         await t.type(marker)
         await t.clipboard('placeholder')
+        // Changing the clipboard here and copying there within moments makes the two clipboards race for ownership,
+        // which Windows can lose track of; a pause keeps the steps apart, as a person's would be.
+        await t.sleep(800)
         const copied = await copyBack(marker)
         t.check('FreeRDP clipboard Windows → here: text copied in Notepad', copied.includes(marker), copied.slice(0, 80))
         // Here → Windows: pasted into Notepad, then marked there, so that only a paste that worked comes back this way.
         const pasted = `fpaste${Date.now() % 100000}`
+        await t.sleep(800)
         await t.clipboard(pasted)
-        await t.sleep(600)
+        await t.sleep(800)
         await t.press('a', ['Control'])
         await t.press('v', ['Control'])
         await t.sleep(800)
