@@ -103,8 +103,8 @@ export function numbers (...values: number[]): Buffer {
     return out
 }
 
-/** The native helper's IPC 4 start message: six strings followed by seven uint32 fields. */
-export function freeRDPStart (options: Pick<FreeRDPOptions, 'host' | 'username' | 'password' | 'domain' | 'width' | 'height' | 'pipeline' | 'autologon' | 'relaxOrderChecks' | 'glyphCache'>,
+/** The native helper's IPC 5 start message: six strings followed by eight uint32 fields. */
+export function freeRDPStart (options: Pick<FreeRDPOptions, 'host' | 'username' | 'password' | 'domain' | 'width' | 'height' | 'pipeline' | 'autologon' | 'relaxOrderChecks' | 'glyphCache' | 'bitmapCache'>,
     relay: { port: number, token: string }): Buffer {
     const strings = [options.host, options.username, options.password, options.domain, '', relay.token]
     const fields = strings.map(value => {
@@ -113,7 +113,7 @@ export function freeRDPStart (options: Pick<FreeRDPOptions, 'host' | 'username' 
         return Buffer.concat([numbers(text.length), text])
     })
     return Buffer.concat([...fields, numbers(relay.port, options.width, options.height, +options.pipeline,
-        +!!options.autologon, +!!options.relaxOrderChecks, +!!options.glyphCache)])
+        +!!options.autologon, +!!options.relaxOrderChecks, +!!options.glyphCache, +!!options.bitmapCache)])
 }
 
 /** Only a process holding the per-attempt token can open the SSH channel or gateway connection. */
@@ -203,6 +203,7 @@ interface FreeRDPOptions {
     autologon?: boolean
     relaxOrderChecks?: boolean
     glyphCache?: boolean
+    bitmapCache?: boolean
     open: (signal: AbortSignal) => Promise<Duplex>
     certificate: (fingerprint: string, valid: boolean, reason: string, details?: CertificateDetails) => void
     withoutNla: () => void

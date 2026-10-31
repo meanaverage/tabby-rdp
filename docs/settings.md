@@ -84,6 +84,7 @@ The Settings tab groups everyday controls first, followed by SSH integration, Fr
 | Setting | Default | Behavior |
 |---|---|---|
 | Glyph caching (`glyphCache`) | Off (`false`) | FreeRDP only. Experimental compatibility for older RDP servers or PAM login screens with missing text; may cause display artifacts. Enable only for connections that need it. Profiles and desktop entries can override it with `true` or `false`; a profile’s `null` follows Settings through group defaults. Applies on reconnect. Glyph caching and relaxed order checks are independent. |
+| Bitmap caching (`bitmapCache`) | Off (`false`) | FreeRDP only. Experimental compatibility for servers or PAM login screens that draw pictures, such as a logo, from cached bitmaps; without it those areas can stay blank. May cause display artifacts. Enable only for connections that need it. Profiles and desktop entries can override it with `true` or `false`; a profile’s `null` follows Settings through group defaults. Applies on reconnect. Independent of glyph caching and relaxed order checks. |
 | Relax drawing order checks (`relaxOrderChecks`) | Off (`false`) | FreeRDP only. Allows a server or PAM proxy to send drawing orders it did not announce. Try it for a black screen or an unannounced-order error; it may help with some proxies, but does not address every black screen. RDP profiles and desktop entries can override the setting with `true` or `false`; a profile's `null` explicitly follows Settings through group defaults. Applies on reconnect. |
 
 ### Diagnostics

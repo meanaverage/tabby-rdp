@@ -15,7 +15,7 @@ await suite('freerdp', async t => {
         await H.inZone(() => RD.injector.get(require('tabby-core').ProfilesService).openNewTabForProfile({
             id: 'rdp:freerdp-test', type: 'rdp', name: 'FreeRDP test', options: {
                 host: ${JSON.stringify(address.host)}, port: ${address.port}, kind: ${JSON.stringify(t.env.direct.kind)},
-                username: ${JSON.stringify(t.env.direct.user)}, client: 'freerdp', glyphCache: false, relaxOrderChecks: false,
+                username: ${JSON.stringify(t.env.direct.user)}, client: 'freerdp', glyphCache: false, bitmapCache: false, relaxOrderChecks: false,
                 clipboard: 'off', via: '', gateway: '', account: null
             }
         }))
@@ -131,6 +131,14 @@ await suite('freerdp', async t => {
     t.check('glyph caching keeps order validation strict and draws pixels', !!await t.waitFor(`
         const log = H.session(H.nativePane).log;
         return log.includes('FreeRDP glyph caching: enabled (experimental)') &&
+            log.includes('FreeRDP drawing order checks: strict') && H.canvas(H.nativePane)?.colors > 2;
+    `, 10), await t.ev('return H.canvas(H.nativePane)'))
+    await t.ev('H.inZone(() => RD.desktop.disconnect(H.nativePane))')
+    await t.ev('H.nativePane.profile.options.bitmapCache = true; H.inZone(() => RD.desktop.showDesktop(H.nativePane))')
+    t.check('FreeRDP reconnects with bitmap caching and strict drawing-order checks', await settle())
+    t.check('bitmap caching keeps order validation strict and draws pixels', !!await t.waitFor(`
+        const log = H.session(H.nativePane).log;
+        return log.includes('FreeRDP bitmap caching: enabled (experimental)') &&
             log.includes('FreeRDP drawing order checks: strict') && H.canvas(H.nativePane)?.colors > 2;
     `, 10), await t.ev('return H.canvas(H.nativePane)'))
     await t.ev('H.inZone(() => RD.desktop.disconnect(H.nativePane))')

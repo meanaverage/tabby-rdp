@@ -5,14 +5,15 @@ desktop form have an override. An empty override follows Settings. Existing conf
 Changes apply on the next connection; use Reconnect to compare clients on the same desktop. Accounts, certificate
 trust and desktop identities are shared between the clients.
 
-**Settings › Remote Desktop › Settings › FreeRDP compatibility** groups two independent options:
+**Settings › Remote Desktop › Settings › FreeRDP compatibility** groups three independent options:
 
 | Option | Default | Use |
 |---|---|---|
 | Glyph caching (experimental) | Off | Older RDP servers or PAM login screens that send text as cached glyphs. May cause display artifacts; enable only for connections that need it. |
+| Bitmap caching (experimental) | Off | Servers or PAM login screens that draw pictures, such as a logo, from cached bitmaps. May cause display artifacts; enable only for connections that need it. |
 | Relax drawing order checks | Off | Servers or PAM proxies that send orders the client did not announce. Useful when the native log reports an unannounced order. |
 
-Each RDP profile or configured desktop can follow Settings, enable either option, or explicitly disable it.
+Each RDP profile or configured desktop can follow Settings, enable any of these options, or explicitly disable it.
 Changes apply on the next FreeRDP connection. IronRDP uses its own graphics capabilities.
 
 An RDP profile tab's ellipsis/right-click menu also has **RDP client**: **Follow default**, **IronRDP**, or

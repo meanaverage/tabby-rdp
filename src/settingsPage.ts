@@ -372,6 +372,8 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
                 <h5>FreeRDP compatibility</h5>
                 ${this.toggleLine('glyphCache', 'Glyph caching (experimental)',
                     'For older RDP servers or PAM login screens with missing text. May cause display artifacts. Leave off unless a connection needs it; applies on reconnect. Each desktop can override it.')}
+                ${this.toggleLine('bitmapCache', 'Bitmap caching (experimental)',
+                    'For servers or PAM login screens with missing pictures or logos. May cause display artifacts. Leave off unless a connection needs it; applies on reconnect. Each desktop can override it.')}
                 ${this.toggleLine('relaxOrderChecks', 'Relax drawing order checks (FreeRDP)',
                     'For servers or PAM proxies that send drawing orders they did not announce. Try this if FreeRDP shows a black screen or reports an unannounced order. Applies on the next connection; IronRDP is unaffected. Each desktop can override it.')}
 

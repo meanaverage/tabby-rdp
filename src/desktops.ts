@@ -30,6 +30,8 @@ export interface DesktopSpec {
     client?: RDPClient
     /** Override FreeRDP's experimental legacy glyph caching for this desktop. */
     glyphCache?: boolean
+    /** Override FreeRDP's experimental bitmap caching for this desktop. */
+    bitmapCache?: boolean
     /** Override the FreeRDP drawing-order check for this desktop. */
     relaxOrderChecks?: boolean
     /** 'own' for the SSH host's own desktop, otherwise `host:port`. */
@@ -101,6 +103,7 @@ export interface ExtraDesktopConfig {
     /** A profile's null value explicitly follows the global setting, even through group defaults. */
     relaxOrderChecks?: boolean | null
     glyphCache?: boolean | null
+    bitmapCache?: boolean | null
     name?: string
     via?: string
     host?: string
@@ -160,7 +163,8 @@ export function specOf (extra: ExtraDesktopConfig): DesktopSpec | null {
     const client = ownRDPClient(extra?.client)
     const own = { ...clipboard ? { clipboard } : {}, ...client ? { client } : {},
         ...typeof extra?.relaxOrderChecks === 'boolean' ? { relaxOrderChecks: extra.relaxOrderChecks } : {},
-        ...typeof extra?.glyphCache === 'boolean' ? { glyphCache: extra.glyphCache } : {} }
+        ...typeof extra?.glyphCache === 'boolean' ? { glyphCache: extra.glyphCache } : {},
+        ...typeof extra?.bitmapCache === 'boolean' ? { bitmapCache: extra.bitmapCache } : {} }
     const hyperv = vmId(extra?.hyperv)
     if (hyperv) {
         return hyperVSpec(hyperv, configText(extra.name) || hyperv, {

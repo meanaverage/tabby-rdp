@@ -2,6 +2,9 @@
 
 ## 0.6.1 (unreleased)
 
+**Added**
+- A default-off **Bitmap caching (experimental)** setting for FreeRDP, next to glyph caching and relaxed drawing order checks, with the same per-connection overrides. It may help a PAM login screen where a picture, such as a logo, stays blank: some proxies draw pictures from cached bitmaps even when the client did not announce support for them. Not yet verified against a PAM proxy.
+
 **Fixed**
 - A PAM proxy's bracketed user name, such as senhasegura's `vault-user[DOMAIN\target-user@device]`, now reaches the proxy whole, with both clients ([#122](https://github.com/meanaverage/tabby-rdp/issues/122)). It was split at the backslash inside the brackets, so the proxy received a domain of `vault-user[DOMAIN` and a user name of `target-user@device]`, and couldn't find its target. `DOMAIN\user` is still split as before. Not yet verified against a senhasegura proxy.
 - A user name starting with a backslash now names no domain: everything after that backslash is sent as typed, without the domain field. This gives a way to send a proxy's user name that has a backslash outside brackets, such as WALLIX Bastion's `DOMAIN\user@target:login`, without it being split. The leading backslash was previously sent as part of the user name.

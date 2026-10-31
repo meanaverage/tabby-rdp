@@ -238,6 +238,8 @@ export interface DesktopSettings {
     client: RDPClient
     /** FreeRDP only: experimental legacy glyph caching; a desktop may override this. Applies on reconnect. */
     glyphCache: boolean
+    /** FreeRDP only: experimental bitmap caching, for servers or PAM proxies that draw cached bitmaps; a desktop may override this. Applies on reconnect. */
+    bitmapCache: boolean
     /** FreeRDP only: accept unannounced drawing orders; a desktop may override this. Applies on reconnect. */
     relaxOrderChecks: boolean
     /** When the pane changes size: 'live' resizes the remote monitor in place, 'reconnect' reconnects at the new size, 'off' keeps the size. */
@@ -2623,6 +2625,7 @@ export class RemoteDesktopService {
             headerMinHeight: this.headerSize(store.headerMinHeight),
             client: rdpClient(store.client),
             glyphCache: store.glyphCache === true,
+            bitmapCache: store.bitmapCache === true,
             relaxOrderChecks: store.relaxOrderChecks === true,
             resize: ['live', 'reconnect', 'off'].includes(store.resize) ? store.resize : 'live',
             sharpness: store.sharpness === 'retina' ? 'retina' : 'standard',
@@ -4345,6 +4348,8 @@ export class RemoteDesktopService {
         const relaxOrderChecks = spec.relaxOrderChecks ?? this.settingsFor(session).relaxOrderChecks
         const glyphCache = spec.glyphCache ?? settings.glyphCache
         session.log.push(`FreeRDP glyph caching: ${glyphCache ? 'enabled (experimental)' : 'disabled'}`)
+        const bitmapCache = spec.bitmapCache ?? settings.bitmapCache
+        session.log.push(`FreeRDP bitmap caching: ${bitmapCache ? 'enabled (experimental)' : 'disabled'}`)
         session.log.push(`FreeRDP drawing order checks: ${relaxOrderChecks ? 'relaxed' : 'strict'}`)
         session.log.push('FreeRDP preview: clipboard, audio, microphone and shared folders are unavailable')
         session.clipboard = 'off'
@@ -4363,6 +4368,7 @@ export class RemoteDesktopService {
                 autologon: spec.kind === 'xrdp',
                 relaxOrderChecks,
                 glyphCache,
+                bitmapCache,
                 open: async abort => {
                     const stream = gateway ? await this.throughGatewayStream(target, spec, session, gateway, endpoint, abort) : await target.openTcp(endpoint.host, endpoint.port)
                     if (abort.aborted) { stream.destroy(); throw new Error('Connection cancelled') }
