@@ -49,7 +49,8 @@ forget it), and a new address leaves it at the old one too, as well as taking it
 
 ## How a user name is sent
 
-Both clients send a user name the same way, whether it comes from a profile or a saved account:
+Both clients send a user name the same way, whether it comes from a profile or a saved account. (An RD Gateway's own
+sign-in still splits its account's name at the first backslash, and doesn't know the leading-backslash rule below.)
 
 | User name | Sent as |
 |---|---|

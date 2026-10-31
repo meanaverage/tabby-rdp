@@ -4359,9 +4359,16 @@ export class RemoteDesktopService {
         const clipboard = new FreeRDPClipboard({
             read: () => this.platform.readClipboard(),
             write: text => this.platform.setClipboard({ text }),
-            send: text => { if (!native.sendClipboardText(text)) { session.log.push('clipboard: text larger than 1 MiB is not sent') } },
+            send: text => {
+                // Refused: what the helper held before is withdrawn too, so that a paste there doesn't get older text.
+                if (!native.sendClipboardText(text)) {
+                    native.sendClipboardText('')
+                    session.log.push('clipboard: text larger than 1 MiB, or with a NUL character in it, is not sent')
+                }
+            },
             narrow: ways => native.narrowClipboard(ways),
         }, () => this.clipboardWaysOf(session), { focused: () => ui.isFocused(), viewOnly: () => ui.isViewOnly() })
+        ui.clipboardSender = () => clipboard.sendNow()
         const { username, domain } = signInParts(endpoint.credentials.username, endpoint.domain ?? spec.domain ?? '')
         const gateway = spec.gateway ? parseGateway(spec.gateway) : null
         session.status(`Connecting to ${spec.name} with FreeRDP…`)

@@ -128,6 +128,18 @@ test('IPC start keeps glyph caching, bitmap caching and relaxed checks independe
     }
 })
 
+test('paste to all on a FreeRDP desktop: Ctrl+V goes as key presses, and not in view only', () => {
+    const { FreeRDPView } = require('../../dist/freerdpView.js')
+    const sent: Buffer[] = []
+    const view = Object.create(FreeRDPView.prototype)
+    Object.assign(view, { native: { send: (type: string, data: Buffer) => { if (type === 'K') sent.push(data) } }, readOnly: false })
+    view.ctrlV()
+    assert.deepEqual(sent, [numbers(0, 0x1d, 0), numbers(0, 0x2f, 0), numbers(0x8000, 0x2f, 0), numbers(0x8000, 0x1d, 0)])
+    view.readOnly = true
+    view.ctrlV()
+    assert.equal(sent.length, 4)
+})
+
 test('IPC start carries the clipboard\'s ways, and none leaves the channel out', () => {
     const options = { host: 'pc', username: 'user', password: 'pass', domain: '', width: 800, height: 600, pipeline: false }
     const relay = { port: 1234, token: 'a'.repeat(64) }

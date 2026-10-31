@@ -22,6 +22,7 @@ export function freeRDPClipboardLog (mode: ClipboardMode): string {
 export class FreeRDPClipboard {
     private last: string | undefined
     private pending: string | undefined
+    private paused = false
     private timer: ReturnType<typeof setInterval> | undefined
     private told: ClipboardWays
 
@@ -49,9 +50,19 @@ export class FreeRDPClipboard {
             this.io.narrow(ways)
         }
         if (this.focus.viewOnly()) {
+            // Entering view only: what the helper still holds for the server is withdrawn, and the clipboard here is
+            // offered again once view only ends.
+            if (!this.paused) {
+                this.paused = true
+                this.last = undefined
+                if (ways.toRemote) {
+                    this.io.send('')
+                }
+            }
             this.pending = undefined
             return
         }
+        this.paused = false
         if (!this.focus.focused()) {
             return
         }
@@ -90,6 +101,16 @@ export class FreeRDPClipboard {
         } else {
             this.pending = text
         }
+    }
+
+    /** Sends this computer's clipboard text now, focus or not (paste to all), if it may go and not in view only. */
+    sendNow (): void {
+        if (!this.ways().toRemote || this.focus.viewOnly()) {
+            throw new Error('this computer\'s clipboard doesn\'t go to this desktop')
+        }
+        const text = this.io.read()
+        this.last = text
+        this.io.send(text)
     }
 
     stop (): void {

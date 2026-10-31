@@ -3,7 +3,7 @@
 ## 0.6.1 (unreleased)
 
 **Added**
-- Clipboard text with the experimental FreeRDP client, both ways, only from the remote desktop, or off, as the clipboard setting (or a desktop's own) says. As with IronRDP, this computer's clipboard is read only while the desktop has the focus, and off leaves the clipboard channel out of the connection; unlike IronRDP, view only shares no clipboard either way. Pictures and files on the clipboard still need IronRDP.
+- Clipboard text with the experimental FreeRDP client, both ways, only from the remote desktop, or off, as the clipboard setting (or a desktop's own) says. As with IronRDP, this computer's clipboard is read only while the desktop has the focus, and off leaves the clipboard channel out of the connection; unlike IronRDP, view only shares no clipboard either way. **Paste to all desktops** includes FreeRDP desktops, with text. Pictures and files on the clipboard still need IronRDP.
 - A default-off **Bitmap caching (experimental)** setting for FreeRDP, next to glyph caching and relaxed drawing order checks, with the same per-connection overrides. It may help a PAM login screen where a picture, such as a logo, stays blank: some proxies draw pictures from cached bitmaps even when the client did not announce support for them. Not yet verified against a PAM proxy.
 
 **Fixed**
