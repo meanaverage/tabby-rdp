@@ -12,6 +12,8 @@
 #include <freerdp/client/channels.h>
 #include <freerdp/client/cmdline.h>
 #include <freerdp/client/disp.h>
+#include <freerdp/client/cliprdr.h>
+#include <freerdp/channels/cliprdr.h>
 #include <freerdp/gdi/gfx.h>
 #include <freerdp/transport_io.h>
 #include <freerdp/version.h>
@@ -20,6 +22,8 @@
 #include <winpr/thread.h>
 #include <winpr/winsock.h>
 #include <winpr/wlog.h>
+#include <winpr/string.h>
+#include <winpr/user.h>
 #include <openssl/pem.h>
 #include <openssl/x509v3.h>
 #ifdef _WIN32
@@ -32,6 +36,9 @@
 #define MAX_COMMAND (1024 * 1024)
 #define MAX_AUTHORITIES (16 * 1024 * 1024)
 #define MAX_QUEUE 1024
+/* The start message's clipboard ways: this computer's text to the server, the server's to this computer. */
+#define CLIPBOARD_TO_REMOTE 1
+#define CLIPBOARD_FROM_REMOTE 2
 typedef struct Command { BYTE type; UINT32 length; BYTE* data; struct Command* next; } Command;
 typedef struct {
     rdpClientContext client;
@@ -41,6 +48,15 @@ typedef struct {
     char* name;
     UINT32 port;
     DispClientContext* disp;
+    CliprdrClientContext* cliprdr;
+    /* clipboardLock: the ways and the text, read by FreeRDP's channel thread. offerLock: one announcement to the
+     * server at a time, each of the text as it is when sent, so that an older one can't arrive after a newer one. */
+    CRITICAL_SECTION clipboardLock;
+    CRITICAL_SECTION offerLock;
+    UINT32 clipboard;
+    WCHAR* localText; /* This computer's clipboard text for the server, NUL-terminated UTF-16; NULL for none. */
+    size_t localTextLength; /* In WCHARs, without the NUL. */
+    BOOL clipboardReady; /* Under offerLock. */
     HANDLE inputEvent;
     HANDLE inputSpace;
     CRITICAL_SECTION inputLock;
@@ -231,16 +247,134 @@ static UINT display_caps(DispClientContext* disp, UINT32 monitors, UINT32 a, UIN
     Context* c = disp->custom; c->displayReady = TRUE;
     return send_layout(c);
 }
+/* Text only, both ways as the start message allows: what the server's clipboard gets is fetched at once and sent to
+ * the parent ('T', UTF-8); the parent's text ('P') is offered to the server, which asks for it when pasted. */
+static UINT32 clipboard_ways(Context* c) {
+    EnterCriticalSection(&c->clipboardLock);
+    UINT32 ways = c->clipboard;
+    LeaveCriticalSection(&c->clipboardLock);
+    return ways;
+}
+/* Under offerLock: offers the text, or an empty list when there's none or it may no longer go. FreeRDP sends only
+ * the first empty list, so a withdrawn offer may stay announced; its data requests are refused all the same. */
+static UINT clipboard_offer_locked(Context* c, CliprdrClientContext* cliprdr) {
+    CLIPRDR_FORMAT text = { CF_UNICODETEXT, NULL };
+    CLIPRDR_FORMAT_LIST list = { 0 };
+    list.common.msgType = CB_FORMAT_LIST;
+    EnterCriticalSection(&c->clipboardLock);
+    BOOL offer = (c->clipboard & CLIPBOARD_TO_REMOTE) && c->localText != NULL;
+    LeaveCriticalSection(&c->clipboardLock);
+    list.numFormats = offer ? 1 : 0; list.formats = offer ? &text : NULL;
+    return cliprdr->ClientFormatList(cliprdr, &list);
+}
+static UINT clipboard_offer(Context* c) {
+    EnterCriticalSection(&c->offerLock);
+    CliprdrClientContext* cliprdr = c->cliprdr;
+    UINT rc = c->clipboardReady && cliprdr ? clipboard_offer_locked(c, cliprdr) : CHANNEL_RC_OK;
+    LeaveCriticalSection(&c->offerLock);
+    return rc;
+}
+static UINT clipboard_monitor_ready(CliprdrClientContext* cliprdr, const CLIPRDR_MONITOR_READY* ready) {
+    (void)ready;
+    Context* c = cliprdr->custom;
+    CLIPRDR_GENERAL_CAPABILITY_SET general = { CB_CAPSTYPE_GENERAL, 12, CB_CAPS_VERSION_2, CB_USE_LONG_FORMAT_NAMES };
+    CLIPRDR_CAPABILITIES caps = { 0 };
+    caps.cCapabilitiesSets = 1; caps.capabilitySets = (CLIPRDR_CAPABILITY_SET*)&general;
+    EnterCriticalSection(&c->offerLock);
+    UINT rc = cliprdr->ClientCapabilities(cliprdr, &caps);
+    if (rc == CHANNEL_RC_OK) {
+        c->clipboardReady = TRUE;
+        rc = clipboard_offer_locked(c, cliprdr);
+    }
+    LeaveCriticalSection(&c->offerLock);
+    return rc;
+}
+static UINT clipboard_server_capabilities(CliprdrClientContext* cliprdr, const CLIPRDR_CAPABILITIES* caps) {
+    (void)cliprdr; (void)caps; return CHANNEL_RC_OK;
+}
+static UINT clipboard_server_format_list(CliprdrClientContext* cliprdr, const CLIPRDR_FORMAT_LIST* list) {
+    Context* c = cliprdr->custom;
+    CLIPRDR_FORMAT_LIST_RESPONSE response = { 0 };
+    response.common.msgType = CB_FORMAT_LIST_RESPONSE; response.common.msgFlags = CB_RESPONSE_OK;
+    UINT rc = cliprdr->ClientFormatListResponse(cliprdr, &response);
+    if (rc != CHANNEL_RC_OK || !(clipboard_ways(c) & CLIPBOARD_FROM_REMOTE)) return rc;
+    for (UINT32 i = 0; i < list->numFormats; i++) {
+        if (list->formats[i].formatId == CF_UNICODETEXT) {
+            CLIPRDR_FORMAT_DATA_REQUEST request = { 0 };
+            request.common.msgType = CB_FORMAT_DATA_REQUEST; request.requestedFormatId = CF_UNICODETEXT;
+            return cliprdr->ClientFormatDataRequest(cliprdr, &request);
+        }
+    }
+    return CHANNEL_RC_OK;
+}
+static UINT clipboard_server_format_list_response(CliprdrClientContext* cliprdr, const CLIPRDR_FORMAT_LIST_RESPONSE* response) {
+    (void)cliprdr; (void)response; return CHANNEL_RC_OK;
+}
+static UINT clipboard_server_data_request(CliprdrClientContext* cliprdr, const CLIPRDR_FORMAT_DATA_REQUEST* request) {
+    Context* c = cliprdr->custom;
+    CLIPRDR_FORMAT_DATA_RESPONSE response = { 0 };
+    response.common.msgType = CB_FORMAT_DATA_RESPONSE; response.common.msgFlags = CB_RESPONSE_FAIL;
+    EnterCriticalSection(&c->clipboardLock);
+    BYTE* copy = NULL;
+    if (request->requestedFormatId == CF_UNICODETEXT && (c->clipboard & CLIPBOARD_TO_REMOTE) && c->localText) {
+        size_t bytes = (c->localTextLength + 1) * sizeof(WCHAR);
+        if (bytes <= UINT32_MAX && (copy = malloc(bytes))) {
+            memcpy(copy, c->localText, bytes);
+            response.common.msgFlags = CB_RESPONSE_OK; response.common.dataLen = (UINT32)bytes; response.requestedFormatData = copy;
+        }
+    }
+    LeaveCriticalSection(&c->clipboardLock);
+    UINT rc = cliprdr->ClientFormatDataResponse(cliprdr, &response);
+    if (copy) { memset(copy, 0, response.common.dataLen); free(copy); }
+    return rc;
+}
+static UINT clipboard_server_data_response(CliprdrClientContext* cliprdr, const CLIPRDR_FORMAT_DATA_RESPONSE* response) {
+    Context* c = cliprdr->custom;
+    /* Bounded before it is scanned or converted: UTF-8 of more than one IPC frame wouldn't be sent anyway. */
+    if (!(response->common.msgFlags & CB_RESPONSE_OK) || !(clipboard_ways(c) & CLIPBOARD_FROM_REMOTE) || !response->requestedFormatData ||
+        response->common.dataLen > 2u * MAX_COMMAND + sizeof(WCHAR))
+        return CHANNEL_RC_OK;
+    size_t chars = response->common.dataLen / sizeof(WCHAR), length = 0;
+    const WCHAR* text = (const WCHAR*)response->requestedFormatData;
+    while (chars && text[chars - 1] == 0) chars--;
+    char* utf8 = chars ? ConvertWCharNToUtf8Alloc(text, chars, &length) : calloc(1, 1);
+    /* Larger text than one IPC frame stays on the server's clipboard; the parent keeps its own. */
+    if (utf8 && length <= MAX_COMMAND) (void)output(c, 'T', utf8, (UINT32)length);
+    if (utf8) { memset(utf8, 0, length); free(utf8); }
+    return CHANNEL_RC_OK;
+}
+static void set_local_text(Context* c, const BYTE* utf8, UINT32 length) {
+    size_t chars = 0;
+    WCHAR* text = length ? ConvertUtf8NToWCharAlloc((const char*)utf8, length, &chars) : NULL;
+    EnterCriticalSection(&c->clipboardLock);
+    if (c->localText) { memset(c->localText, 0, (c->localTextLength + 1) * sizeof(WCHAR)); free(c->localText); }
+    c->localText = text; c->localTextLength = text ? chars : 0;
+    LeaveCriticalSection(&c->clipboardLock);
+}
 static void channel_connected(void* context, const ChannelConnectedEventArgs* e) {
     Context* c = context;
     if (strcmp(e->name, DISP_DVC_CHANNEL_NAME) == 0) {
         c->disp = e->pInterface; c->disp->custom = c; c->disp->DisplayControlCaps = display_caps;
+    }
+    else if (strcmp(e->name, CLIPRDR_SVC_CHANNEL_NAME) == 0) {
+        CliprdrClientContext* cliprdr = e->pInterface;
+        cliprdr->custom = c;
+        cliprdr->MonitorReady = clipboard_monitor_ready;
+        cliprdr->ServerCapabilities = clipboard_server_capabilities;
+        cliprdr->ServerFormatList = clipboard_server_format_list;
+        cliprdr->ServerFormatListResponse = clipboard_server_format_list_response;
+        cliprdr->ServerFormatDataRequest = clipboard_server_data_request;
+        cliprdr->ServerFormatDataResponse = clipboard_server_data_response;
+        EnterCriticalSection(&c->offerLock); c->cliprdr = cliprdr; LeaveCriticalSection(&c->offerLock);
     }
     else freerdp_client_OnChannelConnectedEventHandler(&c->client, e);
 }
 static void channel_disconnected(void* context, const ChannelDisconnectedEventArgs* e) {
     Context* c = context;
     if (strcmp(e->name, DISP_DVC_CHANNEL_NAME) == 0) { c->disp = NULL; c->displayReady = FALSE; }
+    else if (strcmp(e->name, CLIPRDR_SVC_CHANNEL_NAME) == 0) {
+        EnterCriticalSection(&c->offerLock); c->cliprdr = NULL; c->clipboardReady = FALSE; LeaveCriticalSection(&c->offerLock);
+    }
     else freerdp_client_OnChannelDisconnectedEventHandler(&c->client, e);
 }
 static BOOL pre_connect(freerdp* instance) {
@@ -315,13 +449,29 @@ static BOOL process_input(Context* c) {
                 c->width = w; c->height = h; c->scale = scale;
                 (void)send_layout(c);
             }
+        } else if (cmd->type == 'P') {
+            if ((clipboard_ways(c) & CLIPBOARD_TO_REMOTE) && !memchr(p, 0, cmd->length)) {
+                set_local_text(c, p, cmd->length);
+                (void)clipboard_offer(c);
+            }
+        } else if (cmd->type == 'W' && cmd->length == 4) {
+            /* The parent narrowed the clipboard while connected: never wider than the start message's ways. Text that
+             * may no longer go is dropped and its offer withdrawn, so a later paste there gets nothing. */
+            EnterCriticalSection(&c->clipboardLock);
+            c->clipboard &= read32(p);
+            if (!(c->clipboard & CLIPBOARD_TO_REMOTE) && c->localText) {
+                memset(c->localText, 0, (c->localTextLength + 1) * sizeof(WCHAR)); free(c->localText);
+                c->localText = NULL; c->localTextLength = 0;
+            }
+            LeaveCriticalSection(&c->clipboardLock);
+            (void)clipboard_offer(c);
         } else ended = TRUE;
         free_command(cmd); cmd = next;
     }
     return !ended;
 }
 int main(int argc, char** argv) {
-    if (argc == 2 && strcmp(argv[1], "--version") == 0) { printf("tabby-freerdp IPC 5; FreeRDP %s\n", FREERDP_VERSION_FULL); return 0; }
+    if (argc == 2 && strcmp(argv[1], "--version") == 0) { printf("tabby-freerdp IPC 6; FreeRDP %s\n", FREERDP_VERSION_FULL); return 0; }
     if (argc != 1) return 2;
 #ifdef _WIN32
     _setmode(_fileno(stdin), _O_BINARY); _setmode(_fileno(stdout), _O_BINARY);
@@ -338,6 +488,7 @@ int main(int argc, char** argv) {
     if (!freerdp_context_new(instance)) { freerdp_free(instance); return 1; }
     Context* c = (Context*)instance->context;
     InitializeCriticalSection(&c->inputLock); InitializeCriticalSection(&c->outputLock);
+    InitializeCriticalSection(&c->clipboardLock); InitializeCriticalSection(&c->offerLock);
     c->inputEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
     c->inputSpace = CreateEvent(NULL, FALSE, FALSE, NULL);
     if (!c->inputEvent || !c->inputSpace) return 1;
@@ -357,12 +508,13 @@ int main(int argc, char** argv) {
     const BYTE* p = start->data; UINT32 left = start->length;
     char* fields[6] = { 0 };
     for (int i = 0; i < 6; i++) if (!(fields[i] = string_field(&p, &left))) return 2;
-    if (left != 32) return 2;
+    if (left != 36) return 2;
     if (authorities && *fields[4]) return 2;
     c->name = fields[0]; c->authorities = authorities ? authorities : fields[4]; c->token = fields[5]; c->port = read32(p);
     if (authorities) free(fields[4]);
     UINT32 w = read32(p + 4), h = read32(p + 8), gfx = read32(p + 12), autologon = read32(p + 16), relaxOrderChecks = read32(p + 20);
     UINT32 glyphCache = read32(p + 24), bitmapCache = read32(p + 28);
+    c->clipboard = read32(p + 32) & (CLIPBOARD_TO_REMOTE | CLIPBOARD_FROM_REMOTE); /* Before any channel thread runs. */
     if (!c->inputEvent || !c->port || c->port > 65535 || strlen(c->token) != 64 || w < 200 || w > 7680 || h < 200 || h > 4320) return 2;
     rdpSettings* s = instance->context->settings;
 #define STR(key, value) if (!freerdp_settings_set_string(s, FreeRDP_##key, value)) return 2
@@ -387,7 +539,11 @@ int main(int argc, char** argv) {
     BOOLSET(SupportDisplayControl, TRUE); BOOLSET(DynamicResolutionUpdate, TRUE);
     BOOLSET(SupportGraphicsPipeline, gfx != 0); BOOLSET(GfxH264, FALSE); BOOLSET(GfxAVC444, FALSE);
     BOOLSET(NSCodec, TRUE); BOOLSET(RemoteFxCodec, TRUE);
-    BOOLSET(RedirectClipboard, FALSE); BOOLSET(AudioPlayback, FALSE); BOOLSET(DeviceRedirection, FALSE);
+    /* No clipboard channel at all when the clipboard is off either way. */
+    BOOLSET(RedirectClipboard, c->clipboard != 0); BOOLSET(AudioPlayback, FALSE); BOOLSET(DeviceRedirection, FALSE);
+    /* FreeRDP filters the channel by these too: text only, the ways the parent asked for, never files. */
+    NUM(ClipboardFeatureMask, ((c->clipboard & CLIPBOARD_TO_REMOTE) ? CLIPRDR_FLAG_LOCAL_TO_REMOTE : 0) |
+        ((c->clipboard & CLIPBOARD_FROM_REMOTE) ? CLIPRDR_FLAG_REMOTE_TO_LOCAL : 0));
     BOOLSET(SupportMultitransport, FALSE); /* The parent supplies one authenticated TCP transport. */
     for (int i = 1; i <= 3; i++) { memset(fields[i], 0, strlen(fields[i])); free(fields[i]); }
     free_command(start);

@@ -146,6 +146,57 @@ await suite('freerdp', async t => {
     t.check('FreeRDP reconnects with relaxed drawing-order checks and remembered trust decisions', await settle())
     t.check('reconnect has a new process and fresh pixels', !!await t.waitFor(`return H.session(H.nativePane)?.ui?.native?.child?.pid !== H.nativePid && H.canvas(H.nativePane)?.colors > 2`, 10))
     await t.dump('H.nativePane', 'freerdp-reconnected')
+    if (t.env.direct.kind === 'windows') {
+        await t.ev('H.inZone(() => RD.desktop.disconnect(H.nativePane))')
+        await t.ev(`H.nativePane.profile.options.clipboard = 'both'; H.inZone(() => RD.desktop.showDesktop(H.nativePane))`)
+        t.check('FreeRDP reconnects with the clipboard both ways', await settle())
+        t.check('its clipboard is set up for text both ways', !!await t.waitFor(`return H.session(H.nativePane).log.some(line => line.startsWith('clipboard: both ways'))`, 5))
+        await t.sleep(3000)
+        await t.clickDesktop('H.nativePane')
+        await t.escape()
+        await t.tap('Meta')
+        await t.sleep(3000)
+        await t.type('notepad')
+        await t.sleep(2000)
+        await t.enter()
+        await t.sleep(4000)
+        await t.clickDesktop('H.nativePane')  // Notepad opens over the middle of the screen: give it the keyboard
+        await t.press('n', ['Control'])
+        await t.sleep(1500)
+        const copyBack = async (expected: string) => {
+            let got = ''
+            for (let attempt = 0; attempt < 2 && !got.includes(expected); attempt++) {
+                await t.press('a', ['Control'])
+                await t.press('c', ['Control'])
+                for (let i = 0; i < 25 && !got.includes(expected); i++) {
+                    await t.sleep(200)
+                    got = await t.clipboard() ?? ''
+                }
+            }
+            return got
+        }
+        // Windows → here: typed in Notepad, copied there.
+        const marker = `fclip${Date.now() % 100000}`
+        await t.type(marker)
+        await t.clipboard('placeholder')
+        const copied = await copyBack(marker)
+        t.check('FreeRDP clipboard Windows → here: text copied in Notepad', copied.includes(marker), copied.slice(0, 80))
+        // Here → Windows: pasted into Notepad, then marked there, so that only a paste that worked comes back this way.
+        const pasted = `fpaste${Date.now() % 100000}`
+        await t.clipboard(pasted)
+        await t.sleep(600)
+        await t.press('a', ['Control'])
+        await t.press('v', ['Control'])
+        await t.sleep(800)
+        await t.type('-x')
+        const round = await copyBack(`${pasted}-x`)
+        t.check('FreeRDP clipboard here → Windows: pasted into Notepad', round.includes(`${pasted}-x`), round.slice(0, 80))
+        // Leave nothing for Notepad to restore: clear the tab and close it.
+        await t.press('a', ['Control'])
+        await t.key('Delete', 'Delete', 46)
+        await t.press('w', ['Control'])
+        await t.ev(`H.nativePane.profile.options.clipboard = 'off'`)
+    }
     await t.ev(`
         H.inZone(() => RD.desktop.disconnect(H.nativePane))
         H.nativePane.profile.options.client = 'ironrdp'
