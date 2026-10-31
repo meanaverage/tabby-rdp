@@ -13,13 +13,13 @@ type Ways = { toRemote: boolean, fromRemote: boolean }
 
 /** A clipboard here, what was sent and narrowed, and the ways and focus as a test sets them; polled by hand. */
 function fixture (ways: Ways = { toRemote: true, fromRemote: true }, interval = 1e9) {
-    const state = { local: '', sent: [] as string[], narrowed: [] as Ways[], ways, focused: true, viewOnly: false, reads: 0, failing: false }
+    const state = { local: '', sent: [] as string[], narrowed: [] as Ways[], ways, focused: true, viewOnly: false, reads: 0, failing: false, now: 0 }
     const clipboard = new FreeRDPClipboard({
         read: () => { state.reads++; if (state.failing) { throw new Error('no clipboard') } return state.local },
         write: (text: string) => { state.local = text },
         send: (text: string) => { state.sent.push(text) },
         narrow: (next: Ways) => { state.narrowed.push(next) },
-    }, () => state.ways, { focused: () => state.focused, viewOnly: () => state.viewOnly }, interval)
+    }, () => state.ways, { focused: () => state.focused, viewOnly: () => state.viewOnly }, interval, () => state.now)
     return { state, clipboard }
 }
 
@@ -142,6 +142,24 @@ test('paste to all sends this computer\'s text at once, focus or not, but not wh
     t.after(() => from.clipboard.stop())
     assert.throws(() => from.clipboard.sendNow())
     assert.equal(from.state.reads, 0)
+})
+
+test('the same copy announced again by the server doesn\'t overwrite what was copied here in between', t => {
+    const { state, clipboard } = fixture()
+    t.after(() => clipboard.stop())
+    clipboard.remote('copied there')
+    assert.equal(state.local, 'copied there')
+    state.now = 400
+    state.local = 'copied here'
+    clipboard.remote('copied there')
+    assert.equal(state.local, 'copied here', 'a repeat within a moment is the same copy')
+    clipboard.poll()
+    assert.deepEqual(state.sent, ['copied here'])
+    state.now = 5000
+    clipboard.remote('copied there')
+    assert.equal(state.local, 'copied there', 'the same text copied again later is a new copy')
+    clipboard.remote('something else')
+    assert.equal(state.local, 'something else', 'different text is always a new copy')
 })
 
 test('a clipboard that can\'t be read sends nothing', t => {

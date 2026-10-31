@@ -19,10 +19,14 @@ export function freeRDPClipboardLog (mode: ClipboardMode): string {
  * sending at once, and is passed on to the helper (`narrow`), which drops what it was holding for the server.
  * Nothing is read before `start`, once the connection is up. Pictures and files don't go through FreeRDP.
  */
+/** How soon the same text from the server counts as the same copy announced again (see FreeRDPClipboard.remote). */
+const REPEATED_COPY_MS = 1500
+
 export class FreeRDPClipboard {
     private last: string | undefined
     private pending: string | undefined
     private paused = false
+    private lastRemote: { text: string, at: number } | undefined
     private timer: ReturnType<typeof setInterval> | undefined
     private told: ClipboardWays
 
@@ -32,6 +36,7 @@ export class FreeRDPClipboard {
         /** `focused`: the desktop has the focus; `viewOnly`: it is in view only. */
         private readonly focus: { focused: () => boolean, viewOnly: () => boolean },
         private readonly interval = 100,
+        private readonly now: () => number = Date.now,
     ) {
         // The ways the connection was set up with, which the helper has.
         this.told = ways()
@@ -94,6 +99,13 @@ export class FreeRDPClipboard {
         if (!this.ways().fromRemote || this.focus.viewOnly()) {
             return
         }
+        // Windows can announce one copy more than once. The same text again within a moment is that copy, not a new
+        // one, and mustn't overwrite what was copied here in between.
+        const at = this.now()
+        if (this.lastRemote?.text === text && at - this.lastRemote.at < REPEATED_COPY_MS) {
+            return
+        }
+        this.lastRemote = { text, at }
         if (this.focus.focused()) {
             this.pending = undefined
             this.last = text

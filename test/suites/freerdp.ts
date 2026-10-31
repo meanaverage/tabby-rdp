@@ -191,6 +191,16 @@ await suite('freerdp', async t => {
         await t.type('-x')
         const round = await copyBack(`${pasted}-x`)
         t.check('FreeRDP clipboard here → Windows: pasted into Notepad', round.includes(`${pasted}-x`), round.slice(0, 80))
+        // Paste to all: this computer's text sent to the desktop and Ctrl+V pressed there by the plugin, not typed here.
+        const toAll = `fall${Date.now() % 100000}`
+        await t.clipboard(toAll)
+        await t.sleep(300)
+        await t.press('a', ['Control'])
+        const targets = await t.ev<number>('return H.inZone(() => RD.desktop.pasteToAll(H.nativePane))')
+        await t.sleep(1500)
+        await t.type('-y')
+        const all = await copyBack(`${toAll}-y`)
+        t.check('FreeRDP paste to all: pasted into Notepad', targets >= 1 && all.includes(`${toAll}-y`), { targets, got: all.slice(0, 80) })
         // Leave nothing for Notepad to restore: clear the tab and close it.
         await t.press('a', ['Control'])
         await t.key('Delete', 'Delete', 46)
