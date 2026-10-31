@@ -1,8 +1,8 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: meanaverage <18336095+meanaverage@users.noreply.github.com>
 Date: Sun, 4 Oct 2026 13:02:44 -0700
-Subject: [PATCH 32/51] fix(pdu,graphics): decode ClearCodec bands one V-bar at
- a time
+Subject: [PATCH] fix(pdu,graphics): decode ClearCodec bands one V-bar at a
+ time
 
 The ClearCodec decoder collected a whole bands layer before painting
 it: every band and, in each, a VBar for every column (16 bytes in the
@@ -359,10 +359,10 @@ index 222ceb06..fdcd8c26 100644
  pub use self::residual::{RgbRunSegment, decode_residual_layer, encode_residual_layer};
  pub use self::rlex::{MAX_PALETTE_COUNT, RlexData, RlexSegment, decode_rlex};
 diff --git a/crates/ironrdp-testsuite-core/Cargo.toml b/crates/ironrdp-testsuite-core/Cargo.toml
-index 2c5541b7..6b9fc490 100644
+index d1eaa3d0..e00a9842 100644
 --- a/crates/ironrdp-testsuite-core/Cargo.toml
 +++ b/crates/ironrdp-testsuite-core/Cargo.toml
-@@ -22,6 +22,12 @@ name = "integration_tests_core"
+@@ -24,6 +24,12 @@ name = "integration_tests_core"
  path = "tests/main.rs"
  harness = true
  

@@ -1,43 +1,126 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: meanaverage <aaronhritz@gmail.com>
-Date: Wed, 14 Oct 2026 16:14:20 -0700
+Date: Thu, 29 Oct 2026 13:45:57 -0700
 Subject: [PATCH] fix(connector): answer Auto-Detect Requests that come after
- the connect-time phase
+ the connect-time phase (#2128)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
 
-Windows Server with RDS licensing sends Auto-Detect Requests on the MCS
-message channel in the middle of the licensing exchange, which runs to
-its full length there, and again while it prepares the Demand Active.
-The connector answered them only in its connect-time auto-detection
-phase, which the first licensing PDU ends; every later phase handed
-whatever arrived to its own decoder, and the licensing header's
-"invalid security header flags" ended the connection before the session
-opened. A host without licensing ends the exchange with one error
-message, which is why it was not affected.
+## Summary
 
-The message channel is now told apart once, at the top of `step`, for
-every phase that waits on the I/O channel: an Auto-Detect Request is
-answered as during the connect-time phase, which is what mstsc and
-FreeRDP do (FreeRDP's licensing step notes the same of Windows Server
-2012 R2 and 2019); one that does not decode is logged and ignored, as
-the connect-time phase always did (a server that waits for the reply
-then stalls until it times out instead of failing fast, which the docs
-say); anything else on the message channel is ignored; and the phase
-goes on waiting. Multitransport bootstrapping, which already routes by
-channel, hands anything without SEC_TRANSPORT_REQ to the same handler,
-and an Initiate Multitransport Request outside its phase is logged as a
-warning.
+- A Windows Server 2022 RD Session Host with RDS licensing sends an
+Auto-Detect Request (Bandwidth Measure Start, `SEC_AUTODETECT_REQ` on
+the MCS message channel) in the middle of the licensing exchange,
+between the platform challenge response and the new license, and again
+while it prepares the Demand Active. The connector answers Auto-Detect
+Requests only in its `ConnectTimeAutoDetection` phase, which the first
+licensing PDU ends; every later phase hands whatever arrives to its own
+decoder, so the licensing header's "invalid security header flags" ends
+the connection before the session opens. This is #1629.
+- The message channel is now told apart once, at the top of `step`, for
+every phase that waits on the I/O channel, connect-time auto-detection
+included. An Auto-Detect Request is answered through the existing
+connect-time responder, which is what mstsc and FreeRDP do (FreeRDP's
+licensing step notes the same of Windows Server 2012 R2 and 2019); one
+that does not decode is logged and ignored, as the connect-time phase
+always did (a server that waits for the reply then stalls until it times
+out instead of failing fast, which the docs say); anything else on the
+message channel is ignored; and the phase goes on waiting.
+Multitransport bootstrapping hands anything without `SEC_TRANSPORT_REQ`
+to the same handler, and an Initiate Multitransport Request outside its
+phase is logged as a warning.
+- This is the "answer and stay" shape discussed in #1629, applied once
+ahead of every phase after the connect-time one rather than inside the
+capabilities exchange alone. The log line for an answered request names
+the phase.
 
-Upstream: Devolutions/IronRDP#2128, for #1629.
+## Scope
+
+- Connection sequence only (`ironrdp-connector`). Auto-Detect Requests
+after the session is up are #2012's, and this change is complementary to
+it: with both, a host's probes are answered end to end.
+- `ironrdp-pdu` is untouched: the parser is fine, the issue is which
+PDUs get handed to it.
+- Measurement results are the same nominal ones the connect-time phase
+already returns (#1465); a real elapsed time is #1530's.
+
+## Validation
+
+- `cargo xtask check fmt typos lints tests locks` on the pinned
+toolchain.
+- Seven new connector tests
+(`ironrdp-testsuite-core/tests/connector/autodetect.rs`): an Auto-Detect
+Request in each of the licensing, multitransport bootstrapping,
+capabilities exchange and connection finalization phases is answered and
+the phase goes on; an unrelated message channel PDU is ignored; the PDU
+from #1629's report, byte for byte. They fail without the change.
+- A/B against a real host, a Windows Server 2022 Standard Evaluation
+(10.0.20348) with the Remote Desktop Session Host and Remote Desktop
+Licensing roles (Per Device, the license server unactivated, so it
+issues temporary CALs; nothing bought). The host sends the request in
+the middle of licensing on every connection. Without this change, 0 of 5
+connections succeed, each with the error from #1629 (`[decode during
+SERVER_NEW_LICENSE/LicenseExchangeState::UpgradeLicense] … invalid
+security header flags`). With it, 10 of 10 connect, each log showing the
+request answered after the platform challenge response, then
+`ServerUpgradeLicense` and `License verified with success`, then the
+session.
+- The same against a Windows Server 2025 Standard Evaluation
+(10.0.26100) host set up the same way: 5 of 5 connect with and without
+the change. 2025 sends its first Auto-Detect Request only once the
+session is up, so it never collides with licensing.
+
+## Notes
+
+- Which detection sends the colliding request: on the 2022 host, the
+policy "Select network detection on the server" (`SelectNetworkDetect`)
+set to turn off continuous detection (2) or both (3) stops every probe,
+and an unpatched client then connects; turning off connect-time
+detection alone (1) changes nothing. So it is continuous network
+detection starting early, not the connect-time pass, which may help
+explain why only some 2022 hosts show it.
+- Found through meanaverage/tabby-rdp#106, whose reporter sees it on one
+Windows Server 2022 host among many 2019–2022 ones; the others
+presumably end licensing with `STATUS_VALID_CLIENT` and never open the
+window.
+
+Resolves #1629.
+
+---------
+
+Co-authored-by: meanaverage <18336095+meanaverage@users.noreply.github.com>
+Co-authored-by: Claude <noreply@anthropic.com>
+Co-authored-by: Marc-André Moreau <mamoreau@devolutions.net>
 ---
- crates/ironrdp-connector/src/connection.rs    | 251 ++++++----
+ crates/ironrdp-connector/src/connection.rs    | 260 ++++++----
  .../tests/connector/autodetect.rs             | 474 +++++++++++++++++-
- 2 files changed, 618 insertions(+), 107 deletions(-)
+ 2 files changed, 623 insertions(+), 111 deletions(-)
 
 diff --git a/crates/ironrdp-connector/src/connection.rs b/crates/ironrdp-connector/src/connection.rs
-index 9f0ddf3f..c036a1a1 100644
+index bcf4d5f8..b61f8b14 100644
 --- a/crates/ironrdp-connector/src/connection.rs
 +++ b/crates/ironrdp-connector/src/connection.rs
-@@ -989,6 +989,96 @@ impl ClientConnector {
+@@ -1280,7 +1280,7 @@ impl ClientConnector {
+             } => {
+                 warn!(
+                     sequence_number,
+-                    request_type, "Unexpected Bandwidth Measure Stop requestType during connect-time auto-detection"
++                    request_type, "Unexpected Bandwidth Measure Stop requestType during the connection sequence"
+                 );
+                 Ok(Written::Nothing)
+             }
+@@ -1288,12 +1288,103 @@ impl ClientConnector {
+             //
+             // This also catches the continuous-detection Bandwidth Measure Start,
+             // answered on a multitransport channel under a different procedure.
+-            // Reaching it here means a server sent a continuous request during
+-            // connect-time detection, which [MS-RDPBCGR] 3.2.5.14 does not provide for;
+-            // ignoring is the conservative response.
++            // Reaching it here means a server started continuous detection before the
++            // connection sequence completed (Windows Server 2022 does, during
++            // licensing), which [MS-RDPBCGR] 3.2.5.14 does not provide for; ignoring is
++            // the conservative response.
              _ => Ok(Written::Nothing),
          }
      }
@@ -134,7 +217,7 @@ index 9f0ddf3f..c036a1a1 100644
  }
  
  /// Build an Initiate Multitransport Response carrying `hr_response`.
-@@ -1084,6 +1174,27 @@ impl Sequence for ClientConnector {
+@@ -1396,6 +1487,27 @@ impl Sequence for ClientConnector {
          received_at: Option<MonotonicInstant>,
          output: &mut WriteBuf,
      ) -> ConnectorResult<Written> {
@@ -162,7 +245,7 @@ index 9f0ddf3f..c036a1a1 100644
          let (written, next_state) = match mem::take(&mut self.state) {
              // Invalid state
              ClientConnectorState::Consumed => {
-@@ -1317,99 +1428,52 @@ impl Sequence for ClientConnector {
+@@ -1682,99 +1794,52 @@ impl Sequence for ClientConnector {
              }
  
              //== Optional Connect-Time Auto-Detection ==//
@@ -299,7 +382,7 @@ index 9f0ddf3f..c036a1a1 100644
                  }
              }
  
-@@ -1458,6 +1522,25 @@ impl Sequence for ClientConnector {
+@@ -1823,6 +1888,25 @@ impl Sequence for ClientConnector {
                  let ctx = mcs::decode_send_data_indication(input).map_err(ConnectorError::decode)?;
  
                  if Some(ctx.channel_id) == message_channel_id {

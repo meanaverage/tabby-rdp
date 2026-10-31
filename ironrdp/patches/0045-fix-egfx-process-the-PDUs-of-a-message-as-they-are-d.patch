@@ -1,8 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: meanaverage <18336095+meanaverage@users.noreply.github.com>
 Date: Sun, 4 Oct 2026 15:51:24 -0700
-Subject: [PATCH 45/51] fix(egfx): process the PDUs of a message as they are
- decoded
+Subject: [PATCH] fix(egfx): process the PDUs of a message as they are decoded
 
 GraphicsPipelineClient::process decoded every PDU of a message into a
 Vec before processing the first. A message decompresses to up to
@@ -20,19 +19,18 @@ copies of the message itself), and takes a little less time. A PDU
 that does not decode still fails the message, but the PDUs before it
 have been processed by then; the session ends either way.
 ---
- crates/ironrdp-egfx/src/client.rs             | 30 ++++++++-----------
+ crates/ironrdp-egfx/src/client.rs             | 29 +++++++++----------
  .../tests/egfx/client.rs                      | 12 ++++++++
- 2 files changed, 25 insertions(+), 17 deletions(-)
+ 2 files changed, 25 insertions(+), 16 deletions(-)
 
 diff --git a/crates/ironrdp-egfx/src/client.rs b/crates/ironrdp-egfx/src/client.rs
-index 25abeb17..98ada52d 100644
+index e9bba7ae..6781d8d4 100644
 --- a/crates/ironrdp-egfx/src/client.rs
 +++ b/crates/ironrdp-egfx/src/client.rs
-@@ -1610,31 +1610,27 @@ impl DvcProcessor for GraphicsPipelineClient {
-     }
+@@ -1074,30 +1074,27 @@ impl GraphicsPipelineClient {
+     // ========================================================================
  
-     fn process(&mut self, _channel_id: u32, payload: &[u8]) -> PduResult<Vec<DvcMessage>> {
--        // ZGFX decompress
+     fn process_messages(&mut self, payload: &[u8]) -> PduResult<Vec<DvcMessage>> {
 -        self.decompressed_buffer.clear();
 -        self.decompressed_buffer.shrink_to(MAX_DECOMPRESSED_BUFFER_CAPACITY);
 +        // ZGFX decompress, into the buffer taken out of `self` while its PDUs are processed (after an error, the next
@@ -45,7 +43,7 @@ index 25abeb17..98ada52d 100644
 +            .decompress(payload, &mut decompressed)
              .map_err(|e| decode_err!(e))?;
  
--        // Decode all PDUs first (cursor borrows decompressed_buffer)
+-        // Decode all PDUs before dispatch while the cursor borrows the buffer.
 -        let mut pdus = Vec::new();
 -        {
 -            let mut cursor = ReadCursor::new(self.decompressed_buffer.as_slice());
@@ -72,12 +70,12 @@ index 25abeb17..98ada52d 100644
 +        self.decompressed_buffer = decompressed;
          Ok(responses)
      }
- }
+ 
 diff --git a/crates/ironrdp-testsuite-core/tests/egfx/client.rs b/crates/ironrdp-testsuite-core/tests/egfx/client.rs
-index 9e4ff6b1..ca033b42 100644
+index 141ad1ba..48d7e2ca 100644
 --- a/crates/ironrdp-testsuite-core/tests/egfx/client.rs
 +++ b/crates/ironrdp-testsuite-core/tests/egfx/client.rs
-@@ -458,6 +458,18 @@ fn client_rejects_wire_to_unknown_surface() {
+@@ -985,6 +985,18 @@ fn client_rejects_wire_to_unknown_surface() {
      assert!(result.is_err(), "should reject write to nonexistent surface");
  }
  

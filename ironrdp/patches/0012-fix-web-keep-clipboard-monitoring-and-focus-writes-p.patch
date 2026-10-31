@@ -1,8 +1,8 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: meanaverage <18336095+meanaverage@users.noreply.github.com>
 Date: Wed, 30 Sep 2026 16:48:15 -0700
-Subject: [PATCH 12/17] fix(web): keep clipboard monitoring and focus writes
- per component
+Subject: [PATCH] fix(web): keep clipboard monitoring and focus writes per
+ component
 
 The clipboard service stopped its monitoring loop through a module-level
 `isComponentDestroyed` store, and queued clipboard writes that wait for window
@@ -507,7 +507,7 @@ index 00000000..11881c4c
 +    });
 +});
 diff --git a/web-client/iron-remote-desktop/src/services/remote-desktop.service.ts b/web-client/iron-remote-desktop/src/services/remote-desktop.service.ts
-index 3ef5aa91..61f7940f 100644
+index 91720699..ba73d174 100644
 --- a/web-client/iron-remote-desktop/src/services/remote-desktop.service.ts
 +++ b/web-client/iron-remote-desktop/src/services/remote-desktop.service.ts
 @@ -43,6 +43,9 @@ export class RemoteDesktopService {
@@ -534,7 +534,7 @@ index 3ef5aa91..61f7940f 100644
      }
  
      mouseButtonState(event: MouseEvent, isDown: boolean, preventDefault: boolean) {
-@@ -227,6 +234,10 @@ export class RemoteDesktopService {
+@@ -228,6 +235,10 @@ export class RemoteDesktopService {
                  loggingService.info('Starting the session.');
                  return await session.run();
              } finally {

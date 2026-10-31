@@ -1,8 +1,8 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: meanaverage <18336095+meanaverage@users.noreply.github.com>
 Date: Sun, 4 Oct 2026 17:23:40 -0700
-Subject: [PATCH 39/51] fix(pdu,graphics): decode ClearCodec residual, subcodec
- and RLEX data one item at a time
+Subject: [PATCH] fix(pdu,graphics): decode ClearCodec residual, subcodec and
+ RLEX data one item at a time
 
 The ClearCodec decoder painted its bands layer one V-bar at a time, but
 still collected the rest of a stream before painting it: every segment
@@ -30,13 +30,13 @@ where it failed before: the segments past a full image are still read,
 so a malformed one still fails it. decode_residual_layer,
 decode_subcodec_layer and decode_rlex still collect.
 ---
- crates/ironrdp-graphics/src/clearcodec/mod.rs |  39 ++--
+ crates/ironrdp-graphics/src/clearcodec/mod.rs |  39 +++--
  .../ironrdp-pdu/src/codecs/clearcodec/mod.rs  |  10 +-
- .../src/codecs/clearcodec/residual.rs         | 126 ++++++++++---
- .../ironrdp-pdu/src/codecs/clearcodec/rlex.rs | 167 +++++++++++++-----
- .../src/codecs/clearcodec/subcodec.rs         |  70 +++++++-
- .../ironrdp-testsuite-core/tests/peak_heap.rs |  66 +++++++
- 6 files changed, 380 insertions(+), 98 deletions(-)
+ .../src/codecs/clearcodec/residual.rs         | 126 ++++++++++++----
+ .../ironrdp-pdu/src/codecs/clearcodec/rlex.rs | 141 ++++++++++++++----
+ .../src/codecs/clearcodec/subcodec.rs         |  70 ++++++++-
+ .../ironrdp-testsuite-core/tests/peak_heap.rs |  67 +++++++++
+ 6 files changed, 372 insertions(+), 81 deletions(-)
 
 diff --git a/crates/ironrdp-graphics/src/clearcodec/mod.rs b/crates/ironrdp-graphics/src/clearcodec/mod.rs
 index 29305435..9a23f66c 100644
@@ -306,7 +306,7 @@ index 5fdca056..f0cee21c 100644
 +    }
  }
 diff --git a/crates/ironrdp-pdu/src/codecs/clearcodec/rlex.rs b/crates/ironrdp-pdu/src/codecs/clearcodec/rlex.rs
-index 99135c11..9c1bc580 100644
+index 5f49fc4f..f28c90e5 100644
 --- a/crates/ironrdp-pdu/src/codecs/clearcodec/rlex.rs
 +++ b/crates/ironrdp-pdu/src/codecs/clearcodec/rlex.rs
 @@ -40,7 +40,24 @@ pub struct RlexData {
@@ -334,40 +334,39 @@ index 99135c11..9c1bc580 100644
      let mut src = ReadCursor::new(data);
  
      ensure_size!(ctx: "RlexPalette", in: src, size: 1);
-@@ -72,59 +89,58 @@ pub fn decode_rlex(data: &[u8]) -> DecodeResult<RlexData> {
+@@ -78,41 +95,47 @@ pub fn decode_rlex(data: &[u8]) -> DecodeResult<RlexData> {
      } else {
          bit_length(u32::from(palette_count - 1))
      };
 -    let suite_depth_bits = 8u8.saturating_sub(stop_index_bits);
--
+ 
 -    // Decode segments from remaining bytes
 -    let mut segments = Vec::new();
 -    let remaining = src.len();
- 
--    if stop_index_bits == 0 {
--        // Single palette entry: no stop/suite bits, only run lengths
--        // Each byte is a run length factor for palette[0]
--        decode_single_palette_segments(&mut src, &mut segments)?;
--    } else {
--        decode_multi_palette_segments(
--            remaining,
--            &mut src,
--            stop_index_bits,
--            suite_depth_bits,
--            palette_count,
--            &mut segments,
--        )?;
--    }
+-
+-    decode_multi_palette_segments(
+-        remaining,
+-        &mut src,
+-        stop_index_bits,
+-        suite_depth_bits,
 +    Ok(RlexSegments {
 +        palette,
 +        src,
-+        palette_count,
+         palette_count,
+-        &mut segments,
+-    )?;
+-
+-    Ok(RlexData { palette, segments })
 +        stop_index_bits,
 +        done: false,
 +    })
-+}
+ }
  
--    Ok(RlexData { palette, segments })
+-fn decode_multi_palette_segments(
+-    _remaining: usize,
+-    src: &mut ReadCursor<'_>,
+-    stop_index_bits: u8,
+-    suite_depth_bits: u8,
 +/// The palette of RLEX subcodec data, and an iterator over its segments, returned by
 +/// [`decode_rlex_segments`].
 +#[derive(Debug)]
@@ -375,52 +374,25 @@ index 99135c11..9c1bc580 100644
 +    palette: Vec<[u8; 3]>,
 +    /// The segments not yet read.
 +    src: ReadCursor<'a>,
-+    palette_count: u8,
-+    /// Low bits of a segment's packed byte that hold its stop index: 0 for a palette of one
-+    /// entry, whose segments are run lengths alone.
-+    stop_index_bits: u8,
-+    done: bool,
- }
- 
--fn decode_single_palette_segments(src: &mut ReadCursor<'_>, segments: &mut Vec<RlexSegment>) -> DecodeResult<()> {
--    while !src.is_empty() {
--        let run_length = decode_run_length(src)?;
--        segments.push(RlexSegment {
--            start_index: 0,
--            stop_index: 0,
--            run_length,
--        });
-+impl RlexSegments<'_> {
-+    /// BGR palette entries (3 bytes each).
-+    pub fn palette(&self) -> &[[u8; 3]] {
-+        &self.palette
-     }
--    Ok(())
--}
- 
--fn decode_multi_palette_segments(
--    _remaining: usize,
--    src: &mut ReadCursor<'_>,
--    stop_index_bits: u8,
--    suite_depth_bits: u8,
--    palette_count: u8,
+     palette_count: u8,
 -    segments: &mut Vec<RlexSegment>,
 -) -> DecodeResult<()> {
 -    let stop_mask = (1u8 << stop_index_bits) - 1;
 -    let depth_mask = (1u8 << suite_depth_bits) - 1;
-+    fn decode_next(&mut self) -> DecodeResult<RlexSegment> {
-+        if self.stop_index_bits == 0 {
-+            // Single palette entry: no stop/suite bits, only run lengths
-+            // Each byte is a run length factor for palette[0]
-+            let run_length = decode_run_length(&mut self.src)?;
-+            return Ok(RlexSegment {
-+                start_index: 0,
-+                stop_index: 0,
-+                run_length,
-+            });
-+        }
++    /// Low bits of a segment's packed byte that hold its stop index: 0 for a palette of one
++    /// entry, whose segments are run lengths alone.
++    stop_index_bits: u8,
++    done: bool,
++}
  
 -    while !src.is_empty() {
++impl RlexSegments<'_> {
++    /// BGR palette entries (3 bytes each).
++    pub fn palette(&self) -> &[[u8; 3]] {
++        &self.palette
++    }
++
++    fn decode_next(&mut self) -> DecodeResult<RlexSegment> {
 +        let suite_depth_bits = 8u8.saturating_sub(self.stop_index_bits);
 +        let stop_mask = (1u8 << self.stop_index_bits) - 1;
 +        let depth_mask = (1u8 << suite_depth_bits) - 1;
@@ -436,7 +408,7 @@ index 99135c11..9c1bc580 100644
              return Err(invalid_field_err!("rlexStopIndex", "stop_index exceeds palette count", in: src));
          }
  
-@@ -137,14 +153,26 @@ fn decode_multi_palette_segments(
+@@ -125,14 +148,26 @@ fn decode_multi_palette_segments(
  
          let run_length = decode_run_length(src)?;
  
@@ -449,8 +421,7 @@ index 99135c11..9c1bc580 100644
 +        })
      }
 +}
- 
--    Ok(())
++
 +impl Iterator for RlexSegments<'_> {
 +    type Item = DecodeResult<RlexSegment>;
 +
@@ -458,7 +429,8 @@ index 99135c11..9c1bc580 100644
 +        if self.done || self.src.is_empty() {
 +            return None;
 +        }
-+
+ 
+-    Ok(())
 +        let segment = self.decode_next();
 +        self.done = segment.is_err();
 +        Some(segment)
@@ -466,7 +438,7 @@ index 99135c11..9c1bc580 100644
  }
  
  /// Decode a variable-length run length value.
-@@ -287,4 +315,51 @@ mod tests {
+@@ -293,4 +328,52 @@ mod tests {
          assert_eq!(rlex.segments[0].stop_index, 2);
          assert_eq!(rlex.segments[0].run_length, 5);
      }
@@ -505,8 +477,9 @@ index 99135c11..9c1bc580 100644
 +    }
 +
 +    #[test]
-+    fn decode_rlex_segments_of_a_single_entry_palette_are_run_lengths() {
-+        let data = [1, 0x10, 0x20, 0x30, 4, 0xFF, 0x2C, 0x01, 0xFF];
++    fn decode_rlex_segments_of_a_single_entry_palette_keep_their_packed_byte() {
++        // As in `decode_rlex_single_palette_keeps_the_packed_byte`: stopIndex takes one bit.
++        let data = [1, 0x10, 0x20, 0x30, 0x00, 4, 0x00, 0xFF, 0x2C, 0x01, 0x00, 0xFF];
 +
 +        let mut segments = decode_rlex_segments(&data).unwrap();
 +
@@ -519,7 +492,7 @@ index 99135c11..9c1bc580 100644
 +    }
  }
 diff --git a/crates/ironrdp-pdu/src/codecs/clearcodec/subcodec.rs b/crates/ironrdp-pdu/src/codecs/clearcodec/subcodec.rs
-index d7581dff..53952f4c 100644
+index 095d4284..06f1d647 100644
 --- a/crates/ironrdp-pdu/src/codecs/clearcodec/subcodec.rs
 +++ b/crates/ironrdp-pdu/src/codecs/clearcodec/subcodec.rs
 @@ -49,16 +49,46 @@ impl Subcodec<'_> {
@@ -575,7 +548,7 @@ index d7581dff..53952f4c 100644
  }
  
  fn decode_single_subcodec<'a>(src: &mut ReadCursor<'a>) -> DecodeResult<Subcodec<'a>> {
-@@ -177,4 +207,32 @@ mod tests {
+@@ -180,4 +210,32 @@ mod tests {
          let regions = decode_subcodec_layer(&[]).unwrap();
          assert!(regions.is_empty());
      }
@@ -609,10 +582,10 @@ index d7581dff..53952f4c 100644
 +    }
  }
 diff --git a/crates/ironrdp-testsuite-core/tests/peak_heap.rs b/crates/ironrdp-testsuite-core/tests/peak_heap.rs
-index 26e9ca54..34ba9947 100644
+index 58db5d17..815623dc 100644
 --- a/crates/ironrdp-testsuite-core/tests/peak_heap.rs
 +++ b/crates/ironrdp-testsuite-core/tests/peak_heap.rs
-@@ -240,6 +240,72 @@ fn clearcodec_bands_past_the_destination_take_no_memory() {
+@@ -240,6 +240,73 @@ fn clearcodec_bands_past_the_destination_take_no_memory() {
      assert!(peak < 1024 * 1024, "decoding the layer took {peak} bytes");
  }
  
@@ -658,10 +631,11 @@ index 26e9ca54..34ba9947 100644
 +
 +#[test]
 +fn clearcodec_rlex_segments_take_no_memory() {
-+    // A 2048x2048 RLEX region of one palette entry, and 4 Mi segments of one pixel, 4 MiB. Decoded
-+    // whole, its segments took 48 MiB, on top of the 16 MiB image.
++    // A 2048x2048 RLEX region of one palette entry, and 4 Mi segments of one pixel (a packed byte
++    // and a run of none: the suite paints the pixel), 8 MiB. Decoded whole, its segments took
++    // 48 MiB, on top of the 16 MiB image.
 +    let mut rlex = vec![1, 0x10, 0x20, 0x30];
-+    rlex.resize(rlex.len() + 4 * 1024 * 1024, 1);
++    rlex.resize(rlex.len() + 2 * 4 * 1024 * 1024, 0);
 +    let mut subcodec_data = Vec::new();
 +    for value in [0u16, 0, 2048, 2048] {
 +        subcodec_data.extend_from_slice(&value.to_le_bytes()); // x, y, width, height

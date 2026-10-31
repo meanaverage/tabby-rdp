@@ -1,8 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: meanaverage <18336095+meanaverage@users.noreply.github.com>
 Date: Sun, 4 Oct 2026 13:02:45 -0700
-Subject: [PATCH 42/51] fix(egfx): track only the surfaces the compositor can
- hold
+Subject: [PATCH] fix(egfx): track only the surfaces the compositor can hold
 
 The compositor refuses a surface larger than 16384 pixels on either edge
 (MAX_SURFACE_DIM), but the client recorded it anyway: in its surfaces,
@@ -33,10 +32,10 @@ The fuzzing oracle that mirrors the client's surface state follows.
  5 files changed, 170 insertions(+), 13 deletions(-)
 
 diff --git a/crates/ironrdp-egfx/src/client.rs b/crates/ironrdp-egfx/src/client.rs
-index a648b226..418b0214 100644
+index a908f24a..b06d2309 100644
 --- a/crates/ironrdp-egfx/src/client.rs
 +++ b/crates/ironrdp-egfx/src/client.rs
-@@ -483,7 +483,8 @@ pub struct GraphicsPipelineClient {
+@@ -542,7 +542,8 @@ pub struct GraphicsPipelineClient {
      /// `EndFrame`s in `queue`: frames received but not yet processed.
      queued_frame_ends: u32,
      /// Surface sizes as of the commands received so far, which can be ahead of `surfaces` while commands wait in
@@ -46,7 +45,7 @@ index a648b226..418b0214 100644
      received_surfaces: BTreeMap<u16, (u16, u16)>,
  }
  
-@@ -635,8 +636,13 @@ impl GraphicsPipelineClient {
+@@ -791,8 +792,13 @@ impl GraphicsPipelineClient {
      fn enqueue(&mut self, pdu: GfxPdu) -> PduResult<()> {
          match &pdu {
              GfxPdu::CreateSurface(create) if create.width != 0 && create.height != 0 => {
@@ -62,7 +61,7 @@ index a648b226..418b0214 100644
              }
              GfxPdu::DeleteSurface(delete) => {
                  self.received_surfaces.remove(&delete.surface_id);
-@@ -1071,6 +1077,23 @@ impl GraphicsPipelineClient {
+@@ -1286,6 +1292,23 @@ impl GraphicsPipelineClient {
              return;
          }
  
@@ -87,11 +86,11 @@ index a648b226..418b0214 100644
              id: surface_id,
              width,
 diff --git a/crates/ironrdp-egfx/src/compositor.rs b/crates/ironrdp-egfx/src/compositor.rs
-index ea7f6003..4910f163 100644
+index 00a02164..1368d730 100644
 --- a/crates/ironrdp-egfx/src/compositor.rs
 +++ b/crates/ironrdp-egfx/src/compositor.rs
-@@ -213,23 +213,37 @@ impl Compositor {
-         self.allocated_bytes = self.allocated_bytes.saturating_sub(len);
+@@ -351,23 +351,37 @@ impl Compositor {
+         self.surfaces.contains_key(&id) && self.charge(len)
      }
  
 +    /// Whether a surface of this size can be held at all: non-zero and within
@@ -138,7 +137,7 @@ index ea7f6003..4910f163 100644
          if !self.charge(len) {
              return;
          }
-@@ -1125,6 +1139,40 @@ mod tests {
+@@ -1612,6 +1626,40 @@ mod tests {
          assert_eq!(c.surfaces.len(), 1);
      }
  
@@ -176,14 +175,14 @@ index ea7f6003..4910f163 100644
 +        );
 +    }
 +
-     /// `ResetGraphics` empties both maps, so it must zero the charge with them.
+     /// `ResetGraphics` empties the surface map, so its charge goes with it; the cache
+     /// survives the reset and so does its charge.
      #[test]
-     fn reset_releases_the_whole_charge() {
 diff --git a/crates/ironrdp-fuzzing/src/oracles/mod.rs b/crates/ironrdp-fuzzing/src/oracles/mod.rs
-index 9de24056..d2bdd824 100644
+index af1ee3c8..442b362f 100644
 --- a/crates/ironrdp-fuzzing/src/oracles/mod.rs
 +++ b/crates/ironrdp-fuzzing/src/oracles/mod.rs
-@@ -1507,6 +1507,13 @@ pub fn egfx_surface_state(data: &[u8]) {
+@@ -1696,6 +1696,13 @@ pub fn egfx_surface_state(data: &[u8]) {
                      if p.width == 0 || p.height == 0 {
                          return;
                      }
@@ -198,10 +197,10 @@ index 9de24056..d2bdd824 100644
                          p.surface_id,
                          ExpectedSurface {
 diff --git a/crates/ironrdp-testsuite-core/tests/egfx/client.rs b/crates/ironrdp-testsuite-core/tests/egfx/client.rs
-index 7077d257..9e4ff6b1 100644
+index 354789a0..141ad1ba 100644
 --- a/crates/ironrdp-testsuite-core/tests/egfx/client.rs
 +++ b/crates/ironrdp-testsuite-core/tests/egfx/client.rs
-@@ -390,6 +390,50 @@ fn client_resets_surfaces_via_process() {
+@@ -917,6 +917,50 @@ fn client_resets_surfaces_via_process() {
      );
  }
  
@@ -253,10 +252,10 @@ index 7077d257..9e4ff6b1 100644
  // Tests: Error Handling
  // ============================================================================
 diff --git a/crates/ironrdp-testsuite-core/tests/egfx/external_h264.rs b/crates/ironrdp-testsuite-core/tests/egfx/external_h264.rs
-index a957554d..cdd55431 100644
+index e6bda971..fce592e1 100644
 --- a/crates/ironrdp-testsuite-core/tests/egfx/external_h264.rs
 +++ b/crates/ironrdp-testsuite-core/tests/egfx/external_h264.rs
-@@ -469,6 +469,41 @@ fn a_frame_for_an_unknown_surface_is_refused() {
+@@ -473,6 +473,41 @@ fn a_frame_for_an_unknown_surface_is_refused() {
      assert!(client.process(0, &wire(&pdu)).is_err());
  }
  

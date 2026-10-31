@@ -1,8 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: meanaverage <18336095+meanaverage@users.noreply.github.com>
 Date: Fri, 2 Oct 2026 19:14:23 -0700
-Subject: [PATCH 15/17] feat(web): drive redirection through a JavaScript file
- system
+Subject: [PATCH] feat(web): drive redirection through a JavaScript file system
 
 The web client could not share drives: it has no file system of its own.
 A host that has one (an Electron application, say) can now hand in a
@@ -46,10 +45,10 @@ and documents the `DriveFs` interface.
  create mode 100644 crates/ironrdp-web/src/drive.rs
 
 diff --git a/crates/ironrdp-rdpdr/src/pdu/efs.rs b/crates/ironrdp-rdpdr/src/pdu/efs.rs
-index 177a1649..29f7057a 100644
+index a84caf65..c7171cd3 100644
 --- a/crates/ironrdp-rdpdr/src/pdu/efs.rs
 +++ b/crates/ironrdp-rdpdr/src/pdu/efs.rs
-@@ -1192,11 +1192,11 @@ impl DeviceAnnounceHeader {
+@@ -1328,11 +1328,11 @@ impl DeviceAnnounceHeader {
          Self {
              device_type: DeviceType::Filesystem,
              device_id,
@@ -65,7 +64,7 @@ index 177a1649..29f7057a 100644
          }
      }
  
-@@ -1384,6 +1384,15 @@ impl DeviceAnnounceHeader {
+@@ -1578,6 +1578,15 @@ impl DeviceAnnounceHeader {
      }
  }
  
@@ -1271,10 +1270,10 @@ index 0c4e56a1..20e37cdf 100644
  mod h264;
  mod image;
 diff --git a/crates/ironrdp-web/src/session.rs b/crates/ironrdp-web/src/session.rs
-index 83f921c3..67f864f6 100644
+index b77e1061..532c5279 100644
 --- a/crates/ironrdp-web/src/session.rs
 +++ b/crates/ironrdp-web/src/session.rs
-@@ -43,6 +43,7 @@ use web_sys::HtmlCanvasElement;
+@@ -8,6 +8,7 @@ use std::rc::Rc;
  use crate::canvas::Canvas;
  use crate::clipboard;
  use crate::clipboard::{ClipboardData, FileMetadata, WasmClipboard, WasmClipboardBackend, WasmClipboardBackendMessage};
@@ -1282,7 +1281,7 @@ index 83f921c3..67f864f6 100644
  use crate::error::IronError;
  use crate::image::extract_partial_image;
  use crate::input::InputTransaction;
-@@ -90,6 +91,9 @@ struct SessionBuilderInner {
+@@ -96,6 +97,9 @@ struct SessionBuilderInner {
      printer_device_id: Option<u32>,
      printer_driver_name: Option<String>,
  
@@ -1292,7 +1291,7 @@ index 83f921c3..67f864f6 100644
      use_display_control: bool,
      use_graphics_pipeline: bool,
      audio_playback_callback: Option<js_sys::Function>,
-@@ -138,6 +142,7 @@ impl Default for SessionBuilderInner {
+@@ -146,6 +150,7 @@ impl Default for SessionBuilderInner {
              printer_name: None,
              printer_device_id: None,
              printer_driver_name: None,
@@ -1300,7 +1299,7 @@ index 83f921c3..67f864f6 100644
  
              use_display_control: false,
              use_graphics_pipeline: false,
-@@ -271,6 +276,10 @@ impl iron_remote_desktop::SessionBuilder for SessionBuilder {
+@@ -308,6 +313,10 @@ impl iron_remote_desktop::SessionBuilder for SessionBuilder {
                  // A function receiving the audio (see audio::to_js); anything else turns playback off.
                  self.0.borrow_mut().audio_playback_callback = audio_playback.dyn_into::<js_sys::Function>().ok();
              };
@@ -1311,23 +1310,23 @@ index 83f921c3..67f864f6 100644
              |audio_input: JsValue| {
                  // A function told when to capture (see audio_input::to_js); anything else turns the microphone off.
                  self.0.borrow_mut().audio_input_callback = audio_input.dyn_into::<js_sys::Function>().ok();
-@@ -387,6 +396,7 @@ impl iron_remote_desktop::SessionBuilder for SessionBuilder {
+@@ -428,6 +437,7 @@ impl iron_remote_desktop::SessionBuilder for SessionBuilder {
              printer_name,
              printer_device_id,
              printer_driver_name,
 +            drive_redirection,
              outbound_message_size_limit,
              legacy_graphics,
-         );
-@@ -430,6 +440,7 @@ impl iron_remote_desktop::SessionBuilder for SessionBuilder {
+             security,
+@@ -473,6 +483,7 @@ impl iron_remote_desktop::SessionBuilder for SessionBuilder {
              printer_name = inner.printer_name.clone();
              printer_device_id = inner.printer_device_id;
              printer_driver_name = inner.printer_driver_name.clone();
 +            drive_redirection = inner.drive_redirection.clone();
              outbound_message_size_limit = inner.outbound_message_size_limit;
              legacy_graphics = inner.legacy_graphics;
-         }
-@@ -508,6 +519,34 @@ impl iron_remote_desktop::SessionBuilder for SessionBuilder {
+             security = SecurityConfig {
+@@ -558,6 +569,34 @@ impl iron_remote_desktop::SessionBuilder for SessionBuilder {
              None => (None, None),
          };
  
@@ -1362,7 +1361,7 @@ index 83f921c3..67f864f6 100644
          // Default to 2 to avoid a potential collision if drive redirection is
          // enabled in the same session.
          let printer_device_id = printer_device_id.unwrap_or(2);
-@@ -552,6 +591,7 @@ impl iron_remote_desktop::SessionBuilder for SessionBuilder {
+@@ -609,6 +648,7 @@ impl iron_remote_desktop::SessionBuilder for SessionBuilder {
              kdc_proxy_url,
              clipboard_backend: clipboard.as_ref().map(|clip| clip.backend()),
              printer_backend,
@@ -1370,7 +1369,7 @@ index 83f921c3..67f864f6 100644
              printer_device_id,
              printer_name,
              printer_driver_name,
-@@ -612,6 +652,8 @@ pub(crate) enum RdpInputEvent {
+@@ -669,6 +709,8 @@ pub(crate) enum RdpInputEvent {
      /// Printer backend → event loop: a print job finished and its bytes are
      /// ready for delivery to JS. See [`crate::printer::PrinterBackendMessage`].
      Printer(crate::printer::PrinterBackendMessage),
@@ -1379,7 +1378,7 @@ index 83f921c3..67f864f6 100644
      /// RDPSND backend → event loop: audio for the JS callback. See [`crate::audio::AudioMessage`].
      Audio(crate::audio::AudioMessage),
      /// Microphone backend → event loop: start or stop capturing, for the JS callback.
-@@ -976,6 +1018,14 @@ impl iron_remote_desktop::Session for Session {
+@@ -1033,6 +1075,14 @@ impl iron_remote_desktop::Session for Session {
                              }
                              Vec::new()
                          }
@@ -1394,7 +1393,7 @@ index 83f921c3..67f864f6 100644
                          RdpInputEvent::Audio(message) => {
                              if let Some(callback) = &self.audio_playback_callback {
                                  if let Err(error) = callback.call1(&JsValue::NULL, &crate::audio::to_js(message)) {
-@@ -1724,6 +1774,7 @@ struct ConnectParams {
+@@ -1796,6 +1846,7 @@ struct ConnectParams {
      kdc_proxy_url: Option<String>,
      clipboard_backend: Option<WasmClipboardBackend>,
      printer_backend: Option<WasmPrinterBackend>,
@@ -1402,7 +1401,7 @@ index 83f921c3..67f864f6 100644
      printer_device_id: u32,
      printer_name: String,
      printer_driver_name: String,
-@@ -1780,6 +1831,7 @@ async fn connect(
+@@ -1852,6 +1903,7 @@ async fn connect(
          kdc_proxy_url,
          clipboard_backend,
          printer_backend,
@@ -1410,7 +1409,7 @@ index 83f921c3..67f864f6 100644
          printer_device_id,
          printer_name,
          printer_driver_name,
-@@ -1806,8 +1858,8 @@ async fn connect(
+@@ -1878,8 +1930,8 @@ async fn connect(
      if let Some(audio_backend) = audio_backend {
          connector.attach_static_channel(Rdpsnd::new(Box::new(audio_backend)));
          // Windows servers only start audio playback once RDPDR is up too (FreeRDP enables device redirection
@@ -1421,7 +1420,7 @@ index 83f921c3..67f864f6 100644
              connector.attach_static_channel(Rdpdr::new(
                  Box::new(ironrdp::rdpdr::NoopRdpdrBackend),
                  computer_name.clone(),
-@@ -1815,6 +1867,23 @@ async fn connect(
+@@ -1887,6 +1939,23 @@ async fn connect(
          }
      }
  
@@ -1446,7 +1445,7 @@ index 83f921c3..67f864f6 100644
          // Windows servers only speak on RDPDR when RDPSND is advertised too
          // (MS-RDPEFS Appendix A<1>). Without audio playback, the no-op RDPSND
 diff --git a/web-client/iron-remote-desktop-rdp/src/main.ts b/web-client/iron-remote-desktop-rdp/src/main.ts
-index 5712762c..55328f19 100644
+index 53541341..c664f886 100644
 --- a/web-client/iron-remote-desktop-rdp/src/main.ts
 +++ b/web-client/iron-remote-desktop-rdp/src/main.ts
 @@ -82,6 +82,59 @@ export function audioPlayback(callback: (message: unknown) => void): Extension {

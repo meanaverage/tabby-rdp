@@ -1,8 +1,8 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: meanaverage <18336095+meanaverage@users.noreply.github.com>
 Date: Sun, 4 Oct 2026 18:39:43 -0700
-Subject: [PATCH 41/51] fix(graphics): bound how much ClearCodec subcodec
- regions paint
+Subject: [PATCH] fix(graphics): bound how much ClearCodec subcodec regions
+ paint
 
 An RLEX or NSCodec subcodec region paints its whole area, up to the
 8192x8192 pixels the ClearCodec decoder takes, from a few bytes: 24 for
@@ -35,8 +35,8 @@ message holds would take about 4 minutes. Bounding what one message
 paints in all is left to the EGFX client.
 ---
  crates/ironrdp-graphics/src/clearcodec/mod.rs |  27 +++-
- .../tests/graphics/clearcodec.rs              | 122 ++++++++++++++++++
- 2 files changed, 148 insertions(+), 1 deletion(-)
+ .../tests/graphics/clearcodec.rs              | 123 ++++++++++++++++++
+ 2 files changed, 149 insertions(+), 1 deletion(-)
 
 diff --git a/crates/ironrdp-graphics/src/clearcodec/mod.rs b/crates/ironrdp-graphics/src/clearcodec/mod.rs
 index 9be6ed5d..9f10d619 100644
@@ -103,10 +103,10 @@ index 9be6ed5d..9f10d619 100644
              .checked_mul(usize::from(sub.height))
              .and_then(|len| len.checked_mul(3))
 diff --git a/crates/ironrdp-testsuite-core/tests/graphics/clearcodec.rs b/crates/ironrdp-testsuite-core/tests/graphics/clearcodec.rs
-index e74cfd78..436cc8bc 100644
+index e74cfd78..17c2e052 100644
 --- a/crates/ironrdp-testsuite-core/tests/graphics/clearcodec.rs
 +++ b/crates/ironrdp-testsuite-core/tests/graphics/clearcodec.rs
-@@ -611,3 +611,125 @@ fn large_but_reasonable_dimensions_accepted() {
+@@ -611,3 +611,126 @@ fn large_but_reasonable_dimensions_accepted() {
      // Spot-check first pixel
      assert_eq!(&result[..4], &[0x42, 0x42, 0x42, 0xFF]);
  }
@@ -127,11 +127,12 @@ index e74cfd78..436cc8bc 100644
 +    region
 +}
 +
-+/// An RLEX region painted one color: a palette of one entry, a run of every pixel but the last,
-+/// and the suite of that entry for the last. 24 bytes, whatever its size.
++/// An RLEX region painted one color: a palette of one entry, and one segment (its packed byte, as
++/// with any palette: stopIndex 0, suiteDepth 0) of a run of every pixel but the last, and the suite
++/// of that entry for the last. 25 bytes, whatever its size.
 +fn rlex_fill(x: u16, y: u16, width: u16, height: u16, bgr: [u8; 3]) -> Vec<u8> {
 +    let pixels = u32::from(width) * u32::from(height);
-+    let mut rlex = vec![1, bgr[0], bgr[1], bgr[2], 0xFF, 0xFF, 0xFF];
++    let mut rlex = vec![1, bgr[0], bgr[1], bgr[2], 0x00, 0xFF, 0xFF, 0xFF];
 +    rlex.extend_from_slice(&(pixels - 1).to_le_bytes());
 +    subcodec_region(x, y, width, height, 0x02, &rlex)
 +}

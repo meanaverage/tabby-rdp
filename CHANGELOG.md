@@ -4,6 +4,7 @@
 
 **Changed**
 - Start 0.7.0 previews from the 0.6.2 development branch, to move to IronRDP's latest release.
+- **IronRDP is now its latest release** (crates.io, 2026-10-28), with the patches the plugin still needs, instead of a September commit with more of them. Five patches are gone because IronRDP has the same changes: the clipboard set up before the component is ready, Progressive refinement decoding, chunked channel messages, the bitmap cache across a reset and Progressive tile state per surface. Two more are now IronRDP's own merged commits, until they are released (the sound channel's Training Confirm, and the auto-detect requests of Windows Server with RDS licensing). The others are rebased, some onto limits and checks IronRDP added meanwhile. Among IronRDP's own changes since: RemoteFX and Alpha in the graphics pipeline, and an undecodable surface update is dropped instead of ending the session. [IronRDP and upstream contributions](docs/ironrdp.md) says what was submitted upstream and what became of it.
 
 ## 0.6.2 (unreleased)
 

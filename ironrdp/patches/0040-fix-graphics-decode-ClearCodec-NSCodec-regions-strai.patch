@@ -1,8 +1,8 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: meanaverage <18336095+meanaverage@users.noreply.github.com>
 Date: Sun, 4 Oct 2026 17:27:35 -0700
-Subject: [PATCH 40/51] fix(graphics): decode ClearCodec NSCodec regions
- straight into the image
+Subject: [PATCH] fix(graphics): decode ClearCodec NSCodec regions straight
+ into the image
 
 An NSCodec region of a ClearCodec stream was decoded on its own before
 it was copied into the image: each of its three or four planes whole
@@ -545,10 +545,10 @@ index b707cc3a..7f11b0c9 100644
      }
  }
 diff --git a/crates/ironrdp-testsuite-core/tests/peak_heap.rs b/crates/ironrdp-testsuite-core/tests/peak_heap.rs
-index 34ba9947..8580a49b 100644
+index 815623dc..7a5ec46f 100644
 --- a/crates/ironrdp-testsuite-core/tests/peak_heap.rs
 +++ b/crates/ironrdp-testsuite-core/tests/peak_heap.rs
-@@ -306,6 +306,46 @@ fn clearcodec_rlex_segments_take_no_memory() {
+@@ -307,6 +307,46 @@ fn clearcodec_rlex_segments_take_no_memory() {
      );
  }
  

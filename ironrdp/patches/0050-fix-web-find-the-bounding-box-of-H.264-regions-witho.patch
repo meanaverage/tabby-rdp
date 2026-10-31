@@ -1,8 +1,8 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: meanaverage <18336095+meanaverage@users.noreply.github.com>
 Date: Sun, 4 Oct 2026 15:57:08 -0700
-Subject: [PATCH 50/51] fix(web): find the bounding box of H.264 regions
- without spreading them
+Subject: [PATCH] fix(web): find the bounding box of H.264 regions without
+ spreading them
 
 WebCodecsH264Decoder found the bounding box of a frame's regions by
 spreading them into Math.min and Math.max, an argument per region. In

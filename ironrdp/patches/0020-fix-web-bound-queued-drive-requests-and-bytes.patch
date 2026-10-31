@@ -4,15 +4,15 @@ Date: Sat, 10 Oct 2026 16:38:42 -0700
 Subject: [PATCH] fix(web): bound queued drive requests and bytes
 
 ---
- crates/ironrdp-rdpdr/src/pdu/efs.rs |   3 +
+ crates/ironrdp-rdpdr/src/pdu/efs.rs |   6 +-
  crates/ironrdp-web/src/drive.rs     | 381 +++++++++++++++++++++++++++-
- 2 files changed, 377 insertions(+), 7 deletions(-)
+ 2 files changed, 377 insertions(+), 10 deletions(-)
 
 diff --git a/crates/ironrdp-rdpdr/src/pdu/efs.rs b/crates/ironrdp-rdpdr/src/pdu/efs.rs
-index 29f7057a..320b0216 100644
+index c7171cd3..8fcfb3fd 100644
 --- a/crates/ironrdp-rdpdr/src/pdu/efs.rs
 +++ b/crates/ironrdp-rdpdr/src/pdu/efs.rs
-@@ -1599,6 +1599,8 @@ impl NtStatus {
+@@ -1793,6 +1793,8 @@ impl NtStatus {
      pub const LOCK_NOT_GRANTED: Self = Self(0xC000_0055);
      /// STATUS_DISK_FULL
      pub const DISK_FULL: Self = Self(0xC000_007F);
@@ -21,7 +21,16 @@ index 29f7057a..320b0216 100644
      /// STATUS_FILE_IS_A_DIRECTORY
      pub const FILE_IS_A_DIRECTORY: Self = Self(0xC000_00BA);
      /// STATUS_CANCELLED
-@@ -1634,6 +1636,7 @@ impl Debug for NtStatus {
+@@ -1801,8 +1803,6 @@ impl NtStatus {
+     pub const DELETE_PENDING: Self = Self(0xC000_0056);
+     /// STATUS_MEDIA_WRITE_PROTECTED
+     pub const MEDIA_WRITE_PROTECTED: Self = Self(0xC000_00A2);
+-    /// STATUS_INSUFFICIENT_RESOURCES
+-    pub const INSUFFICIENT_RESOURCES: Self = Self(0xC000_009A);
+ }
+ 
+ impl Debug for NtStatus {
+@@ -1830,11 +1830,11 @@ impl Debug for NtStatus {
              NtStatus::SHARING_VIOLATION => write!(f, "STATUS_SHARING_VIOLATION"),
              NtStatus::LOCK_NOT_GRANTED => write!(f, "STATUS_LOCK_NOT_GRANTED"),
              NtStatus::DISK_FULL => write!(f, "STATUS_DISK_FULL"),
@@ -29,6 +38,11 @@ index 29f7057a..320b0216 100644
              NtStatus::FILE_IS_A_DIRECTORY => write!(f, "STATUS_FILE_IS_A_DIRECTORY"),
              NtStatus::CANCELLED => write!(f, "STATUS_CANCELLED"),
              NtStatus::DELETE_PENDING => write!(f, "STATUS_DELETE_PENDING"),
+             NtStatus::MEDIA_WRITE_PROTECTED => write!(f, "STATUS_MEDIA_WRITE_PROTECTED"),
+-            NtStatus::INSUFFICIENT_RESOURCES => write!(f, "STATUS_INSUFFICIENT_RESOURCES"),
+             _ => write!(f, "NtStatus({:#010X})", self.0),
+         }
+     }
 diff --git a/crates/ironrdp-web/src/drive.rs b/crates/ironrdp-web/src/drive.rs
 index c2ec081f..653d69d8 100644
 --- a/crates/ironrdp-web/src/drive.rs

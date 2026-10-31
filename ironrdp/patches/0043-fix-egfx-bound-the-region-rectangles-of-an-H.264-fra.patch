@@ -1,8 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: meanaverage <18336095+meanaverage@users.noreply.github.com>
 Date: Sun, 4 Oct 2026 13:07:46 -0700
-Subject: [PATCH 43/51] fix(egfx): bound the region rectangles of an H.264
- frame
+Subject: [PATCH] fix(egfx): bound the region rectangles of an H.264 frame
 
 An AVC420 metablock counts its region rectangles in 32 bits, and nothing
 bounded how many a frame kept: only what they add up to was, against the
@@ -37,10 +36,10 @@ Two limits:
  4 files changed, 93 insertions(+), 11 deletions(-)
 
 diff --git a/crates/ironrdp-egfx/src/client.rs b/crates/ironrdp-egfx/src/client.rs
-index 418b0214..ff022586 100644
+index b06d2309..cff8b41d 100644
 --- a/crates/ironrdp-egfx/src/client.rs
 +++ b/crates/ironrdp-egfx/src/client.rs
-@@ -1581,6 +1581,14 @@ fn rgba_len(rect: &ExclusiveRectangle) -> usize {
+@@ -2399,6 +2399,14 @@ fn rgba_len(rect: &ExclusiveRectangle) -> usize {
  /// The most RGBA bytes one externally decoded frame is read back into: as much as the compositor holds in all.
  const MAX_H264_REGION_BYTES: u64 = 256 * 1024 * 1024;
  
@@ -55,7 +54,7 @@ index 418b0214..ff022586 100644
  fn area(rect: &ExclusiveRectangle) -> u64 {
      u64::from(rect.right.saturating_sub(rect.left)) * u64::from(rect.bottom.saturating_sub(rect.top))
  }
-@@ -1588,11 +1596,12 @@ fn area(rect: &ExclusiveRectangle) -> u64 {
+@@ -2406,11 +2414,12 @@ fn area(rect: &ExclusiveRectangle) -> u64 {
  /// Bounds what an externally decoded frame's regions ask the decoder to read back.
  ///
  /// The regions are already clipped to the destination and the surface, but each can still cover all of it, and a
@@ -73,7 +72,7 @@ index 418b0214..ff022586 100644
  fn bound_regions(
      regions: Vec<ExclusiveRectangle>,
      surface_id: u16,
-@@ -1600,12 +1609,13 @@ fn bound_regions(
+@@ -2418,12 +2427,13 @@ fn bound_regions(
      surface_height: u16,
  ) -> Vec<ExclusiveRectangle> {
      let total = regions.iter().map(area).fold(0u64, u64::saturating_add);
@@ -90,10 +89,10 @@ index 418b0214..ff022586 100644
          let bounding = regions.into_iter().reduce(|b, r| ExclusiveRectangle {
              left: b.left.min(r.left),
 diff --git a/crates/ironrdp-egfx/src/pdu/avc.rs b/crates/ironrdp-egfx/src/pdu/avc.rs
-index 67088c2d..38e5b8d5 100644
+index fc1e3f68..3586f1c5 100644
 --- a/crates/ironrdp-egfx/src/pdu/avc.rs
 +++ b/crates/ironrdp-egfx/src/pdu/avc.rs
-@@ -132,16 +132,21 @@ impl<'de> Decode<'de> for Avc420BitmapStream<'de> {
+@@ -136,16 +136,21 @@ impl<'de> Decode<'de> for Avc420BitmapStream<'de> {
      fn decode(src: &mut ReadCursor<'de>) -> DecodeResult<Self> {
          ensure_fixed_part_size!(in: src);
  
@@ -120,12 +119,12 @@ index 67088c2d..38e5b8d5 100644
          let mut quant_qual_vals = Vec::with_capacity(bounded_capacity);
          for _ in 0..num_regions {
 diff --git a/crates/ironrdp-testsuite-core/tests/egfx/avc.rs b/crates/ironrdp-testsuite-core/tests/egfx/avc.rs
-index 6540b1f4..b80b4ed8 100644
+index 6b17c5fb..5c1b450f 100644
 --- a/crates/ironrdp-testsuite-core/tests/egfx/avc.rs
 +++ b/crates/ironrdp-testsuite-core/tests/egfx/avc.rs
-@@ -84,3 +84,18 @@ fn encode_avc420_bitmap_stream_round_trips_through_decode() {
-     assert_eq!(decoded.quant_qual_vals.len(), 1);
-     assert_eq!(decoded.data, &h264_data);
+@@ -122,3 +122,18 @@ fn quant_quality_encode_rejects_a_qp_that_does_not_fit_the_field(#[case] quantiz
+         }
+     ));
  }
 +
 +#[test]
@@ -143,10 +142,10 @@ index 6540b1f4..b80b4ed8 100644
 +    assert_eq!(decoded.data, &h264_data);
 +}
 diff --git a/crates/ironrdp-testsuite-core/tests/egfx/external_h264.rs b/crates/ironrdp-testsuite-core/tests/egfx/external_h264.rs
-index cdd55431..b19610fe 100644
+index fce592e1..496853e7 100644
 --- a/crates/ironrdp-testsuite-core/tests/egfx/external_h264.rs
 +++ b/crates/ironrdp-testsuite-core/tests/egfx/external_h264.rs
-@@ -448,6 +448,58 @@ fn overlapping_regions_are_read_back_once() {
+@@ -452,6 +452,58 @@ fn overlapping_regions_are_read_back_once() {
      assert_eq!(acks(&sent), [(1, 0)]);
  }
  

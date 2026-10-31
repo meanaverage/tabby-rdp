@@ -12,10 +12,10 @@ Subject: [PATCH] fix(cliprdr): cap clipboard formats and format names
  create mode 100644 crates/ironrdp-testsuite-core/tests/clipboard/format_list_limits.rs
 
 diff --git a/crates/ironrdp-cliprdr/src/lib.rs b/crates/ironrdp-cliprdr/src/lib.rs
-index 71ae8126..9b58136c 100644
+index fb67781a..7bcda805 100644
 --- a/crates/ironrdp-cliprdr/src/lib.rs
 +++ b/crates/ironrdp-cliprdr/src/lib.rs
-@@ -720,7 +720,21 @@ impl<R: Role> Cliprdr<R> {
+@@ -814,7 +814,21 @@ impl<R: Role> Cliprdr<R> {
          // because the remote rejected our clipboard and no further responses for
          // those requests will arrive.
  
@@ -162,7 +162,7 @@ index 9bcf9a52..ba13cc13 100644
          let header = PartialHeader::decode(src)?;
 diff --git a/crates/ironrdp-testsuite-core/tests/clipboard/format_list_limits.rs b/crates/ironrdp-testsuite-core/tests/clipboard/format_list_limits.rs
 new file mode 100644
-index 00000000..19aa9230
+index 00000000..44c5893c
 --- /dev/null
 +++ b/crates/ironrdp-testsuite-core/tests/clipboard/format_list_limits.rs
 @@ -0,0 +1,239 @@
@@ -182,7 +182,7 @@ index 00000000..19aa9230
 +use ironrdp_core::AsAny;
 +use ironrdp_svc::SvcProcessor as _;
 +
-+use super::test_helpers::{init_ready_client_with_backend, real_now_ms};
++use ironrdp_testsuite_core::clipboard::{init_ready_client_with_backend, real_now_ms};
 +
 +fn named(id: u32, name: &str) -> ClipboardFormat {
 +    ClipboardFormat::new(ClipboardFormatId::new(id)).with_name(ClipboardFormatName::new(name.to_owned()))
@@ -406,13 +406,13 @@ index 00000000..19aa9230
 +    assert_eq!(*copies.lock().unwrap(), [Vec::<ClipboardFormat>::new()]);
 +}
 diff --git a/crates/ironrdp-testsuite-core/tests/clipboard/mod.rs b/crates/ironrdp-testsuite-core/tests/clipboard/mod.rs
-index d03a3141..cbf57458 100644
+index 716c8136..d3bf3a65 100644
 --- a/crates/ironrdp-testsuite-core/tests/clipboard/mod.rs
 +++ b/crates/ironrdp-testsuite-core/tests/clipboard/mod.rs
-@@ -6,6 +6,7 @@ mod file_contents_validation;
- mod file_list_format;
+@@ -7,6 +7,7 @@ mod file_list_format;
  mod file_transfer_capabilities;
  mod format;
+ mod format_data_correlation;
 +mod format_list_limits;
  mod lock_lifecycle;
  mod lock_strategy;
