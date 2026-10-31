@@ -104,23 +104,44 @@ test('a narrowing while connected stops the sending at once and is passed on to 
     assert.deepEqual(state.narrowed.at(-1), { toRemote: false, fromRemote: false })
 })
 
-test('view only: no clipboard either way, and what came meanwhile is dropped', t => {
+test('view only: no clipboard either way, what the helper held is withdrawn, and what came meanwhile is dropped', t => {
     const { state, clipboard } = fixture()
     t.after(() => clipboard.stop())
+    state.local = 'secret'
+    clipboard.poll()
+    assert.deepEqual(state.sent, ['secret'])
     state.focused = false
     clipboard.remote('before')
     state.focused = true
     state.viewOnly = true
-    state.local = 'secret'
     clipboard.remote('theirs')
     clipboard.poll()
-    assert.equal(state.reads, 0)
+    clipboard.poll()
+    assert.deepEqual(state.sent, ['secret', ''], 'withdrawn once, on entering view only')
+    assert.equal(state.reads, 1, 'not read in view only')
     assert.equal(state.local, 'secret')
-    assert.deepEqual(state.sent, [])
     state.viewOnly = false
     clipboard.poll()
     assert.equal(state.local, 'secret', 'nothing from view only is written afterwards')
-    assert.deepEqual(state.sent, ['secret'], 'this computer\'s clipboard goes again once view only ends')
+    assert.deepEqual(state.sent, ['secret', '', 'secret'], 'offered again once view only ends, unchanged or not')
+})
+
+test('paste to all sends this computer\'s text at once, focus or not, but not where it may not go', t => {
+    const { state, clipboard } = fixture()
+    t.after(() => clipboard.stop())
+    state.focused = false
+    state.local = 'for all'
+    clipboard.sendNow()
+    assert.deepEqual(state.sent, ['for all'])
+    state.focused = true
+    clipboard.poll()
+    assert.deepEqual(state.sent, ['for all'], 'not sent again')
+    state.viewOnly = true
+    assert.throws(() => clipboard.sendNow())
+    const from = fixture({ toRemote: false, fromRemote: true })
+    t.after(() => from.clipboard.stop())
+    assert.throws(() => from.clipboard.sendNow())
+    assert.equal(from.state.reads, 0)
 })
 
 test('a clipboard that can\'t be read sends nothing', t => {
