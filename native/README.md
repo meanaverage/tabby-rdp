@@ -114,8 +114,12 @@ certificate/name/NLA rejection before credentials, the same CredSSP minimum vers
 
 On macOS ARM64, synthetic TLS RDP connections with cached bitmap updates verify opaque colors, zero-alpha colors,
 omitted alpha and genuine black pixels through the native helper and Tabby's canvas. These checks reproduce the
-alpha rendering problem without a PAM server; they do not qualify a real Senhasegura connection. The live Windows
-Server coverage below predates the 3.33.0 upgrade.
+alpha rendering problem without a PAM server; they do not qualify a real Senhasegura connection.
+
+The packaged FreeRDP 3.33.0 client on macOS ARM64 passes all 31 lifecycle checks against Windows Server 2022 x64:
+desktop pixels, keyboard routing, live resize, input-burst recovery, view only, cleanup, cache-mode reconnects,
+clipboard text in both directions and paste-to-all, switching to IronRDP, and Automatic header/reconnect stability.
+The Windows Server 2025 coverage below predates the 3.33.0 upgrade.
 
 | Client | Live Windows Server 2025 coverage |
 |---|---|
