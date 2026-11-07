@@ -6,6 +6,7 @@
 - FreeRDP desktop tiles with transparent or partially transparent pixels now display their colors opaquely instead of exposing the tab background. Cursor transparency is preserved. Verified with synthetic cached bitmap updates; the reported senhasegura blackout still needs confirmation against that proxy.
 
 **Changed**
+- Update the bundled FreeRDP and WinPR libraries to 3.33.0, including upstream security fixes, and the runtime semver dependency to 7.8.6.
 - Start the next development version from stable 0.6.1.
 
 ## 0.6.1
