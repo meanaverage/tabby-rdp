@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.6.3 (unreleased)
+
+**Changed**
+- Start the next development version from stable 0.6.2.
+
 ## 0.6.2
 
 **Fixed**
