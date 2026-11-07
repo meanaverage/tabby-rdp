@@ -21,6 +21,7 @@ npm test -- xrdp                  # the xrdp suite (TRD_TEST_XRDP_*)
 npm test -- direct                # a desktop reached directly, not through SSH (TRD_TEST_DIRECT_*, else the test host)
 npm test -- --packed freerdp      # opt-in native client and switch back to IronRDP (TRD_TEST_DIRECT_*, native helper required)
 npm test -- --packed e2e          # with the plugin installed as npm would install it (the release packer)
+npm test -- --hidden freerdp-rendering # opaque native desktop pixels in a real canvas; no remote server
 npm test -- helper                # the network helper in Tabby itself; no remote machine (see below)
 npm test -- --keep e2e            # leave the test Tabby open afterwards
 npm test -- --port 9334 e2e       # use a Tabby already running with --remote-debugging-port=9334
@@ -109,6 +110,16 @@ All live RDP checks used Ubuntu 24.04 GNOME Remote Desktop as the server.
 
 Tabby 1.0.238 ships xterm 5; xterm 6 was tested separately. These results record the tested builds, rather than
 qualifying every later host release. Rerun the relevant suites when the plugin or host changes.
+
+## FreeRDP desktop rendering without a server
+
+`npm test -- --hidden freerdp-rendering` feeds synthetic native IPC tiles through the plugin's
+`FreeRDPView` in Tabby's real Chromium canvas. It checks RGB preservation with alpha values
+0, 1, 127, 254 and 255, opaque black pixels, partial updates, resize and shutdown. It requires
+neither remote credentials nor the native helper. `--packed` runs the same checks with the
+packaged plugin. The unit test also checks that painting a tile cannot modify its IPC header
+or adjacent bytes. These checks cover desktop presentation; they do not establish what any
+particular server sends.
 
 ## The network helper in Tabby
 

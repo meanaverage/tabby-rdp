@@ -184,6 +184,39 @@ test('native display updates must fit both the tile and the bounded remote scree
         Buffer.concat([numbers(0, 0, 1, 1, 0xffffffff, 600), Buffer.alloc(4)])]) assert.throws(() => decodeNativeFrame(data), /display update/)
 })
 
+test('native desktop paint makes alpha opaque without changing RGB, coordinates or adjacent IPC bytes', t => {
+    const { FreeRDPView } = require('../../dist/freerdpView.js')
+    const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'ImageData')
+    Object.defineProperty(globalThis, 'ImageData', { configurable: true, value: class {
+        constructor (public data: Uint8ClampedArray, public width: number, public height: number) {}
+    } })
+    t.after(() => {
+        if (descriptor) Object.defineProperty(globalThis, 'ImageData', descriptor)
+        else Reflect.deleteProperty(globalThis, 'ImageData')
+    })
+    const rgb = [224, 64, 224, 32, 192, 32, 96, 224, 96, 192, 32, 192, 0, 0, 0]
+    const pixels = [0, 1, 127, 254, 255].flatMap((a, i) => [...rgb.slice(i * 3, i * 3 + 3), a])
+    const header = numbers(10, 20, 5, 1, 800, 600)
+    const packet = Buffer.concat([header, Buffer.from(pixels), Buffer.from([7, 8, 9, 10])])
+    const frame = decodeNativeFrame(packet.subarray(0, -4))
+    let drawn: { rgba: number[], x: number, y: number, width: number, height: number } | undefined
+    const view = Object.create(FreeRDPView.prototype)
+    const abort = new AbortController()
+    Object.assign(view, { abort, canvas: { width: 800, height: 600, getContext: () => ({
+        putImageData: (image: ImageData, x: number, y: number) => {
+            drawn = { rgba: [...image.data], x, y, width: image.width, height: image.height }
+        },
+    }) } })
+    view.paint(frame)
+    assert.deepEqual(drawn, { rgba: [0, 1, 2, 3, 4].flatMap(i => [...rgb.slice(i * 3, i * 3 + 3), 255]), x: 10, y: 20, width: 5, height: 1 })
+    assert.deepEqual(packet.subarray(0, header.length), header)
+    assert.deepEqual([...packet.subarray(-4)], [7, 8, 9, 10])
+    abort.abort()
+    drawn = undefined
+    view.paint(frame)
+    assert.equal(drawn, undefined, 'a closed view must not paint')
+})
+
 test('native keys retain physical shortcuts and extended scan codes; Unicode supports non-BMP characters', () => {
     const key = { code: 'KeyA', key: 'ä', ctrlKey: false, altKey: false, metaKey: false }
     assert.deepEqual(nativeKey(key, false), { scan: 0x1e, text: '' })

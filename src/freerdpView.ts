@@ -102,6 +102,10 @@ export class FreeRDPView {
             this.canvas.height = frame.screenHeight
             this.fit()
         }
+        // The desktop is an opaque surface. Cached bitmaps can carry zero/partial alpha;
+        // letting the canvas interpret it hides valid RGB behind the tab's background.
+        // This tile is consumed here; cursor images have their own transparency path.
+        for (let i = 3; i < frame.rgba.length; i += 4) { frame.rgba[i] = 255 }
         this.canvas.getContext('2d')!.putImageData(new ImageData(frame.rgba, frame.width, frame.height), frame.x, frame.y)
     }
 
