@@ -28,7 +28,7 @@ Gateway transports, credential store and certificate/NLA prompts. Each attempt h
 The preview shares clipboard **text** the ways the clipboard setting allows (both ways, only from the remote desktop, or
 off, which leaves the clipboard channel out); in view only, no clipboard goes either way. It does **not** yet implement pictures and files on the clipboard, audio
 playback/capture, shared folders, or Hyper-V VMConnect.
-The supplied build uses native bitmap decoding (and the graphics pipeline for GNOME), with optional H.264 codecs
+The supplied FreeRDP 3.33.0 build uses native bitmap decoding (and the graphics pipeline for GNOME), with optional H.264 codecs
 disabled. The macOS/Linux builds omit Kerberos/GSSAPI and use NTLM. Windows can use native SSPI; Kerberos and domain-policy behavior are not qualified. Hyper-V consoles that
 inherit the global client setting continue to use IronRDP. A synced global FreeRDP default also uses IronRDP on a computer without its native helper; an explicit desktop/profile choice still reports the missing build. It has not been benchmarked against IronRDP on Windows Server. Native decoding alone does not establish
 that this implementation will be faster: the cost of transferring pixels to the canvas also matters.
@@ -109,8 +109,17 @@ helper exists, they additionally run real native TLS/NLA certificate-rejection t
 routing cookie or authentication payload reaches a rejected peer. Real Windows Server performance and feature
 qualification require a dedicated test machine; these local protocol tests do not substitute for that work.
 
-The native protocol/security suite passes on macOS ARM64, Windows ARM64/x64 and Linux ARM64/x64. It exercises
+With FreeRDP 3.33.0, the native protocol/security suite passes on macOS ARM64, Windows ARM64/x64 and Linux ARM64/x64. It exercises
 certificate/name/NLA rejection before credentials, the same CredSSP minimum version (5) as IronRDP, large trust stores, relay authentication, IPC and build inventories.
+
+On macOS ARM64, synthetic TLS RDP connections with cached bitmap updates verify opaque colors, zero-alpha colors,
+omitted alpha and genuine black pixels through the native helper and Tabby's canvas. These checks reproduce the
+alpha rendering problem without a PAM server; they do not qualify a real Senhasegura connection.
+
+The packaged FreeRDP 3.33.0 client on macOS ARM64 passes all 31 lifecycle checks against Windows Server 2022 x64:
+desktop pixels, keyboard routing, live resize, input-burst recovery, view only, cleanup, cache-mode reconnects,
+clipboard text in both directions and paste-to-all, switching to IronRDP, and Automatic header/reconnect stability.
+The Windows Server 2025 coverage below predates the 3.33.0 upgrade.
 
 | Client | Live Windows Server 2025 coverage |
 |---|---|
