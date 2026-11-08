@@ -30,14 +30,14 @@ export NEEDRESTART_MODE=l
 case "${ID:-}:${VERSION_ID:-}" in
     ubuntu:24.04)
         apt-get update
-        apt-get install -y ubuntu-desktop-minimal gnome-remote-desktop pipewire-bin python3-gi python3-gi-cairo fonts-dejavu-core python3-venv tmux openssh-server openssl qemu-guest-agent
+        apt-get install -y ubuntu-desktop-minimal gnome-remote-desktop pipewire-bin python3-gi python3-gi-cairo fonts-dejavu-core python3-venv tmux openssh-server openssl qemu-guest-agent xclip wl-clipboard
         ;;
     debian:13)
         apt-get update
-        apt-get install -y gnome-core gnome-remote-desktop gnome-terminal pipewire-bin python3-gi python3-gi-cairo fonts-dejavu-core python3-venv tmux openssh-server openssl qemu-guest-agent
+        apt-get install -y gnome-core gnome-remote-desktop gnome-terminal pipewire-bin python3-gi python3-gi-cairo fonts-dejavu-core python3-venv tmux openssh-server openssl qemu-guest-agent xclip wl-clipboard
         ;;
     fedora:44)
-        dnf install -y gnome-shell gnome-session gnome-settings-daemon gnome-remote-desktop gnome-terminal nautilus pipewire-utils wireplumber python3-gobject python3-cairo dejavu-sans-fonts dejavu-sans-mono-fonts python3-pip tmux openssh-server openssl qemu-guest-agent
+        dnf install -y gnome-shell gnome-session gnome-settings-daemon gnome-remote-desktop gnome-terminal nautilus pipewire-utils wireplumber python3-gobject python3-cairo dejavu-sans-fonts dejavu-sans-mono-fonts python3-pip tmux openssh-server openssl qemu-guest-agent xclip wl-clipboard
         ;;
     rocky:9.*)
         dnf install -y python3-gobject python3-cairo gtk3 dejavu-sans-fonts dejavu-sans-mono-fonts python3-pip tmux openssh-server openssl qemu-guest-agent

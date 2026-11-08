@@ -3,7 +3,7 @@
 # Clipboard, files and desktop controls
 
 These sharing features describe the default IronRDP client. The experimental FreeRDP preview currently supports
-display, input and clipboard text, the ways the clipboard setting below allows (none in view only); pictures and files
+display, input and clipboard text, the ways the clipboard setting below allows; pictures and files
 on the clipboard, file transfer, shared drives and audio are pending. See [client capabilities](../native/README.md).
 
 ## Clipboard
@@ -101,7 +101,18 @@ In the desktop's menus: Ctrl+Alt+Del, Win+R, Win+L, Ctrl+Shift+Esc, Print Screen
 
 ## View only
 
-In the desktop's menus: watch a desktop without touching it. No keys or clicks go to it while a "View only" label shows; the picture, clipboard and sound carry on. Kept across reconnects, until the desktop is closed.
+In the desktop's menus: watch a desktop without touching it. While a "View only" label shows, no keys or clicks go to it, and no clipboard goes either way, with either client:
+
+- What you copy here doesn't reach the desktop, and files can't be sent or dropped onto it. What you had copied before
+  is withdrawn from the desktop's clipboard, unless something was copied there since. A desktop that keeps its own
+  copy of what it is offered still has it (GNOME takes a copy of text the moment it is offered): turn view only on
+  before you copy anything such a desktop shouldn't get.
+- What is copied on the desktop, text, pictures or files, isn't put on your clipboard or offered for saving, and not
+  later either: once view only ends, copy it again. Files offered before can still be saved.
+
+When view only ends, the clipboard goes the ways the setting allows again, and what you had copied is offered to the
+desktop again if it was taken back. The picture and sound carry on throughout. View only is kept across reconnects,
+until the desktop is closed.
 
 ## Screenshots
 

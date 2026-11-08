@@ -400,6 +400,7 @@ async function connecting (service: any, pane: any, session: any, rdp: Record<st
             provider.onUploadFinished = () => { }
         },
         setEnableClipboard () { },
+        async setClipboardPaused () { },
         configBuilder: () => builder,
         connect: async () => { throw new Error('not connected here') },
         invokeExtension () { },
@@ -407,6 +408,7 @@ async function connecting (service: any, pane: any, session: any, rdp: Record<st
     Object.assign(session, {
         disposed: new Promise<void>(() => { }),
         host: { replaceChildren: () => ready({ detail: { irgUserInteraction: ui } }), querySelector: () => null },
+        pauseClipboard () { },
         proxy: { url: 'ws://127.0.0.1:1/token', token: 'token' },
         status () { },
         files: null,

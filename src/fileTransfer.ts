@@ -535,13 +535,15 @@ export class FileTransfer {
     /**
      * `ways`: the ways the clipboard goes with this desktop right now (see RemoteDesktopService.clipboardWaysOf).
      * `flow`: the room in the connection for what is read for the remote (the desktop's proxy, see ServerFlow).
+     * `viewOnly`: whether the desktop is in view only now, where no files go either way.
      */
-    constructor (rdp: any, private overlay: HTMLElement, private log: (msg: string) => void, private ways: () => ClipboardWays, private flow?: ServerFlow) {
+    constructor (rdp: any, private overlay: HTMLElement, private log: (msg: string) => void, private ways: () => ClipboardWays, private flow?: ServerFlow,
+        private viewOnly: () => boolean = () => false) {
         this.provider = new rdp.RdpFileTransferProvider({ storageBackend: new DiskStorage() })
         // The remote can ask again, later, for files offered from here: their contents go only while this computer's
         // clipboard goes there. The provider's extensions call the method on it, so this one takes its place.
         this.serve = this.provider.handleFileContentsRequest.bind(this.provider)
-        this.provider.handleFileContentsRequest = (request: ContentsRequest) => this.ways().toRemote ? this.request(request) : this.refuse(request)
+        this.provider.handleFileContentsRequest = (request: ContentsRequest) => this.goesThere() ? this.request(request) : this.refuse(request)
         // The provider answers each request under the number it was handed it as (see read), and this goes with it to
         // the connection under the remote's own number, and lets the room that request took go, which lets the requests
         // waiting be read (see release). What it hands the connection takes room there as it goes (see ServerFlow). An
@@ -612,11 +614,20 @@ export class FileTransfer {
         }, true)
     }
 
+    /** Whether files may go to the remote now: this computer's clipboard goes there, and not in view only. */
+    private goesThere (): boolean {
+        return this.ways().toRemote && !this.viewOnly()
+    }
+
     /**
-     * Whether files may go to the remote now, that is, whether this computer's clipboard does; when not, says so over
-     * the desktop.
+     * Whether files may go to the remote now (see goesThere); when not, says so over the desktop.
      */
     private mayGoThere (): boolean {
+        if (this.viewOnly()) {
+            this.log('files: not sent: the desktop is in view only')
+            this.toast('Not sent: this desktop is in view only.')
+            return false
+        }
         const ways = this.ways()
         if (!ways.toRemote) {
             this.log('files: not sent: this computer\'s clipboard doesn\'t go to the remote')
@@ -648,7 +659,8 @@ export class FileTransfer {
     }
 
     /**
-     * The remote asked for files offered before the clipboard narrowed: it gets an error instead of their contents.
+     * The remote asked for files offered before the clipboard narrowed, or while the desktop is in view only: it gets
+     * an error instead of their contents.
      * `reading`: the request is one being read, which the error answers (see fail).
      */
     private refuse (request: { streamId: number }, reading?: Reading): void {
@@ -723,7 +735,7 @@ export class FileTransfer {
                 return
             }
             const request = this.waiting.shift()!
-            if (!this.ways().toRemote) {
+            if (!this.goesThere()) {
                 this.refuse(request)
                 continue
             }
@@ -1024,9 +1036,16 @@ export class FileTransfer {
         this.send(files)
     }
 
-    /** Remote → Mac: the remote copied files; offer saving them, where the remote's clipboard comes here. */
+    /**
+     * Remote → Mac: the remote copied files; offer saving them, where the remote's clipboard comes here. Not in view
+     * only, where what the remote copies is dropped (files offered before it can still be saved: the user asks for it).
+     */
     private offer (files: RemoteFile[]): void {
         const count = files.filter(f => !f.isDirectory).length
+        if (this.viewOnly()) {
+            this.log(`files: the remote copied ${count}; not offered: the desktop is in view only`)
+            return
+        }
         if (!this.ways().fromRemote) {
             this.log(`files: the remote copied ${count}; not offered: its clipboard doesn't come here`)
             return

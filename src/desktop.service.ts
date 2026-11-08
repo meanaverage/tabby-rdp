@@ -400,7 +400,10 @@ export class DesktopSession {
     drives: SharedDrives | null = null
     /** Decodes H.264 for the graphics pipeline (IronRDP's WebCodecsH264Decoder), when this connection uses it. */
     h264: any = null
-    /** No keyboard or mouse input goes to the remote (keys: see keyboard.ts; the mouse: a layer over the picture). */
+    /**
+     * No keyboard or mouse input goes to the remote (keys: see keyboard.ts; the mouse: a layer over the picture), and
+     * no clipboard either way (see pauseClipboard).
+     */
     viewOnly = false
     /** The host's own desktop: the certificate its setup reported for this connection. */
     pinnedCertificate: string | null = null
@@ -481,7 +484,7 @@ export class DesktopSession {
         this.overlay.className = 'trd-overlay'
         this.overlay.innerHTML = `
             <div class="trd-host"></div>
-            <div class="trd-view-only" title="View only: no keyboard or mouse input goes to the remote desktop"></div>
+            <div class="trd-view-only" title="View only: no keyboard or mouse input goes to the remote desktop, and no clipboard either way"></div>
             <div class="trd-mic"><i class="fas fa-microphone"></i></div>
             <div class="trd-osd"></div>
             <div class="trd-status"><div class="trd-status-text"></div><div class="trd-status-actions"></div><a class="trd-status-help">What does this mean?</a></div>`
@@ -537,8 +540,25 @@ export class DesktopSession {
     setViewOnly (viewOnly: boolean): void {
         this.viewOnly = viewOnly
         this.ui?.setReadOnly?.(viewOnly)
+        this.pauseClipboard()
         this.overlay.classList.toggle('trd-view-only-on', viewOnly)
         this.log.push(`view only: ${viewOnly ? 'on' : 'off'}`)
+    }
+
+    /**
+     * No clipboard goes either way in view only. IronRDP's component pauses its clipboard for it: what this computer
+     * offered is withdrawn if it is still the latest on the remote's clipboard, and what the remote copies is dropped
+     * (setUpClipboard leaves out the clipboard of a component that can't). FreeRDP's clipboard pauses itself (see
+     * freerdpClipboard.ts), and files don't go meanwhile (see FileTransfer).
+     */
+    pauseClipboard (): void {
+        if (typeof this.ui?.setClipboardPaused !== 'function') {
+            return
+        }
+        const viewOnly = this.viewOnly
+        Promise.resolve(this.ui.setClipboardPaused(viewOnly)).catch((e: any) => {
+            this.log.push(`clipboard: not ${viewOnly ? 'paused' : 'resumed'} for view only: ${e?.backtrace?.() ?? e?.message ?? e}`)
+        })
     }
 
     private labelTimer?: ReturnType<typeof setTimeout>
@@ -2902,7 +2922,7 @@ export class RemoteDesktopService {
         return !!this.sessions.get(pane)?.viewOnly
     }
 
-    /** View only: the pane's desktop gets no keyboard or mouse input (the picture, clipboard and sound go on). */
+    /** View only: the pane's desktop gets no keyboard or mouse input and no clipboard (the picture and sound go on). */
     setViewOnly (pane: DesktopPane, viewOnly: boolean): void {
         const session = this.sessions.get(pane)
         if (session) {
@@ -4504,10 +4524,13 @@ export class RemoteDesktopService {
             // clipboard goes only the ways the settings let it, as they are now, for this connection (see clipboard.ts).
             session.files?.dispose()
             // What it reads for the remote waits for room in the connection (see ServerFlow).
-            session.files = new FileTransfer(rdp, session.overlay, m => session.log.push(m), () => this.clipboardWaysOf(session), session.proxy ?? undefined)
+            session.files = new FileTransfer(rdp, session.overlay, m => session.log.push(m), () => this.clipboardWaysOf(session), session.proxy ?? undefined,
+                () => session.viewOnly)
             const clipboard = setUpClipboard(session.ui, session.files.provider, this.settingsFor(session).clipboard, () => this.clipboardWaysOf(session).toRemote)
             session.clipboard = clipboard.mode
             session.stopSending = clipboard.stopSending
+            // A desktop in view only connects with its clipboard paused.
+            session.pauseClipboard()
             session.log.push(`clipboard: ${clipboard.mode === 'both' ? 'both ways'
                 : clipboard.mode === 'fromRemote' ? 'only from the remote desktop (this computer\'s is neither read nor sent)' : 'off (no clipboard channel)'}`)
             // The component outlines itself while it has the keyboard; the desktop should look like the

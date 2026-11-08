@@ -110,20 +110,49 @@ test('view only: no clipboard either way, what the helper held is withdrawn, and
     state.local = 'secret'
     clipboard.poll()
     assert.deepEqual(state.sent, ['secret'])
-    state.focused = false
-    clipboard.remote('before')
-    state.focused = true
     state.viewOnly = true
-    clipboard.remote('theirs')
     clipboard.poll()
     clipboard.poll()
     assert.deepEqual(state.sent, ['secret', ''], 'withdrawn once, on entering view only')
     assert.equal(state.reads, 1, 'not read in view only')
-    assert.equal(state.local, 'secret')
+    state.local = 'copied while watching'
     state.viewOnly = false
     clipboard.poll()
-    assert.equal(state.local, 'secret', 'nothing from view only is written afterwards')
-    assert.deepEqual(state.sent, ['secret', '', 'secret'], 'offered again once view only ends, unchanged or not')
+    assert.deepEqual(state.sent, ['secret', '', 'copied while watching'], 'offered again once view only ends')
+    state.viewOnly = true
+    clipboard.poll()
+    state.viewOnly = false
+    clipboard.poll()
+    assert.deepEqual(state.sent, ['secret', '', 'copied while watching', '', 'copied while watching'], 'unchanged or not')
+})
+
+test('view only leaves a copy of the server\'s own alone, before it or during it, and drops it here', t => {
+    const { state, clipboard } = fixture()
+    t.after(() => clipboard.stop())
+    state.local = 'mine'
+    clipboard.poll()
+    // Copied there while the desktop is in the background: it waits for the focus, which view only takes away.
+    state.focused = false
+    clipboard.remote('before')
+    state.focused = true
+    state.viewOnly = true
+    clipboard.poll()
+    assert.deepEqual(state.sent, ['mine'], 'not withdrawn: the server\'s own copy is the latest there')
+    state.viewOnly = false
+    clipboard.poll()
+    assert.equal(state.local, 'mine', 'what waited is dropped')
+    assert.deepEqual(state.sent, ['mine'], 'and not overwritten once view only ends')
+
+    // Withdrawn, then the server copies something of its own in view only: that isn't overwritten either.
+    state.local = 'mine again'
+    clipboard.poll()
+    state.viewOnly = true
+    clipboard.poll()
+    clipboard.remote('theirs')
+    state.viewOnly = false
+    clipboard.poll()
+    assert.equal(state.local, 'mine again')
+    assert.deepEqual(state.sent, ['mine', 'mine again', ''])
 })
 
 test('paste to all sends this computer\'s text at once, focus or not, but not where it may not go', t => {
