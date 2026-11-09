@@ -63,8 +63,8 @@
     "semver": "7.8.6"
   },
   "devDependencies": {
-    "@angular/core": "22.2.3",
-    "@playwright/test": "1.64.1",
+    "@angular/core": "22.2.4",
+    "@playwright/test": "1.65.0",
     "@types/node": "^26.6.5",
     "@types/semver": "^7.8.0",
     "@typescript/typescript6": "6.0.2",
@@ -74,7 +74,7 @@
     "tabby-terminal": "1.0.231-nightly.0",
     "tsx": "^4.23.15",
     "typescript": "~7.0.2",
-    "ws": "8.22.0"
+    "ws": "8.22.1"
   },
   "tabbyRdp": {
     "minimumTabbyVersion": "1.0.236",
