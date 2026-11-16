@@ -51,6 +51,10 @@ test('each platform package.json names for a FreeRDP package has a build in nati
     const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'))
     // Source-only development checkouts may not have built a helper yet.
     if (!existsSync(join(root, 'native/bin'))) return
+    if (pkg.tabbyRdp.packageFormat === 6 && !process.env.TRD_SINGLE_NATIVE_BUILD) {
+        assert.equal(pkg.tabbyRdp.freerdpPlatforms, undefined)
+        return // Comparison builds are checked by BUILD.json above, not published as optional packages.
+    }
     const expected = process.env.TRD_SINGLE_NATIVE_BUILD === '1' ? [`${process.platform}-${process.arch}`] : pkg.tabbyRdp.freerdpPlatforms
     assert.deepEqual([...expected].sort(), readdirSync(join(root, 'native/bin')).filter(name => !name.startsWith('.')).sort(),
         'scripts/pack.mjs makes a package per platform named, from its build')
@@ -90,7 +94,7 @@ test('client choice defaults to IronRDP; invalid config never runs an arbitrary 
         assert.equal(ownRDPClient(value), undefined)
     }
     assert.equal(rdpClient('freerdp'), 'freerdp')
-    assert.equal(rdpClient('freerdp-wasm'), 'freerdp-wasm')
+    assert.equal(rdpClient('freerdp-wasm'), 'freerdp')
     const a = specOf({ host: 'pc', client: 'ironrdp' }), b = specOf({ host: 'pc', client: 'freerdp' })
     assert.equal(b.client, 'freerdp')
     assert.equal(sessionKey('rdp', a), sessionKey('rdp', b), 'client changes do not create new credentials/certificate identities')

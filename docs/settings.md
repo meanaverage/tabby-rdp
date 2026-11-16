@@ -33,7 +33,7 @@ The Settings tab groups everyday controls first, followed by SSH integration, Fr
 
 | Setting | Default | Behavior |
 |---|---|---|
-| RDP client (`client`) | IronRDP (`ironrdp`) | Experimental FreeRDP native (`freerdp`) needs a matching native helper; FreeRDP WebAssembly (`freerdp-wasm`) uses the bundled portable build. Profiles and desktops can override the default; changes apply on reconnect. A global FreeRDP default falls back to IronRDP locally when its helper is absent; an explicit override reports the missing build. [Capabilities](../native/README.md). |
+| RDP client (`client`) | IronRDP (`ironrdp`) | Experimental FreeRDP (`freerdp`) uses bundled WebAssembly. The earlier `freerdp-wasm` preview name is accepted as an alias. Profiles and desktops can override the default; changes apply on reconnect. No separate FreeRDP helper package is needed. [Capabilities](../native/README.md). |
 
 ### Display
 

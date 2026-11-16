@@ -12,7 +12,7 @@ import { consoleScript, DeskGate, deskKeyDigest, DeskRequest, MACHINE_ID_COMMAND
 import { AudioPlayer } from './audio'
 import { IronRDPLoader } from './ironrdp'
 import { RDPClient, ownRDPClient, rdpClient, RDP_CLIENT_LABELS, isRDPElement } from './rdpClient'
-import { FreeRDPProcess, requireFreeRDP, hasFreeRDP } from './freerdp'
+import { FreeRDPProcess } from './freerdp'
 import { freeRDPFileProvider } from './freerdpFiles'
 import { FreeRDPClipboard, freeRDPClipboardLog } from './freerdpClipboard'
 import { hasFreeRDPWasm, requireFreeRDPWasm } from './freerdpWasm'
@@ -1219,7 +1219,7 @@ export class RemoteDesktopService {
 
     private effectiveClient (override: unknown, hyperv = false): RDPClient {
         const own = ownRDPClient(override), preferred = own ?? this.settings().client
-        return !own && (hyperv || preferred === 'freerdp' && !hasFreeRDP() || preferred === 'freerdp-wasm' && !hasFreeRDPWasm()) ? 'ironrdp' : preferred
+        return !own && (hyperv || preferred === 'freerdp' && !hasFreeRDPWasm()) ? 'ironrdp' : preferred
     }
 
     /** The profile's next-connection choice, with the currently running client shown separately. */
@@ -3584,7 +3584,7 @@ export class RemoteDesktopService {
             session.client = client
             if (client !== 'ironrdp') {
                 if (spec.hyperv) { throw new Error('FreeRDP does not support Hyper-V consoles in Tabby yet. Choose IronRDP for this desktop.') }
-                if (client === 'freerdp-wasm') { requireFreeRDPWasm() } else { requireFreeRDP() }
+                requireFreeRDPWasm()
             }
             const gateway = spec.gateway ? parseGateway(spec.gateway) : null
             if (spec.gateway && !gateway) {
@@ -4339,7 +4339,7 @@ export class RemoteDesktopService {
         session.plainSignIn = false
         const settings = this.settingsFor(session)
         const size = session.initialSize ?? remoteSizeFor(session.overlay.getBoundingClientRect(), settings)
-        const native = new FreeRDPProcess(session.client === 'freerdp-wasm' ? 'wasm' : 'native')
+        const native = new FreeRDPProcess('wasm')
         const ui = new FreeRDPView(native, session.host)
         ui.setReadOnly(session.viewOnly)
         session.ui = ui
@@ -4420,7 +4420,7 @@ export class RemoteDesktopService {
             onConnected(Date.now())
             clipboard.start()
             session.remoteSize = { ...info, scale: 100 }
-            session.graphics = session.client === 'freerdp-wasm' ? 'FreeRDP WebAssembly bitmaps' : 'FreeRDP native bitmaps'
+            session.graphics = 'FreeRDP WebAssembly bitmaps'
             ui.setVisibility(session.visible)
             this.applyKeyboardMode(session)
             if (size.scale !== 100 || spec.kind === 'windows') { this.applySize(session, size) }
@@ -4491,7 +4491,7 @@ export class RemoteDesktopService {
         pane: DesktopPane, target: RemoteTarget, spec: DesktopSpec, session: DesktopSession, rdp: any, endpoint: Endpoint,
         signal: AbortSignal, onConnected: (at: number) => void,
     ): Promise<ConnectionOutcome> {
-        if (rdp.client === 'freerdp' || rdp.client === 'freerdp-wasm') {
+        if (rdp.client === 'freerdp') {
             return this.runFreeRDPConnection(pane, target, spec, session, endpoint, signal, onConnected)
         }
         session.log.push('client: IronRDP')

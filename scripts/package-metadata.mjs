@@ -16,7 +16,8 @@
 // npm installs the one that matches the computer, and the plugin's package holds no native code. The committed
 // package.json names none, so that the lock never has to resolve packages that are published with the release.
 // Format 5 keeps format 4's optional FreeRDP packages and adds reproducible Go network helpers to bin/.
-export const PACKAGE_FORMATS = [1, 2, 3, 4, 5]
+// Format 6 embeds portable FreeRDP WebAssembly with the plugin; no native FreeRDP packages are published.
+export const PACKAGE_FORMATS = [1, 2, 3, 4, 5, 6]
 
 const EXACT = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?$/
 
@@ -25,6 +26,10 @@ export const freeRDPPackage = platform => `@tabby-rdp/freerdp-${platform}`
 
 /** tabbyRdp.freerdpPlatforms, checked: each a platform that npm tells apart by its os and cpu, and each once. */
 export function freeRDPPlatforms (manifest) {
+    if (manifest.tabbyRdp?.packageFormat === 6) {
+        if (manifest.tabbyRdp.freerdpPlatforms !== undefined) throw new Error('Format 6 does not publish native freerdpPlatforms')
+        return []
+    }
     const platforms = manifest.tabbyRdp?.freerdpPlatforms
     if (!Array.isArray(platforms) || platforms.length === 0 || new Set(platforms).size !== platforms.length ||
         platforms.some(platform => typeof platform !== 'string' || !/^(darwin|linux|win32)-(arm64|x64)$/.test(platform))) {
@@ -145,6 +150,11 @@ export function runtimeMetadata (manifest, lock) {
         }
     }
     const published = withoutDevelopment(manifest, format >= 3)
+    if (format === 6) {
+        freeRDPPlatforms(manifest)
+        if (manifest.optionalDependencies !== undefined) throw new Error('Format 6 has no optional native FreeRDP dependencies')
+        return { 'package.json': published }
+    }
     if (format < 4) {
         return { 'package.json': published }
     }

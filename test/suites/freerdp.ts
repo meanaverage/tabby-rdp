@@ -7,7 +7,7 @@ import { suite, type CanvasInfo } from '../lib/harness.js'
 import { parseAddress } from '../../src/desktopForm.js'
 
 await suite('freerdp', async t => {
-    const client = process.env.TRD_TEST_FREERDP_RUNTIME === 'wasm' ? 'freerdp-wasm' : 'freerdp'
+    const client = 'freerdp'
     const address = parseAddress(t.env.direct.address)
     if (!address || !t.env.direct.user || !t.env.direct.password) {
         t.skip('FreeRDP desktop lifecycle', 'set TRD_TEST_DIRECT, TRD_TEST_DIRECT_USER and TRD_TEST_DIRECT_PASSWORD for a dedicated test server')

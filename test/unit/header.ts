@@ -488,13 +488,13 @@ test('the RDP tab menu separates the running client from the checked next-connec
     const menu = new RemoteDesktopContextMenu(desktop, { cached: () => null, targetOf: async () => null }, {}, {}, { tabs: [] }, {})
     const choices = async () => (await menu.getItems(pane)).find((item: any) => item.label === 'RDP client').submenu
     let items = await choices()
-    assert.equal(items[0].label, 'Current session: FreeRDP native (experimental)')
+    assert.equal(items[0].label, 'Current session: FreeRDP WebAssembly (experimental)')
     assert.equal(items[0].enabled, false)
     assert.deepEqual(items.filter((i: any) => i.type === 'radio').map((i: any) => [i.label, i.checked]), [
-        ['Follow default (IronRDP)', true], ['IronRDP', false], ['FreeRDP native (experimental)', false], ['FreeRDP WebAssembly (experimental)', false],
+        ['Follow default (IronRDP)', true], ['IronRDP', false], ['FreeRDP WebAssembly (experimental)', false],
     ])
     for (const item of items.filter((i: any) => i.type === 'radio')) item.click()
-    assert.deepEqual(calls, [[pane, null], [pane, 'ironrdp'], [pane, 'freerdp'], [pane, 'freerdp-wasm']])
+    assert.deepEqual(calls, [[pane, null], [pane, 'ironrdp'], [pane, 'freerdp']])
     value = 'ironrdp'
     items = await choices()
     assert.equal(items.find((i: any) => i.label === 'IronRDP').checked, true)

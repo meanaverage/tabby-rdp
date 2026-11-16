@@ -2286,9 +2286,8 @@ test('a global FreeRDP default preserves discovered Hyper-V consoles; explicit u
 })
 
 test('a synced FreeRDP default falls back locally when the helper is absent; an explicit override still reports it', async t => {
-    const native = require('../../dist/freerdp.js')
-    // Found before existsSync stands in for the file system: finding it uses existsSync.
-    const fs = require('node:fs'), exists = fs.existsSync, helper = native.nativeHelperPath()
+    const wasm = require('../../dist/freerdpWasm.js')
+    const fs = require('node:fs'), exists = fs.existsSync, helper = wasm.freeRDPWasmPath()
     t.mock.method(fs, 'existsSync', (path: string) => path !== helper && exists(path))
     const { svc } = service({ client: 'freerdp' })
     const pane = {}, spec = specOf({ host: 'pc', kind: 'windows' }), s = session(spec, 'rdp#pc:3389')
@@ -2306,7 +2305,7 @@ test('a synced FreeRDP default falls back locally when the helper is absent; an 
     svc.afterEnd = (_pane: unknown, _target: unknown, _spec: unknown, _session: unknown, end: any) => { error = end.error }
     await svc.connect(pane, { key: 'rdp', label: 'PC' }, spec, s)
     assert.equal(prompts, 1)
-    assert.match(error, /not installed/)
+    assert.match(error, /WebAssembly build is missing/)
 })
 
 test('the tab client choice persists only to its profile and defers reconnect until accepted', async () => {
@@ -2365,7 +2364,7 @@ test('a stale reconnect dialog cannot interrupt a replacement connection', async
 })
 
 test('Follow default uses the actual local fallback and never offers a redundant reconnect', async t => {
-    const native = require('../../dist/freerdp.js'), fs = require('node:fs'), exists = fs.existsSync, helper = native.nativeHelperPath()
+    const wasm = require('../../dist/freerdpWasm.js'), fs = require('node:fs'), exists = fs.existsSync, helper = wasm.freeRDPWasmPath()
     t.mock.method(fs, 'existsSync', (path: string) => path !== helper && exists(path))
     const profile = { id: 'pc-fallback', type: 'rdp', options: { host: 'pc', client: 'ironrdp' } }
     const { svc } = service({ client: 'freerdp' }, { profiles: [profile] })

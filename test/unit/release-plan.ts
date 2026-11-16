@@ -76,7 +76,7 @@ test("a release stages each platform's FreeRDP package before the plugin, which 
     // Before format 4, the plugin alone.
     assert.deepEqual(releasePackages(pkg('0.5.7')), [{ name: 'tabby-rdp', file: 'tabby-rdp-0.5.7.tgz' }])
     const committed = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8'))
-    assert.equal(releasePackages(committed).length, committed.tabbyRdp.freerdpPlatforms.length + 1)
+    assert.deepEqual(releasePackages(committed), [{ name: 'tabby-rdp', file: `tabby-rdp-${committed.version}.tgz` }])
     // The workflow takes exactly these by hash, checks each, and stages them in this order.
     const workflow = readFileSync(new URL('../../.github/workflows/publish.yml', import.meta.url), 'utf8')
     assert.equal(workflow.match(/node scripts\/release-plan\.mjs packages/g)?.length, 3)

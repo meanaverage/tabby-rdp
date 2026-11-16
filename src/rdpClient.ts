@@ -1,15 +1,14 @@
 /** Saved names are independent of the order of the choices in the UI. */
-export type RDPClient = 'ironrdp' | 'freerdp' | 'freerdp-wasm'
+export type RDPClient = 'ironrdp' | 'freerdp'
 
 export const RDP_CLIENT_LABELS: Record<RDPClient, string> = {
     ironrdp: 'IronRDP',
-    freerdp: 'FreeRDP native (experimental)',
-    'freerdp-wasm': 'FreeRDP WebAssembly (experimental)',
+    freerdp: 'FreeRDP WebAssembly (experimental)',
 }
 
 /** An absent or invalid override follows the global setting. Existing installations keep IronRDP. */
 export function ownRDPClient (value: unknown): RDPClient | undefined {
-    return value === 'ironrdp' || value === 'freerdp' || value === 'freerdp-wasm' ? value : undefined
+    return value === 'freerdp-wasm' ? 'freerdp' : value === 'ironrdp' || value === 'freerdp' ? value : undefined
 }
 
 export function rdpClient (value: unknown): RDPClient {

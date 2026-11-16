@@ -127,7 +127,7 @@ on the GNOME desktop. It is optional and off by default. [How desk works](docs/d
 
 ## RDP client preview
 
-**Settings › Remote Desktop › Settings › RDP client** selects **IronRDP**, **FreeRDP native (experimental)**, or **FreeRDP WebAssembly (experimental)**. Profiles and
+**Settings › Remote Desktop › Settings › RDP client** selects **IronRDP** or **FreeRDP WebAssembly (experimental)**. Profiles and
 behind-host desktops can override the default. Changes apply on the next connection.
 
 In an RDP profile tab's **…** menu, choose **RDP client** to switch that profile and optionally **Reconnect to apply**.
@@ -135,8 +135,7 @@ In an RDP profile tab's **…** menu, choose **RDP client** to switch that profi
 | Client | Availability | Capabilities |
 |---|---|---|
 | IronRDP (default) | macOS, Windows and Linux | The features above, subject to the server's capabilities |
-| FreeRDP native (experimental) | macOS ARM64; Windows and Linux ARM64/x64 native helpers | In-tab display, keyboard/mouse, clipboard text and files/folders, scaling, resize, view only, screenshots and reconnect. Pictures, audio, shared folders, Hyper-V and H.264 are pending. |
-| FreeRDP WebAssembly (experimental) | Bundled for macOS, Windows and Linux | Same features as native FreeRDP, without a platform-specific FreeRDP helper. Packaged runtime checks cover all three OSes; live-server file-transfer coverage is currently macOS ARM64. |
+| FreeRDP WebAssembly (experimental) | Bundled for macOS, Windows and Linux | In-tab display, keyboard/mouse, clipboard text and files/folders, scaling, resize, view only, screenshots and reconnect. Pictures, audio, shared folders, Hyper-V and H.264 are pending. No separate FreeRDP package is needed. |
 
 Windows Server performance has **not been benchmarked**. See [FreeRDP builds, licensing and capability notes](native/README.md).
 To try the preview, open **Settings › Remote Desktop › Updates**, choose **Preview**, and install the offered version.
@@ -161,7 +160,7 @@ To try the preview, open **Settings › Remote Desktop › Updates**, choose **P
 ## Development
 
 IronRDP is a Rust RDP client compiled to WebAssembly. We ship a reviewed patch series and contribute fixes upstream;
-see [IronRDP and contributions](docs/ironrdp.md). The optional native FreeRDP helper is built separately.
+see [IronRDP and contributions](docs/ironrdp.md). The portable FreeRDP build has its own pinned toolchain and source records.
 
 ```sh
 npm ci --ignore-scripts

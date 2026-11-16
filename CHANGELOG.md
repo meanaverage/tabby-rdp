@@ -4,7 +4,10 @@
 
 **Added**
 - File and folder clipboard transfers with FreeRDP: paste copied files into the remote desktop, drop files onto it, and save files copied remotely through the existing download notification. Transfers respect clipboard direction and view-only settings.
-- A selectable **FreeRDP WebAssembly (experimental)** client, alongside native FreeRDP and IronRDP. It uses the same transport routes, certificate prompts, canvas and clipboard controls as native FreeRDP.
+- Ship FreeRDP as a portable WebAssembly client in the plugin package. Existing FreeRDP choices use it on reconnect; IronRDP remains the default. Separate native FreeRDP packages are no longer required.
+
+**Fixed**
+- FreeRDP shutdown uses Node timers explicitly, avoiding a cleanup exception when Electron provides browser timers.
 
 **Changed**
 - Update FreeRDP to 3.33.1. The WebAssembly build uses Emscripten 6.0.12 and LibreSSL 4.3.3.
