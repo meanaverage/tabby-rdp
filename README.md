@@ -66,14 +66,14 @@ desktop separately after its GNOME desktop has been opened.
 
 | Remote OS / desktop | RDP server | Setup and coverage |
 |---|---|---|
-| Windows 10/11 Pro and Windows Server | Windows Remote Desktop | Enable Remote Desktop; connect directly or through SSH / RD Gateway. Windows 11 has visual QA coverage; the FreeRDP preview was also tested against Server 2025. |
+| Windows 10/11 Pro and Windows Server | Windows Remote Desktop | Enable Remote Desktop; connect directly or through SSH / RD Gateway. Windows 11 has visual QA coverage; FreeRDP has live Windows Server 2022 clipboard coverage from a Windows Server 2025 client. |
 | Linux: Xfce, KDE Plasma, MATE, Cinnamon and others | xrdp | Uses the desktop configured for xrdp sessions. Rocky Linux 9 with Xfce is tested; other desktop combinations need their own qualification. |
 | Linux: GNOME | GNOME Remote Desktop 46+ | Automatic headless setup for the SSH user. Ubuntu, Debian and Fedora have visual QA coverage. |
 | Linux: KDE Plasma through KRDP | KRDP | Experimental: the tested Fedora stack needs server patches; stock KRDP and live monitor resize remain unqualified. |
 
 The client runs on **macOS, Windows and Linux**. These are separate from the OS of the remote desktop.
 See [requirements, exact test environments and limitations](docs/compatibility.md) for server versions, optional
-channels and pending coverage. The FreeRDP client preview has a narrower platform and feature set than IronRDP.
+channels and pending coverage. FreeRDP supports fewer optional channels than IronRDP; each client’s coverage is documented separately.
 
 <a id="windows-and-other-desktops-behind-a-host"></a>
 <a id="remote-desktop-profiles"></a>
@@ -104,7 +104,7 @@ explains what happens to saved passwords and certificates.
 
 ## Features
 
-These features describe the default **IronRDP** client. The FreeRDP preview's limits are [below](#rdp-client-preview).
+These features describe the default **IronRDP** client. FreeRDP’s supported features and limits are [below](#rdp-clients).
 
 | Feature | What you can do |
 |---|---|
@@ -125,9 +125,11 @@ See [sharing and controls](docs/sharing.md) and [accounts and certificate trust]
 With **desk** enabled, typing `desk` in an SSH console moves the same shell, history and running jobs into a terminal
 on the GNOME desktop. It is optional and off by default. [How desk works](docs/desk.md).
 
-## RDP client preview
+<a id="rdp-client-preview"></a>
 
-**Settings › Remote Desktop › Settings › RDP client** selects **IronRDP** or **FreeRDP WebAssembly (experimental)**. Profiles and
+## RDP clients
+
+**Settings › Remote Desktop › Settings › RDP client** selects **IronRDP** or **FreeRDP**. Profiles and
 behind-host desktops can override the default. Changes apply on the next connection.
 
 In an RDP profile tab's **…** menu, choose **RDP client** to switch that profile and optionally **Reconnect to apply**.
@@ -135,10 +137,11 @@ In an RDP profile tab's **…** menu, choose **RDP client** to switch that profi
 | Client | Availability | Capabilities |
 |---|---|---|
 | IronRDP (default) | macOS, Windows and Linux | The features above, subject to the server's capabilities |
-| FreeRDP WebAssembly (experimental) | Bundled for macOS, Windows and Linux | In-tab display, keyboard/mouse, clipboard text and files/folders, scaling, resize, view only, screenshots and reconnect. Pictures, audio, shared folders, Hyper-V and H.264 are pending. No separate FreeRDP package is needed. |
+| FreeRDP | Bundled for macOS, Windows and Linux | In-tab display, keyboard/mouse, clipboard text and files/folders, scaling, resize, view only, screenshots and reconnect. Pictures, audio, shared folders, Hyper-V and H.264 are pending. No separate FreeRDP package is needed. |
 
-A [Windows VM comparison](test/fixtures/performance/README.md#windows-comparison-2026-11-16) found similar frame rates and input latency, with higher WASM CPU and memory use. See [FreeRDP builds, licensing and capability notes](native/README.md).
-To try the preview, open **Settings › Remote Desktop › Updates**, choose **Preview**, and install the offered version.
+FreeRDP 3.33.1 is bundled as WebAssembly. Existing FreeRDP selections use it on reconnect; no separate native FreeRDP npm package is required. It uses NTLM on every platform and does not provide the previous native Windows client’s SSPI authentication or Kerberos. Sound and microphone still require IronRDP, as they did before this change.
+
+A [Windows VM comparison](test/fixtures/performance/README.md#windows-comparison-2026-11-16) found similar frame rates and input latency, with higher WASM CPU and memory use. Live Linux file transfers and real PAM appliance behavior remain unqualified. See [FreeRDP builds, licensing and capability notes](native/README.md). Both clients are included in the normal plugin installation; select one using **RDP client** above.
 
 <a id="settings"></a>
 <a id="saved-accounts"></a>

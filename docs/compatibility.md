@@ -37,7 +37,7 @@ RDP matrix uses ARM64 Tabby 1.0.236 / Electron 43.7.0 on all three client platfo
 
 The KDE row is experimental: the tested profile needs server-side color and authentication compatibility patches.
 Stock KDE builds and live remote monitor resizing are not qualified. FreeRDP is a dependency of that KRDP server;
-this matrix records the IronRDP client. The new FreeRDP client preview is qualified separately below. Rocky's Xfce desktop uses **xrdp**, a different RDP server.
+this matrix records the IronRDP client. The FreeRDP client is qualified separately below. Rocky's Xfce desktop uses **xrdp**, a different RDP server.
 The testbed includes the opt-in KDE patches and reproducible setup instructions; see the
 [visual QA guide](visual-qa.md) for exact identities, evidence and remaining gaps.
 
@@ -47,7 +47,9 @@ upstream xterm 6 builds on macOS and Linux. The package installation dialog is t
 Windows qualification of that dialog remains pending. See the [host test matrix](../test/README.md#host-qualification).
 These focused checks do not establish clipboard, shared-folder, audio or microphone coverage across every matrix cell.
 
-## FreeRDP client preview
+<a id="freerdp-client-preview"></a>
+
+## FreeRDP client
 
 FreeRDP 3.33.1 is bundled as WebAssembly for macOS, Windows and Linux. It uses an Electron utility process and needs
 no platform-specific FreeRDP package. Hosted checks exercise the packaged runtime on Windows x64, Linux x64 and

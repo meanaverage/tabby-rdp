@@ -246,8 +246,8 @@ certificate there). The edit form is the add form, filled in (`wake` included).
   not offer RSA key exchange or retry a failed handshake with weaker ciphers. A server offering only RSA key exchange
   cannot connect. The negotiated version and cipher are logged. The certificate still has to pass the plugin's
   authority or fingerprint check before CredSSP sends any sign-in data. The helper carries SSH streams through a
-  bounded channel to Tabby's window and owns direct TCP and RD Gateway connections. The experimental FreeRDP client
-  retains its own OpenSSL-based TLS path.
+  bounded channel to Tabby's window and owns direct TCP and RD Gateway connections. The FreeRDP client
+  uses its own LibreSSL-based TLS path inside WebAssembly.
 - **Starting it (`wake`, `src/wake.ts`):** before connecting, a short script on the SSH host checks that the RDP
   server answers: an X.224 connection request must get a reply (with `python3`; else an open port will do, with `nc`
   or bash), since a port can be open before the server behind it is, as with QEMU's user-mode port forwarding. If
