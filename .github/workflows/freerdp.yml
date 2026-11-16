@@ -1,25 +1,38 @@
-name: FreeRDP native builds
+name: FreeRDP builds
 
 on:
   push:
     branches: [main]
     paths:
+      - 'wasm/**'
+      - 'src/freerdp*.ts'
+      - 'test/unit/freerdp*.ts'
       - 'native/*.c'
+      - 'native/*.h'
       - 'native/*.cmake'
       - 'native/CMakeLists.txt'
       - 'native/*-source.json'
       - 'scripts/build-freerdp*.mjs'
+      - 'scripts/build-pam-fixture.mjs'
+      - 'test/fixtures/pam/build.cmake'
       - '.github/workflows/freerdp.yml'
       - '.gitattributes'
   pull_request:
     paths:
+      - 'wasm/**'
+      - 'src/freerdp*.ts'
+      - 'test/unit/freerdp*.ts'
       - 'native/*.c'
+      - 'native/*.h'
       - 'native/*.cmake'
       - 'native/CMakeLists.txt'
       - 'native/*-source.json'
       - 'scripts/build-freerdp*.mjs'
+      - 'scripts/build-pam-fixture.mjs'
+      - 'test/fixtures/pam/build.cmake'
       - '.github/workflows/freerdp.yml'
       - '.gitattributes'
+  workflow_call:
   workflow_dispatch:
 
 permissions:
@@ -52,13 +65,15 @@ jobs:
         run: |
           node -e "require('fs').rmSync('native/bin',{recursive:true,force:true})"
           node scripts/build-freerdp-ci.mjs
+      - name: Build the synthetic PAM peer
+        run: node scripts/build-pam-fixture.mjs
       - name: Native protocol and security checks
         env:
           TRD_SINGLE_NATIVE_BUILD: '1'
         run: |
           npm ci --ignore-scripts
           npm run build
-          node --import tsx --test test/unit/freerdp.ts
+          node --import tsx --test test/unit/freerdp.ts test/unit/freerdp-pam.ts
       - name: Stage the public native bundle
         if: always() && steps.build.outcome == 'success'
         run: node -e "const f=require('fs'),p=require('path'),name='freerdp-'+process.platform+'-'+process.arch+'.tgz';f.mkdirSync('native-artifacts',{recursive:true});f.copyFileSync(p.join('.qa',name),p.join('native-artifacts',name))"
@@ -67,6 +82,46 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: freerdp-${{ runner.os }}-${{ runner.arch }}
-          path: native-artifacts/*.tgz
+          path: native-artifacts/*
           if-no-files-found: error
           retention-days: 14
+
+  wasm:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - name: Install pinned Emscripten
+        run: |
+          sudo apt-get update && sudo apt-get install -y cmake ninja-build
+          git clone https://github.com/emscripten-core/emsdk.git .qa/emsdk
+          git -C .qa/emsdk checkout "$(node -p "require('./native/wasm-source.json').emsdkCommit")"
+          .qa/emsdk/emsdk install "$(node -p "require('./native/wasm-source.json').emscripten")"
+          .qa/emsdk/emsdk activate "$(node -p "require('./native/wasm-source.json').emscripten")"
+      - name: Compile portable FreeRDP
+        id: wasm_build
+        run: node scripts/build-freerdp-wasm.mjs
+      - name: WebAssembly protocol and security checks
+        env:
+          TRD_TEST_FREERDP_RUNTIME: wasm
+        run: |
+          npm ci --ignore-scripts
+          npm run build
+          node --import tsx --test test/unit/freerdp-wasm.ts test/unit/freerdp-files.ts
+          node --import tsx --test --test-name-pattern='refuses|CredSSP' test/unit/freerdp.ts
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always() && steps.wasm_build.outcome == 'success'
+        with:
+          name: freerdp-wasm
+          path: wasm/freerdp
+          if-no-files-found: error
+          retention-days: 14
+      - name: Committed WebAssembly matches an independent source build
+        run: |
+          git diff --exit-code -- wasm/freerdp
+          test -z "$(git ls-files --others --exclude-standard -- wasm/freerdp)"

@@ -1,0 +1,72 @@
+From e9b2003be82c61dbc0f995b8ef018c2af69aae54 Mon Sep 17 00:00:00 2001
+From: meanaverage <18336095+meanaverage@users.noreply.github.com>
+Date: Mon, 16 Nov 2026 12:39:43 -0800
+Subject: [PATCH] fix(rdpdr): apply final sanitization in the device
+ constructor
+
+The upstream wire tests exposed that the initial backport selected the capability constructor with the same method name. Apply the reviewed #2342 implementation to DeviceAnnounceHeader::new_drive, where the name is serialized.
+---
+ crates/ironrdp-rdpdr/src/pdu/efs.rs | 36 ++++++++++++++++++-----------
+ 1 file changed, 23 insertions(+), 13 deletions(-)
+
+diff --git a/crates/ironrdp-rdpdr/src/pdu/efs.rs b/crates/ironrdp-rdpdr/src/pdu/efs.rs
+index 320b021..8027159 100644
+--- a/crates/ironrdp-rdpdr/src/pdu/efs.rs
++++ b/crates/ironrdp-rdpdr/src/pdu/efs.rs
+@@ -1189,14 +1189,33 @@ impl DeviceAnnounceHeader {
+     }
+ 
+     fn new_drive(device_id: u32, name: String) -> Self {
++        // MS-RDPEFS 2.2.3.1 asks for the name in DeviceData as a Unicode string with DRIVE_CAPABILITY_VERSION_02,
++        // which this client advertises, but Windows 11 and Windows Server 2022 and 2025 read the field as 8-bit
++        // characters: a UTF-16 name shows as its first letter. FreeRDP's client writes the name as 8-bit characters too.
++        let device_data = {
++            let char_count = name.chars().count();
++            let mut out: Vec<u8> = name
++                .chars()
++                .enumerate()
++                .map(|(i, c)| match c {
++                    // Windows refuses an 8-bit name with a character MS-RDPEFS 2.2.1.3 forbids in a device name, or
++                    // a colon before its end; FreeRDP replaces them too. A NUL would end the name early.
++                    '<' | '>' | '"' | '/' | '\\' | '|' | '\0' => b'_',
++                    ':' if i + 1 != char_count => b'_',
++                    // A character outside ASCII has no 8-bit form here.
++                    _ => u8::try_from(c).ok().filter(u8::is_ascii).unwrap_or(b'_'),
++                })
++                .collect();
++            out.push(0 /* NUL terminator */);
++            out
++        };
++
+         Self {
+             device_type: DeviceType::Filesystem,
+             device_id,
+-            // DeviceData carries the complete drive name, null-terminated, as ANSI characters: Windows reads
+-            // it that way whatever the drive capability version (a UTF-16 name comes out as its first letter),
+-            // and so does FreeRDP's client write it. Characters outside ASCII become '_'.
++            // PreferredDosName remains mandatory even though the server ignores it when DeviceDataLength is nonzero.
+             preferred_dos_name: PreferredDosName::for_drive(&name),
+-            device_data: ansi_with_nul(&name),
++            device_data,
+         }
+     }
+ 
+@@ -1384,15 +1403,6 @@ impl DeviceAnnounceHeader {
+     }
+ }
+ 
+-fn ansi_with_nul(s: &str) -> Vec<u8> {
+-    let mut out: Vec<u8> = s
+-        .chars()
+-        .map(|c| u8::try_from(u32::from(c)).ok().filter(u8::is_ascii).unwrap_or(b'_'))
+-        .collect();
+-    out.push(0 /* NUL terminator */);
+-    out
+-}
+-
+ fn utf16le_with_nul(s: &str) -> Vec<u8> {
+     let mut out = Vec::with_capacity((s.len() + 1) * 2 /* 2 bytes per UTF-16 unit */);
+     for unit in s.encode_utf16() {
+-- 
+2.54.0 (Apple Git-157)
+

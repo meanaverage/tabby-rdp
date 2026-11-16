@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.6.3
+
+**Added**
+- Copy files and folders with FreeRDP: paste copied files into the remote desktop, drop files onto it, and save files copied remotely through the download notification. Transfers respect clipboard direction and view-only settings.
+
+**Changed**
+- Bundle FreeRDP 3.33.1 as WebAssembly for macOS, Windows and Linux. Existing FreeRDP selections use it on reconnect; separate native FreeRDP npm packages are no longer required. The client is named **FreeRDP** throughout the interface; IronRDP remains the default.
+- FreeRDP authentication now uses NTLM on every platform. The WASM build does not provide the earlier native Windows client's SSPI authentication or Kerberos. A Windows comparison found similar frame rates and input latency, with higher CPU and memory use; see the [comparison results](https://github.com/meanaverage/tabby-rdp/blob/v0.6.3/test/fixtures/performance/README.md#windows-comparison-2026-11-16).
+- Update Angular to 22.2.4, Playwright to 1.65.0 and the WebSocket transport library `ws` to 8.22.1. The FreeRDP build uses Emscripten 6.0.12 and LibreSSL 4.3.3.
+- Verify both bundled WASM clients against independent source builds before release staging. Native FreeRDP comparison builds remain available from CI and the build scripts.
+
+**Fixed**
+- Stop clipboard sharing in both directions during view only, including uploads and clipboard reads that finish after view only starts.
+- Match FreeRDP file-clipboard acknowledgements to their offers, recover when the remote clipboard process restarts, fail unavailable clipboard channels promptly and release expired transfer requests.
+- Bound FreeRDP upload buffering, preserve final connection output and stop workers when their owning tab or input disappears. Avoid a shutdown exception when Electron supplies browser timers.
+- Align the retained IronRDP patches with final upstream drive-name, dynamic-channel, licensing-log, audio-training, clipboard-lifecycle and graphics-state corrections while retaining the 0.6.x IronRDP base.
+- Retain IronRDP server volume changes received before playback starts and apply separate left/right channel volume.
+- Bound diagnostic graphics parsing and close the underlying video decoder when the traced decoder is released.
+
+FreeRDP still does not support clipboard images, sound/microphone, shared folders, H.264 or Hyper-V VMConnect; these were also absent from the native integration. File transfers have live Windows coverage; live Linux file transfers and real Senhasegura MFA/policy/handoff behavior remain unqualified. Empty folders are omitted; uploads must be smaller than 4 GiB and downloads are limited to 2 GiB. See [client capabilities and test coverage](https://github.com/meanaverage/tabby-rdp/blob/v0.6.3/native/README.md).
+
 ## 0.6.2
 
 **Fixed**

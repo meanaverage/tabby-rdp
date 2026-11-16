@@ -176,13 +176,13 @@ export function desktopActions (desktop: RemoteDesktopService, keyboard: Desktop
         },
         {
             type: 'checkbox',
-            label: 'View only (no keyboard or mouse input)',
+            label: 'View only (no keyboard, mouse or clipboard)',
             checked: viewOnly,
             click: () => desktop.setViewOnly(pane, !viewOnly),
         },
         // With the setting on, every desktop gets the microphone when it asks for it; this one can be left out,
         // reconnects included, and taken back in (see RemoteDesktopService.stopMicrophone).
-        ...desktop.settings().microphone ? [{
+        ...desktop.settings().microphone && desktop.canUseMicrophone(pane) ? [{
             type: 'checkbox' as const,
             label: 'Send the microphone (when this desktop asks for it)',
             checked: !microphoneStopped,

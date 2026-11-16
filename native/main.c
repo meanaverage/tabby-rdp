@@ -36,6 +36,9 @@
 #define MAX_COMMAND (1024 * 1024)
 #define MAX_AUTHORITIES (16 * 1024 * 1024)
 #define MAX_QUEUE 1024
+#define MAX_FILE_DATA (16u * 1024 * 1024)
+#define MAX_FILE_LIST (4u + 10000u * 592u)
+#define FILE_FORMAT 0xC001u
 /* The start message's clipboard ways: this computer's text to the server, the server's to this computer. */
 #define CLIPBOARD_TO_REMOTE 1
 #define CLIPBOARD_FROM_REMOTE 2
@@ -57,6 +60,15 @@ typedef struct {
     WCHAR* localText; /* This computer's clipboard text for the server, NUL-terminated UTF-16; NULL for none. */
     size_t localTextLength; /* In WCHARs, without the NUL. */
     BOOL clipboardReady; /* Under offerLock. */
+    /* Format-list responses carry no ID: keep one outstanding announcement and coalesce changes. */
+    BOOL offerPending, offerAgain, offeredFiles;
+    UINT32 offeredGeneration;
+    BYTE* localFiles;
+    UINT32 localFilesLength, localGeneration;
+    BOOL fileStreaming;
+    /* Channel thread only: serialize format requests, which have no request ID on the wire. */
+    UINT32 remoteGeneration, requestedGeneration, wantedFormat;
+    BOOL wantedFiles, requestedFiles, formatPending;
     HANDLE inputEvent;
     HANDLE inputSpace;
     CRITICAL_SECTION inputLock;
@@ -64,6 +76,7 @@ typedef struct {
     Command* first;
     Command* last;
     unsigned queued;
+    size_t queuedBytes;
     BOOL inputEnded;
     BOOL inputFailed;
     BOOL displayReady;
@@ -73,13 +86,19 @@ typedef struct {
 
 static UINT32 read32(const BYTE* p) { return ((UINT32)p[0] << 24) | ((UINT32)p[1] << 16) | ((UINT32)p[2] << 8) | p[3]; }
 static void write32(BYTE* p, UINT32 n) { p[0] = n >> 24; p[1] = n >> 16; p[2] = n >> 8; p[3] = n; }
+#ifdef __EMSCRIPTEN__
+#include "wasm-io.h"
+static BOOL exact(void* p, size_t n) { return wasm_read(p, n); }
+#else
 static BOOL exact(void* p, size_t n) { return fread(p, 1, n, stdin) == n; }
+#endif
 static void free_command(Command* c) { if (c) { if (c->data) { memset(c->data, 0, c->length); free(c->data); } free(c); } }
 static Command* read_command(void) {
     BYTE header[5];
     if (!exact(header, sizeof(header))) return NULL;
     UINT32 n = read32(header + 1);
-    if (n > MAX_COMMAND) return NULL;
+    UINT32 limit = header[0] == 's' ? MAX_FILE_DATA + 12 : header[0] == 'o' ? MAX_FILE_LIST + 4 : MAX_COMMAND;
+    if (n > limit) return NULL;
     Command* c = calloc(1, sizeof(*c));
     if (!c) return NULL;
     c->type = header[0]; c->length = n;
@@ -90,7 +109,11 @@ static Command* read_command(void) {
 static BOOL output(Context* c, BYTE type, const void* data, UINT32 n) {
     BYTE header[5]; header[0] = type; write32(header + 1, n);
     EnterCriticalSection(&c->outputLock);
+#ifdef __EMSCRIPTEN__
+    BOOL ok = wasm_write(header, 5) && (!n || wasm_write(data, n));
+#else
     BOOL ok = fwrite(header, 1, 5, stdout) == 5 && (!n || fwrite(data, 1, n, stdout) == n) && fflush(stdout) == 0;
+#endif
     LeaveCriticalSection(&c->outputLock);
     return ok;
 }
@@ -176,8 +199,11 @@ static int verify_certificate(freerdp* instance, const BYTE* data, size_t length
         if (X509_STORE_CTX_init(verify, store, leaf, chain)) {
             X509_VERIFY_PARAM* param = X509_STORE_CTX_get0_param(verify);
             BOOL purpose = X509_VERIFY_PARAM_set_purpose(param, X509_PURPOSE_SSL_SERVER) == 1;
-            BOOL named = *c->name && (X509_VERIFY_PARAM_set1_ip_asc(param, c->name) == 1 ||
-                                      X509_VERIFY_PARAM_set1_host(param, c->name, 0) == 1);
+            /* LibreSSL poisons verification parameters after an invalid IP setter. Classify the name first. */
+            ASN1_OCTET_STRING* ip = a2i_IPADDRESS(c->name);
+            BOOL named = *c->name && (ip ? X509_VERIFY_PARAM_set1_ip(param, ASN1_STRING_get0_data(ip), (size_t)ASN1_STRING_length(ip)) == 1
+                                         : X509_VERIFY_PARAM_set1_host(param, c->name, 0) == 1);
+            ASN1_OCTET_STRING_free(ip);
             if (purpose && named) {
                 valid = X509_verify_cert(verify) == 1;
                 reason = X509_verify_cert_error_string(X509_STORE_CTX_get_error(verify));
@@ -247,7 +273,7 @@ static UINT display_caps(DispClientContext* disp, UINT32 monitors, UINT32 a, UIN
     Context* c = disp->custom; c->displayReady = TRUE;
     return send_layout(c);
 }
-/* Text only, both ways as the start message allows: what the server's clipboard gets is fetched at once and sent to
+/* Clipboard text, both ways as the start message allows: what the server's clipboard gets is fetched at once and sent to
  * the parent ('T', UTF-8); the parent's text ('P') is offered to the server, which asks for it when pasted. */
 static UINT32 clipboard_ways(Context* c) {
     EnterCriticalSection(&c->clipboardLock);
@@ -255,17 +281,30 @@ static UINT32 clipboard_ways(Context* c) {
     LeaveCriticalSection(&c->clipboardLock);
     return ways;
 }
-/* Under offerLock: offers the text, or an empty list when there's none or it may no longer go. FreeRDP sends only
- * the first empty list, so a withdrawn offer may stay announced; its data requests are refused all the same. */
+/* Under offerLock. File descriptors and text are mutually exclusive offers. */
+static void clipboard_file_ack(Context* c, UINT32 generation, BOOL ok) {
+    BYTE data[5]; write32(data, generation); data[4] = ok ? 1 : 0;
+    (void)output(c, 'a', data, sizeof(data));
+}
 static UINT clipboard_offer_locked(Context* c, CliprdrClientContext* cliprdr) {
-    CLIPRDR_FORMAT text = { CF_UNICODETEXT, NULL };
+    if (c->offerPending) { c->offerAgain = TRUE; return CHANNEL_RC_OK; }
+    CLIPRDR_FORMAT format = { CF_UNICODETEXT, NULL };
     CLIPRDR_FORMAT_LIST list = { 0 };
     list.common.msgType = CB_FORMAT_LIST;
     EnterCriticalSection(&c->clipboardLock);
-    BOOL offer = (c->clipboard & CLIPBOARD_TO_REMOTE) && c->localText != NULL;
+    BOOL files = c->localFiles && c->fileStreaming;
+    BOOL offer = (c->clipboard & CLIPBOARD_TO_REMOTE) && (files || c->localText);
+    c->offeredFiles = offer && files; c->offeredGeneration = c->localGeneration;
+    if (files) { format.formatId = FILE_FORMAT; format.formatName = "FileGroupDescriptorW"; }
     LeaveCriticalSection(&c->clipboardLock);
-    list.numFormats = offer ? 1 : 0; list.formats = offer ? &text : NULL;
-    return cliprdr->ClientFormatList(cliprdr, &list);
+    list.numFormats = offer ? 1 : 0; list.formats = offer ? &format : NULL;
+    c->offerPending = TRUE; c->offerAgain = FALSE;
+    UINT rc = cliprdr->ClientFormatList(cliprdr, &list);
+    if (rc != CHANNEL_RC_OK) {
+        c->offerPending = FALSE;
+        if (c->offeredFiles) clipboard_file_ack(c, c->offeredGeneration, FALSE);
+    }
+    return rc;
 }
 static UINT clipboard_offer(Context* c) {
     EnterCriticalSection(&c->offerLock);
@@ -277,10 +316,13 @@ static UINT clipboard_offer(Context* c) {
 static UINT clipboard_monitor_ready(CliprdrClientContext* cliprdr, const CLIPRDR_MONITOR_READY* ready) {
     (void)ready;
     Context* c = cliprdr->custom;
-    CLIPRDR_GENERAL_CAPABILITY_SET general = { CB_CAPSTYPE_GENERAL, 12, CB_CAPS_VERSION_2, CB_USE_LONG_FORMAT_NAMES };
+    CLIPRDR_GENERAL_CAPABILITY_SET general = { CB_CAPSTYPE_GENERAL, 12, CB_CAPS_VERSION_2, CB_USE_LONG_FORMAT_NAMES | CB_STREAM_FILECLIP_ENABLED | CB_FILECLIP_NO_FILE_PATHS };
     CLIPRDR_CAPABILITIES caps = { 0 };
     caps.cCapabilitiesSets = 1; caps.capabilitySets = (CLIPRDR_CAPABILITY_SET*)&general;
     EnterCriticalSection(&c->offerLock);
+    // A restarted clipboard peer begins a new initialization sequence. A response lost
+    // with the old peer must not prevent the latest local offer from being announced.
+    c->offerPending = FALSE; c->offerAgain = FALSE;
     UINT rc = cliprdr->ClientCapabilities(cliprdr, &caps);
     if (rc == CHANNEL_RC_OK) {
         c->clipboardReady = TRUE;
@@ -290,25 +332,57 @@ static UINT clipboard_monitor_ready(CliprdrClientContext* cliprdr, const CLIPRDR
     return rc;
 }
 static UINT clipboard_server_capabilities(CliprdrClientContext* cliprdr, const CLIPRDR_CAPABILITIES* caps) {
-    (void)cliprdr; (void)caps; return CHANNEL_RC_OK;
+    Context* c = cliprdr->custom;
+    BOOL streaming = FALSE;
+    const BYTE* cursor = (const BYTE*)caps->capabilitySets;
+    for (UINT32 i = 0; i < caps->cCapabilitiesSets; i++) {
+        const CLIPRDR_CAPABILITY_SET* cap = (const CLIPRDR_CAPABILITY_SET*)cursor;
+        if (cap->capabilitySetType == CB_CAPSTYPE_GENERAL && cap->capabilitySetLength >= 12)
+            streaming = (((const CLIPRDR_GENERAL_CAPABILITY_SET*)cap)->generalFlags & CB_STREAM_FILECLIP_ENABLED) != 0;
+        cursor += cap->capabilitySetLength;
+    }
+    EnterCriticalSection(&c->clipboardLock); c->fileStreaming = streaming; LeaveCriticalSection(&c->clipboardLock);
+    return CHANNEL_RC_OK;
+}
+static UINT clipboard_request_format(CliprdrClientContext* cliprdr) {
+    Context* c = cliprdr->custom;
+    if (c->formatPending || !c->wantedFormat || !(clipboard_ways(c) & CLIPBOARD_FROM_REMOTE)) return CHANNEL_RC_OK;
+    CLIPRDR_FORMAT_DATA_REQUEST request = { 0 };
+    request.common.msgType = CB_FORMAT_DATA_REQUEST; request.requestedFormatId = c->wantedFormat;
+    c->formatPending = TRUE; c->requestedGeneration = c->remoteGeneration; c->requestedFiles = c->wantedFiles;
+    c->wantedFormat = 0;
+    return cliprdr->ClientFormatDataRequest(cliprdr, &request);
 }
 static UINT clipboard_server_format_list(CliprdrClientContext* cliprdr, const CLIPRDR_FORMAT_LIST* list) {
     Context* c = cliprdr->custom;
     CLIPRDR_FORMAT_LIST_RESPONSE response = { 0 };
     response.common.msgType = CB_FORMAT_LIST_RESPONSE; response.common.msgFlags = CB_RESPONSE_OK;
     UINT rc = cliprdr->ClientFormatListResponse(cliprdr, &response);
+    EnterCriticalSection(&c->clipboardLock); c->remoteGeneration++; LeaveCriticalSection(&c->clipboardLock);
+    c->wantedFormat = 0; c->wantedFiles = FALSE;
+    BYTE generation[4]; write32(generation, c->remoteGeneration);
+    (void)output(c, 'l', generation, sizeof(generation));
     if (rc != CHANNEL_RC_OK || !(clipboard_ways(c) & CLIPBOARD_FROM_REMOTE)) return rc;
     for (UINT32 i = 0; i < list->numFormats; i++) {
-        if (list->formats[i].formatId == CF_UNICODETEXT) {
-            CLIPRDR_FORMAT_DATA_REQUEST request = { 0 };
-            request.common.msgType = CB_FORMAT_DATA_REQUEST; request.requestedFormatId = CF_UNICODETEXT;
-            return cliprdr->ClientFormatDataRequest(cliprdr, &request);
+        const CLIPRDR_FORMAT* format = &list->formats[i];
+        if (c->fileStreaming && format->formatName && strcmp(format->formatName, "FileGroupDescriptorW") == 0) {
+            c->wantedFormat = format->formatId; c->wantedFiles = TRUE; break;
         }
+        if (format->formatId == CF_UNICODETEXT) c->wantedFormat = CF_UNICODETEXT;
     }
-    return CHANNEL_RC_OK;
+    return clipboard_request_format(cliprdr);
 }
 static UINT clipboard_server_format_list_response(CliprdrClientContext* cliprdr, const CLIPRDR_FORMAT_LIST_RESPONSE* response) {
-    (void)cliprdr; (void)response; return CHANNEL_RC_OK;
+    Context* c = cliprdr->custom;
+    EnterCriticalSection(&c->offerLock);
+    UINT rc = CHANNEL_RC_OK;
+    if (c->offerPending) {
+        c->offerPending = FALSE;
+        if (c->offeredFiles) clipboard_file_ack(c, c->offeredGeneration, (response->common.msgFlags & CB_RESPONSE_OK) != 0);
+        if (c->offerAgain) rc = clipboard_offer_locked(c, cliprdr);
+    }
+    LeaveCriticalSection(&c->offerLock);
+    return rc;
 }
 static UINT clipboard_server_data_request(CliprdrClientContext* cliprdr, const CLIPRDR_FORMAT_DATA_REQUEST* request) {
     Context* c = cliprdr->custom;
@@ -323,6 +397,13 @@ static UINT clipboard_server_data_request(CliprdrClientContext* cliprdr, const C
             response.common.msgFlags = CB_RESPONSE_OK; response.common.dataLen = (UINT32)bytes; response.requestedFormatData = copy;
         }
     }
+    if (request->requestedFormatId == FILE_FORMAT && (c->clipboard & CLIPBOARD_TO_REMOTE) && c->localFiles && c->fileStreaming) {
+        copy = malloc(c->localFilesLength);
+        if (copy) {
+            memcpy(copy, c->localFiles, c->localFilesLength);
+            response.common.msgFlags = CB_RESPONSE_OK; response.common.dataLen = c->localFilesLength; response.requestedFormatData = copy;
+        }
+    }
     LeaveCriticalSection(&c->clipboardLock);
     UINT rc = cliprdr->ClientFormatDataResponse(cliprdr, &response);
     if (copy) { memset(copy, 0, response.common.dataLen); free(copy); }
@@ -330,18 +411,112 @@ static UINT clipboard_server_data_request(CliprdrClientContext* cliprdr, const C
 }
 static UINT clipboard_server_data_response(CliprdrClientContext* cliprdr, const CLIPRDR_FORMAT_DATA_RESPONSE* response) {
     Context* c = cliprdr->custom;
-    /* Bounded before it is scanned or converted: UTF-8 of more than one IPC frame wouldn't be sent anyway. */
-    if (!(response->common.msgFlags & CB_RESPONSE_OK) || !(clipboard_ways(c) & CLIPBOARD_FROM_REMOTE) || !response->requestedFormatData ||
-        response->common.dataLen > 2u * MAX_COMMAND + sizeof(WCHAR))
-        return CHANNEL_RC_OK;
-    size_t chars = response->common.dataLen / sizeof(WCHAR), length = 0;
-    const WCHAR* text = (const WCHAR*)response->requestedFormatData;
-    while (chars && text[chars - 1] == 0) chars--;
-    char* utf8 = chars ? ConvertWCharNToUtf8Alloc(text, chars, &length) : calloc(1, 1);
-    /* Larger text than one IPC frame stays on the server's clipboard; the parent keeps its own. */
-    if (utf8 && length <= MAX_COMMAND) (void)output(c, 'T', utf8, (UINT32)length);
-    if (utf8) { memset(utf8, 0, length); free(utf8); }
+    if (!c->formatPending) return CHANNEL_RC_OK;
+    c->formatPending = FALSE;
+    if (c->requestedGeneration == c->remoteGeneration && (response->common.msgFlags & CB_RESPONSE_OK) &&
+        (clipboard_ways(c) & CLIPBOARD_FROM_REMOTE) && response->requestedFormatData) {
+        if (c->requestedFiles) {
+            if (response->common.dataLen <= MAX_FILE_LIST) {
+                UINT32 length = response->common.dataLen + 4;
+                BYTE* data = malloc(length);
+                if (!data) return CHANNEL_RC_NO_MEMORY;
+                write32(data, c->remoteGeneration);
+                memcpy(data + 4, response->requestedFormatData, response->common.dataLen);
+                (void)output(c, 'f', data, length); free(data);
+            }
+        } else if (response->common.dataLen <= 2u * MAX_COMMAND + sizeof(WCHAR)) {
+            size_t chars = response->common.dataLen / sizeof(WCHAR), length = 0;
+            const WCHAR* text = (const WCHAR*)response->requestedFormatData;
+            while (chars && text[chars - 1] == 0) chars--;
+            char* utf8 = chars ? ConvertWCharNToUtf8Alloc(text, chars, &length) : calloc(1, 1);
+            if (utf8 && length <= MAX_COMMAND) (void)output(c, 'T', utf8, (UINT32)length);
+            if (utf8) { memset(utf8, 0, length); free(utf8); }
+        }
+    }
+    return clipboard_request_format(cliprdr);
+}
+static UINT clipboard_file_failure(CliprdrClientContext* cliprdr, UINT32 stream) {
+    CLIPRDR_FILE_CONTENTS_RESPONSE response = { 0 };
+    response.common.msgType = CB_FILECONTENTS_RESPONSE; response.common.msgFlags = CB_RESPONSE_FAIL;
+    response.streamId = stream;
+    return cliprdr->ClientFileContentsResponse(cliprdr, &response);
+}
+static UINT clipboard_server_file_request(CliprdrClientContext* cliprdr, const CLIPRDR_FILE_CONTENTS_REQUEST* request) {
+    Context* c = cliprdr->custom;
+    EnterCriticalSection(&c->clipboardLock);
+    BOOL allowed = (c->clipboard & CLIPBOARD_TO_REMOTE) && c->localFiles && c->fileStreaming;
+    UINT32 generation = c->localGeneration;
+    LeaveCriticalSection(&c->clipboardLock);
+    if (!allowed || request->haveClipDataId || request->cbRequested > MAX_FILE_DATA ||
+        (request->dwFlags != FILECONTENTS_SIZE && request->dwFlags != FILECONTENTS_RANGE))
+        return clipboard_file_failure(cliprdr, request->streamId);
+    BYTE data[28];
+    write32(data, generation); write32(data + 4, request->streamId); write32(data + 8, request->listIndex);
+    write32(data + 12, request->dwFlags); write32(data + 16, request->nPositionLow);
+    write32(data + 20, request->nPositionHigh); write32(data + 24, request->cbRequested);
+    return output(c, 'q', data, sizeof(data)) ? CHANNEL_RC_OK : ERROR_INTERNAL_ERROR;
+}
+static UINT clipboard_server_file_response(CliprdrClientContext* cliprdr, const CLIPRDR_FILE_CONTENTS_RESPONSE* response) {
+    Context* c = cliprdr->custom;
+    BOOL ok = (response->common.msgFlags & CB_RESPONSE_OK) && (clipboard_ways(c) & CLIPBOARD_FROM_REMOTE) &&
+        response->cbRequested <= MAX_FILE_DATA && (!response->cbRequested || response->requestedData);
+    UINT32 length = ok ? response->cbRequested : 0;
+    BYTE* data = malloc(length + 8);
+    if (!data) return CHANNEL_RC_NO_MEMORY;
+    write32(data, response->streamId); write32(data + 4, !ok);
+    if (length) memcpy(data + 8, response->requestedData, length);
+    (void)output(c, 's', data, length + 8); free(data);
     return CHANNEL_RC_OK;
+}
+/* Called on the main input thread, with offerLock keeping the channel alive. */
+static void clipboard_file_command(Context* c, const Command* cmd) {
+    const BYTE* p = cmd->data;
+    EnterCriticalSection(&c->offerLock);
+    CliprdrClientContext* cliprdr = c->cliprdr;
+    if (!cliprdr || !c->clipboardReady) {
+        if (cmd->type == 'o' && cmd->length >= 8) clipboard_file_ack(c, read32(p), FALSE);
+        LeaveCriticalSection(&c->offerLock); return;
+    }
+    if (cmd->type == 'o' && cmd->length >= 8 && cmd->length <= MAX_FILE_LIST + 4) {
+        EnterCriticalSection(&c->clipboardLock);
+        BOOL supported = (c->clipboard & CLIPBOARD_TO_REMOTE) && c->fileStreaming;
+        BYTE* files = supported ? malloc(cmd->length - 4) : NULL;
+        supported = files != NULL;
+        if (supported) {
+            memcpy(files, p + 4, cmd->length - 4);
+            free(c->localFiles); c->localFiles = files;
+            c->localFilesLength = cmd->length - 4;
+            c->localGeneration = read32(p);
+            if (c->localText) { memset(c->localText, 0, (c->localTextLength + 1) * sizeof(WCHAR)); free(c->localText); }
+            c->localText = NULL; c->localTextLength = 0;
+        }
+        LeaveCriticalSection(&c->clipboardLock);
+        if (supported) (void)clipboard_offer_locked(c, cliprdr);
+        else clipboard_file_ack(c, read32(p), FALSE);
+    } else if (cmd->type == 'q' && cmd->length == 28) {
+        CLIPRDR_FILE_CONTENTS_REQUEST request = { 0 };
+        request.common.msgType = CB_FILECONTENTS_REQUEST;
+        request.streamId = read32(p + 4); request.listIndex = read32(p + 8); request.dwFlags = read32(p + 12);
+        request.nPositionLow = read32(p + 16); request.nPositionHigh = read32(p + 20); request.cbRequested = read32(p + 24);
+        EnterCriticalSection(&c->clipboardLock);
+        BOOL current = c->remoteGeneration == read32(p) && (c->clipboard & CLIPBOARD_FROM_REMOTE);
+        LeaveCriticalSection(&c->clipboardLock);
+        if (current && request.cbRequested <= MAX_FILE_DATA &&
+            (request.dwFlags == FILECONTENTS_SIZE || request.dwFlags == FILECONTENTS_RANGE))
+            (void)cliprdr->ClientFileContentsRequest(cliprdr, &request);
+        else { BYTE failure[8]; write32(failure, request.streamId); write32(failure + 4, 1); (void)output(c, 's', failure, 8); }
+    } else if (cmd->type == 's' && cmd->length >= 12) {
+        EnterCriticalSection(&c->clipboardLock);
+        BOOL allowed = (c->clipboard & CLIPBOARD_TO_REMOTE) && c->localFiles && c->localGeneration == read32(p);
+        LeaveCriticalSection(&c->clipboardLock);
+        CLIPRDR_FILE_CONTENTS_RESPONSE response = { 0 };
+        response.common.msgType = CB_FILECONTENTS_RESPONSE; response.streamId = read32(p + 4);
+        response.common.msgFlags = allowed && !read32(p + 8) ? CB_RESPONSE_OK : CB_RESPONSE_FAIL;
+        response.cbRequested = (response.common.msgFlags == CB_RESPONSE_OK) ? cmd->length - 12 : 0;
+        response.requestedData = response.cbRequested ? p + 12 : NULL;
+        (void)cliprdr->ClientFileContentsResponse(cliprdr, &response);
+    }
+    LeaveCriticalSection(&c->offerLock);
 }
 static void set_local_text(Context* c, const BYTE* utf8, UINT32 length) {
     size_t chars = 0;
@@ -349,6 +524,7 @@ static void set_local_text(Context* c, const BYTE* utf8, UINT32 length) {
     EnterCriticalSection(&c->clipboardLock);
     if (c->localText) { memset(c->localText, 0, (c->localTextLength + 1) * sizeof(WCHAR)); free(c->localText); }
     c->localText = text; c->localTextLength = text ? chars : 0;
+    free(c->localFiles); c->localFiles = NULL; c->localFilesLength = 0;
     LeaveCriticalSection(&c->clipboardLock);
 }
 static void channel_connected(void* context, const ChannelConnectedEventArgs* e) {
@@ -365,6 +541,8 @@ static void channel_connected(void* context, const ChannelConnectedEventArgs* e)
         cliprdr->ServerFormatListResponse = clipboard_server_format_list_response;
         cliprdr->ServerFormatDataRequest = clipboard_server_data_request;
         cliprdr->ServerFormatDataResponse = clipboard_server_data_response;
+        cliprdr->ServerFileContentsRequest = clipboard_server_file_request;
+        cliprdr->ServerFileContentsResponse = clipboard_server_file_response;
         EnterCriticalSection(&c->offerLock); c->cliprdr = cliprdr; LeaveCriticalSection(&c->offerLock);
     }
     else freerdp_client_OnChannelConnectedEventHandler(&c->client, e);
@@ -373,7 +551,9 @@ static void channel_disconnected(void* context, const ChannelDisconnectedEventAr
     Context* c = context;
     if (strcmp(e->name, DISP_DVC_CHANNEL_NAME) == 0) { c->disp = NULL; c->displayReady = FALSE; }
     else if (strcmp(e->name, CLIPRDR_SVC_CHANNEL_NAME) == 0) {
-        EnterCriticalSection(&c->offerLock); c->cliprdr = NULL; c->clipboardReady = FALSE; LeaveCriticalSection(&c->offerLock);
+        EnterCriticalSection(&c->offerLock);
+        c->cliprdr = NULL; c->clipboardReady = FALSE; c->offerPending = FALSE; c->offerAgain = FALSE;
+        LeaveCriticalSection(&c->offerLock);
     }
     else freerdp_client_OnChannelDisconnectedEventHandler(&c->client, e);
 }
@@ -400,7 +580,7 @@ static DWORD WINAPI input_thread(LPVOID arg) {
         EnterCriticalSection(&c->inputLock);
         /* A blocked server/renderer must not turn a full queue into a normal session end. Stop reading the
          * pipe until the main loop drains it; the parent's bounded pipe queue still detects a prolonged stall. */
-        while (c->queued >= MAX_QUEUE) {
+        while (c->queued >= MAX_QUEUE || c->queuedBytes + cmd->length > 4u * MAX_FILE_DATA) {
             LeaveCriticalSection(&c->inputLock);
             if (WaitForSingleObject(c->inputSpace, INFINITE) != WAIT_OBJECT_0) {
                 EnterCriticalSection(&c->inputLock); c->inputFailed = TRUE; c->inputEnded = TRUE;
@@ -415,7 +595,7 @@ static DWORD WINAPI input_thread(LPVOID arg) {
             LeaveCriticalSection(&c->inputLock); free_command(cmd); continue;
         }
         if (c->last) c->last->next = cmd; else c->first = cmd;
-        c->last = cmd; c->queued++;
+        c->last = cmd; c->queued++; c->queuedBytes += cmd->length;
         SetEvent(c->inputEvent);
         LeaveCriticalSection(&c->inputLock);
     }
@@ -425,7 +605,7 @@ static DWORD WINAPI input_thread(LPVOID arg) {
 static BOOL process_input(Context* c) {
     EnterCriticalSection(&c->inputLock);
     Command* cmd = c->first;
-    c->first = c->last = NULL; c->queued = 0;
+    c->first = c->last = NULL; c->queued = 0; c->queuedBytes = 0;
     SetEvent(c->inputSpace);
     BOOL ended = c->inputEnded;
     ResetEvent(c->inputEvent);
@@ -449,6 +629,8 @@ static BOOL process_input(Context* c) {
                 c->width = w; c->height = h; c->scale = scale;
                 (void)send_layout(c);
             }
+        } else if (cmd->type == 'o' || cmd->type == 'q' || cmd->type == 's') {
+            clipboard_file_command(c, cmd);
         } else if (cmd->type == 'P') {
             if ((clipboard_ways(c) & CLIPBOARD_TO_REMOTE) && !memchr(p, 0, cmd->length)) {
                 set_local_text(c, p, cmd->length);
@@ -463,6 +645,7 @@ static BOOL process_input(Context* c) {
                 memset(c->localText, 0, (c->localTextLength + 1) * sizeof(WCHAR)); free(c->localText);
                 c->localText = NULL; c->localTextLength = 0;
             }
+            if (!(c->clipboard & CLIPBOARD_TO_REMOTE)) { free(c->localFiles); c->localFiles = NULL; c->localFilesLength = 0; }
             LeaveCriticalSection(&c->clipboardLock);
             (void)clipboard_offer(c);
         } else ended = TRUE;
@@ -471,7 +654,7 @@ static BOOL process_input(Context* c) {
     return !ended;
 }
 int main(int argc, char** argv) {
-    if (argc == 2 && strcmp(argv[1], "--version") == 0) { printf("tabby-freerdp IPC 6; FreeRDP %s\n", FREERDP_VERSION_FULL); return 0; }
+    if (argc == 2 && strcmp(argv[1], "--version") == 0) { printf("tabby-freerdp IPC 8; FreeRDP %s\n", FREERDP_VERSION_FULL); return 0; }
     if (argc != 1) return 2;
 #ifdef _WIN32
     _setmode(_fileno(stdin), _O_BINARY); _setmode(_fileno(stdout), _O_BINARY);
@@ -541,9 +724,9 @@ int main(int argc, char** argv) {
     BOOLSET(NSCodec, TRUE); BOOLSET(RemoteFxCodec, TRUE);
     /* No clipboard channel at all when the clipboard is off either way. */
     BOOLSET(RedirectClipboard, c->clipboard != 0); BOOLSET(AudioPlayback, FALSE); BOOLSET(DeviceRedirection, FALSE);
-    /* FreeRDP filters the channel by these too: text only, the ways the parent asked for, never files. */
-    NUM(ClipboardFeatureMask, ((c->clipboard & CLIPBOARD_TO_REMOTE) ? CLIPRDR_FLAG_LOCAL_TO_REMOTE : 0) |
-        ((c->clipboard & CLIPBOARD_FROM_REMOTE) ? CLIPRDR_FLAG_REMOTE_TO_LOCAL : 0));
+    /* FreeRDP filters text and file requests separately, in addition to our live permission checks. */
+    NUM(ClipboardFeatureMask, ((c->clipboard & CLIPBOARD_TO_REMOTE) ? (CLIPRDR_FLAG_LOCAL_TO_REMOTE | CLIPRDR_FLAG_LOCAL_TO_REMOTE_FILES) : 0) |
+        ((c->clipboard & CLIPBOARD_FROM_REMOTE) ? (CLIPRDR_FLAG_REMOTE_TO_LOCAL | CLIPRDR_FLAG_REMOTE_TO_LOCAL_FILES) : 0));
     BOOLSET(SupportMultitransport, FALSE); /* The parent supplies one authenticated TCP transport. */
     for (int i = 1; i <= 3; i++) { memset(fields[i], 0, strlen(fields[i])); free(fields[i]); }
     free_command(start);

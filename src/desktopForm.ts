@@ -74,7 +74,7 @@ export function askDesktop (pane: HTMLElement, options: DesktopFormOptions): Pro
                     <option value="gnome">GNOME Remote Desktop (needs the graphics pipeline)</option>
                 </select>
                 <select class="form-control" name="client" aria-label="RDP client" title="RDP client. Applies on the next connection."></select>
-                <div class="text-muted small">FreeRDP preview: display and input; clipboard, sound and shared folders are unavailable.</div>` + `
+                <div class="text-muted small">FreeRDP supports display, input and clipboard text/files. Clipboard images, sound, microphone and shared folders require IronRDP.</div>` + `
                 <select class="form-control" name="account" title="Saved accounts are added in Settings › Remote Desktop › Accounts"></select>
                 <input class="form-control" name="username" placeholder="User name (optional; asked when connecting)" spellcheck="false">
                 <input class="form-control" name="domain" placeholder="Domain (optional)" spellcheck="false">` + `

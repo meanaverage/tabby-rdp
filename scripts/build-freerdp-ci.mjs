@@ -50,6 +50,10 @@ if (process.platform === 'win32') {
 }
 fs.copyFileSync(path.join(source, 'LICENSE.txt'), path.join(prefix, 'LICENSE.txt'))
 fs.writeFileSync(path.join(prefix, 'tabby-source.json'), JSON.stringify(manifest, null, 2) + '\n')
-run(process.execPath, [path.join(root, 'scripts/build-freerdp.mjs'), '--openssl-prefix', prefix, ...process.platform === 'win32' ? ['-G', 'Ninja'] : []], root)
+run(process.execPath, [path.join(root, 'scripts/build-freerdp.mjs'), '--openssl-prefix', prefix, '-DTRD_BUILD_TESTS=ON', ...process.platform === 'win32' ? ['-G', 'Ninja'] : []], root)
+run('cmake', ['--build', path.join(root, '.qa/freerdp-build/build'), '--config', 'Release', '--target', 'tabby-clipboard-test'], root)
+// The callback executable uses the same staged DLLs as the helper on Windows.
+process.env.PATH = path.join(root, 'native/bin', target) + path.delimiter + process.env.PATH
+run('ctest', ['--test-dir', path.join(root, '.qa/freerdp-build/build'), '-C', 'Release', '--output-on-failure'], root)
 // Uploading loose files would discard Linux executable modes. Keep the bundle in a tar archive.
 run('cmake', ['-E', 'tar', 'czf', path.join(root, '.qa', `freerdp-${target}.tgz`), `native/bin/${target}`], root)

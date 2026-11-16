@@ -1,7 +1,9 @@
 # Native build records hash exact source and bundle bytes on every host.
 native/*.c text eol=lf
+native/*.h text eol=lf
 native/*.cmake text eol=lf
 native/*.json text eol=lf
 native/CMakeLists.txt text eol=lf
 scripts/build-freerdp*.mjs text eol=lf
 native/bin/** -text
+wasm/** -text

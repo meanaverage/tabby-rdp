@@ -262,7 +262,7 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
                     <div class="header">
                         <div class="title">RDP client</div>
                         <div class="description">Default for new connections. Each desktop can choose its own client.
-                            FreeRDP preview supports display and input; clipboard, sound and shared folders are unavailable.</div>
+                            FreeRDP WebAssembly supports display, input and text/file clipboard transfers. Sound, microphone, clipboard pictures, shared folders and H.264 require IronRDP.</div>
                     </div>
                     <select class="form-control" data-setting="client" aria-label="RDP client">
                         ${Object.entries(RDP_CLIENT_LABELS).map(([id, label]) => `<option value="${id}">${esc(label)}</option>`).join('')}
@@ -291,7 +291,7 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
                         <option value="retina">Retina</option>
                     </select>
                 </div>
-                ${this.toggleLine('h264', 'Video decoding (H.264)', 'Hardware acceleration where available. Applies on the next connection.')}
+                ${this.toggleLine('h264', 'Video decoding (H.264)', 'IronRDP only. Hardware acceleration where available. Applies on the next connection.')}
                 <div class="form-line">
                     <div class="header">
                         <div class="title">Auto-hide header</div>
@@ -330,8 +330,8 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
                 </div>
 
                 <h5>Sound</h5>
-                ${this.toggleLine('sound', 'Sound', 'Play remote audio. Applies on the next connection.')}
-                ${this.toggleLine('microphone', 'Microphone', `Share your microphone when a remote app requests it. Applies on the next connection; turning it off stops sharing immediately. ${this.info('A red indicator remains visible while sharing, including from background desktops. Its menu can stop sharing with an individual desktop. That desktop stays muted through reconnects until re-enabled or Tabby closes.')}`)}` + `
+                ${this.toggleLine('sound', 'Sound', 'IronRDP only. Play remote audio. Applies on the next connection.')}
+                ${this.toggleLine('microphone', 'Microphone', `IronRDP only. Share your microphone when a remote app requests it. Applies on the next connection; turning it off stops sharing immediately. ${this.info('A red indicator remains visible while sharing, including from background desktops. Its menu can stop sharing with an individual desktop. That desktop stays muted through reconnects until re-enabled or Tabby closes.')}`)}` + `
 
                 <h5>Clipboard</h5>
                 <div class="form-line">
@@ -347,7 +347,7 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
                 </div>` + `
 
                 <h5>Shared folders</h5>
-                <div class="trd-lead">Available as remote drives (<code>\\\\tsclient</code> on Windows). Applies on the next connection.
+                <div class="trd-lead">IronRDP only. Available as remote drives (<code>\\\\tsclient</code> on Windows). Applies on the next connection.
                     ${this.info('Shared with every remote desktop. Use read-only to prevent remote changes. Supported by Windows and xrdp with FUSE; unavailable on GNOME Remote Desktop.')}</div>
                 <div class="trd-list" data-list="folders"></div>
                 <div class="trd-add"><button class="btn btn-secondary btn-sm" data-action="folder">Share a folder…</button></div>
@@ -455,7 +455,7 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
                     <tr><td>${k('⌃⌘')} + key</td><td>The Windows key with it: ${k('⌃⌘R')} for Win+R, ${k('⌃⌘E')} for Explorer.</td></tr>` : ''}
                     <tr><td>Right-click › <b>Send keys</b></td><td>Ctrl+Alt+Del, Win+L, Task Manager and others this computer keeps for itself.</td></tr>
                     <tr><td>Drop files on the desktop</td><td>Then paste them in Files or Explorer. Files copied there offer <b>Save to Downloads</b>.</td></tr>
-                    <tr><td>Right-click › <b>View only</b></td><td>Watch without touching: no keys or clicks go to the desktop.</td></tr>
+                    <tr><td>Right-click › <b>View only</b></td><td>Watch without touching: no keys or clicks go to the desktop, and no clipboard either way.</td></tr>
                     <tr><td>Right-click › <b>Save a screenshot</b></td><td>The full-resolution screen, to Downloads and the clipboard.</td></tr>
                 </tbody></table>
             </section>` + `

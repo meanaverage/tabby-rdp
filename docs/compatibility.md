@@ -6,8 +6,8 @@
 
 - **Tabby 1.0.236 or newer**, on macOS, Windows or Linux. On a fresh Windows, Tabby
   itself needs the [Microsoft Visual C++ Redistributable](https://learn.microsoft.com/cpp/windows/latest-supported-vc-redist)
-  for SSH. The experimental **FreeRDP client also requires this runtime**, for the client architecture
-  (ARM64 or x64), including for direct RDP connections. It is a prerequisite and is not bundled by the plugin.
+  for SSH. This is a Tabby prerequisite and is not bundled by the plugin. The FreeRDP WebAssembly core
+  adds no native DLL prerequisite.
 - **Automatic headless GNOME setup:** GNOME Shell and GNOME Remote Desktop 46 or newer (Ubuntu 24.04, for example), a systemd user
   session, and SSH access with a key or agent. `desk` also needs `python3` and GNOME Terminal. No root, no display, no
   login screen.
@@ -37,7 +37,7 @@ RDP matrix uses ARM64 Tabby 1.0.236 / Electron 43.7.0 on all three client platfo
 
 The KDE row is experimental: the tested profile needs server-side color and authentication compatibility patches.
 Stock KDE builds and live remote monitor resizing are not qualified. FreeRDP is a dependency of that KRDP server;
-this matrix records the IronRDP client. The new FreeRDP client preview is qualified separately below. Rocky's Xfce desktop uses **xrdp**, a different RDP server.
+this matrix records the IronRDP client. The FreeRDP client is qualified separately below. Rocky's Xfce desktop uses **xrdp**, a different RDP server.
 The testbed includes the opt-in KDE patches and reproducible setup instructions; see the
 [visual QA guide](visual-qa.md) for exact identities, evidence and remaining gaps.
 
@@ -47,15 +47,15 @@ upstream xterm 6 builds on macOS and Linux. The package installation dialog is t
 Windows qualification of that dialog remains pending. See the [host test matrix](../test/README.md#host-qualification).
 These focused checks do not establish clipboard, shared-folder, audio or microphone coverage across every matrix cell.
 
-## FreeRDP client preview
+<a id="freerdp-client-preview"></a>
 
-Native helpers are bundled for macOS ARM64 and Windows/Linux ARM64 and x64. The native protocol/security checks
-pass on all five targets. Packed-plugin lifecycle tests against Windows Server 2025 pass in the existing Windows 11
-ARM64 and Ubuntu 24.04 ARM64 client VMs: pixels, input routing, live resize in both directions, fixed-resolution
-fitting, view only, cleanup, reconnect, switching to IronRDP, input-burst recovery and stable Automatic headers with reconnect resizing.
-macOS ARM64 has earlier lifecycle coverage and current native protocol/security checks. Live x64 RDP qualification,
-domain-policy qualification and performance comparisons remain pending.
-See [capabilities and build coverage](../native/README.md).
+## FreeRDP client
+
+FreeRDP 3.33.1 is bundled as WebAssembly for macOS, Windows and Linux. It uses an Electron utility process and needs
+no platform-specific FreeRDP package. Hosted checks exercise the packaged runtime on Windows x64, Linux x64 and
+macOS; live Windows Server 2022 tests cover macOS ARM64 and Windows Server 2025 x64 clients, including text/file
+clipboard transfers and cache-setting reconnects. Live Linux file-transfer qualification remains pending.
+Windows SSPI and Kerberos are not provided by this build. See [capabilities and test coverage](../native/README.md).
 
 ## Limitations
 

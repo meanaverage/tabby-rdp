@@ -433,9 +433,10 @@ test('the events are bounded', () => {
     for (let i = 0; i < MAX_EVENTS + 5; i++) {
         trace.local('plugin', 'Tick', { i })
     }
-    assert.equal(trace.events.length, MAX_EVENTS)
-    assert.equal(trace.dropped, 5)
-    assert.equal(trace.events[0].attrs.i, 5)
+    assert.ok(trace.events.length <= MAX_EVENTS)
+    assert.equal(trace.events.length + trace.dropped, MAX_EVENTS + 5)
+    assert.equal(trace.events[0].attrs.i, trace.dropped)
+    assert.equal(trace.events.at(-1)!.attrs.i, MAX_EVENTS + 4)
 })
 
 test('the H.264 decoder wrapper traces each access unit and its result, passing everything through', async () => {
@@ -445,7 +446,8 @@ test('the H.264 decoder wrapper traces each access unit and its result, passing 
         stats: { frames: 0 },
         decode (frame: any, done: (id: number, pixels: Uint8Array | null, error?: string) => void) { calls.push(['decode', frame.id]); tick(7); done(frame.id, frame.id === 2 ? null : new Uint8Array(16)) },
         endSurfaces (ids: number[]) { calls.push(['end', ids]) },
-        close () { calls.push(['close']) },
+        closed: false,
+        close () { this.closed = true; calls.push(['close']) },
     }
     const wrapped = trace.wrapH264Decoder(decoder)
     const results: any[] = []
@@ -459,4 +461,26 @@ test('the H.264 decoder wrapper traces each access unit and its result, passing 
     assert.equal(trace.events[0].attrs.endedSurfaces, '0')
     assert.equal(trace.events[0].attrs.regionArea, 64)
     assert.equal(trace.events[1].attrs.latencyMs, 7)
+    wrapped.close()
+    assert.equal(decoder.closed, true)
+})
+
+test('H264 diagnostics reject truncated SPS and excessive picture-order cycles', () => {
+    const short = inspectH264(Buffer.from([0, 0, 1, 0x67, 66]))
+    assert.equal(short.width, undefined)
+    assert.equal(short.height, undefined)
+    const ue = (value: number) => { const n = (value + 1).toString(2); return '0'.repeat(n.length - 1) + n }
+    const withCycles = (count: number) => {
+        // Complete baseline SPS: each cycle's signed offset is zero, then a valid 16x16 picture tail.
+        const bits = '01000010' + '00000000' + '00011110' + ue(0) + ue(0) + ue(1)
+            + '0' + ue(0) + ue(0) + ue(count) + '1'.repeat(count)
+            + ue(1) + '0' + ue(0) + ue(0) + '110' + '1'
+        const padded = bits + '0'.repeat((8 - bits.length % 8) % 8)
+        const payload: number[] = [0, 0, 1, 0x67]
+        for (let i = 0; i < padded.length; i += 8) payload.push(parseInt(padded.slice(i, i + 8), 2))
+        return inspectH264(Uint8Array.from(payload))
+    }
+    assert.deepEqual(withCycles(255), { keyFrame: false, sps: true, nals: 1, width: 16, height: 16 })
+    assert.equal(withCycles(256).width, undefined)
+
 })

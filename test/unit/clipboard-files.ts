@@ -72,6 +72,7 @@ const OFF: Ways = { toRemote: false, fromRemote: false }
  */
 function transfer (initial: Ways) {
     let ways = { ...initial }
+    let viewOnly = false
     const listeners = new Map<string, (event: unknown) => void>()
     const classes = new Set<string>()
     const shown: string[] = []
@@ -87,7 +88,7 @@ function transfer (initial: Ways) {
         appendChild: (el: FakeElement) => { shown.push(el.children[0]?.textContent ?? '') },
     }
     const log: string[] = []
-    const files = new FileTransfer(rdp, layer, (m: string) => log.push(m), () => ways)
+    const files = new FileTransfer(rdp, layer, (m: string) => log.push(m), () => ways, undefined, () => viewOnly)
     const provider = files.provider
     provider.setSession({ invokeExtension () { } })
     // What reaches the connection, each answer under the remote's number for its request.
@@ -101,6 +102,7 @@ function transfer (initial: Ways) {
     return {
         files, provider, listeners, classes, shown, log, handedOut,
         narrow (to: Ways) { ways = { ...to } },
+        setViewOnly (on: boolean) { viewOnly = on },
         /** The remote asks for a file it was offered, as pasting it there does: its size, then its contents. */
         async paste (size: number) {
             provider.handleFileContentsRequest({ streamId: ++streams, index: 0, flags: rdp.FileContentsFlags.SIZE, position: 0, size: 8 })
@@ -246,6 +248,34 @@ test('files copied on the remote aren\'t offered where nothing comes from it, an
     }
 })
 
+test('in view only no files go either way: none are sent or handed out, and the remote\'s copies aren\'t offered', async t => {
+    t.mock.timers.enable({ apis: ['setTimeout'] })
+    const c = transfer(BOTH)
+    try {
+        c.files.send([new File(['the secret file'], 'secret.txt')])
+        assert.deepEqual((await c.paste(15)).map(s => s.isError), [false, false])
+        c.setViewOnly(true)
+        // Pasted again there, as the provider keeps them: not handed out, and said why.
+        assert.deepEqual((await c.paste(15)).map(s => [s.isError, s.text]), [[true, ''], [true, '']])
+        assert.equal(c.shown.at(-1), 'Not sent: this desktop is in view only.')
+        // Nor sent from here, dropped or picked.
+        const sent = c.log.length
+        c.files.send([new File(['another'], 'another.txt')])
+        assert.deepEqual(c.log.slice(sent), ['files: not sent: the desktop is in view only'])
+        // Copied there: not offered, and nothing to save.
+        c.provider.handleFilesAvailable([{ name: 'report.pdf', size: 3 }], 7)
+        assert.equal(c.log.at(-1), 'files: the remote copied 1; not offered: the desktop is in view only')
+        assert.ok(!c.shown.includes('1 file copied on the remote desktop'))
+        // View only ends: they go again.
+        c.setViewOnly(false)
+        assert.deepEqual((await c.paste(15)).map(s => [s.isError, s.text]), [[false, '\x0f\0\0\0\0\0\0\0'], [false, 'the secret file']])
+        c.provider.handleFilesAvailable([{ name: 'report.pdf', size: 3 }], 8)
+        assert.equal(c.shown.at(-1), '1 file copied on the remote desktop')
+    } finally {
+        c.files.dispose()
+    }
+})
+
 test('narrowed while connected: the files offered there are taken back, a paste still pulling them included', async t => {
     t.mock.timers.enable({ apis: ['setTimeout'] })
     // Offered, not pulled yet: the paste fails at once, and says so, rather than waiting for the remote that won't get them.
@@ -304,4 +334,19 @@ test('Save to Downloads stops between files once nothing comes from the remote a
         c.files.dispose()
         rmSync(dir, { recursive: true, force: true })
     }
+})
+
+test('expired file reads discard adapter bookkeeping without replying to a reused stream', () => {
+    const c = transfer(BOTH)
+    try {
+        const discarded: number[] = []
+        c.provider.discardFileContentsRequest = (stream: number) => discarded.push(stream)
+        c.files.reading = [{ streamId: 77, number: 123, since: 0, bytes: 4 }]
+        c.files.served.set(123, { streamId: 77 })
+        c.files.expire()
+        assert.deepEqual(c.handedOut, [])
+        assert.deepEqual(discarded, [77])
+        assert.equal(c.files.reading.length, 0)
+        assert.equal(c.files.served.size, 0)
+    } finally { c.files.dispose() }
 })

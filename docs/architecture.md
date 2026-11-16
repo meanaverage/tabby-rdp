@@ -246,8 +246,8 @@ certificate there). The edit form is the add form, filled in (`wake` included).
   not offer RSA key exchange or retry a failed handshake with weaker ciphers. A server offering only RSA key exchange
   cannot connect. The negotiated version and cipher are logged. The certificate still has to pass the plugin's
   authority or fingerprint check before CredSSP sends any sign-in data. The helper carries SSH streams through a
-  bounded channel to Tabby's window and owns direct TCP and RD Gateway connections. The experimental FreeRDP client
-  retains its own OpenSSL-based TLS path.
+  bounded channel to Tabby's window and owns direct TCP and RD Gateway connections. The FreeRDP client
+  uses its own LibreSSL-based TLS path inside WebAssembly.
 - **Starting it (`wake`, `src/wake.ts`):** before connecting, a short script on the SSH host checks that the RDP
   server answers: an X.224 connection request must get a reply (with `python3`; else an open port will do, with `nc`
   or bash), since a port can be open before the server behind it is, as with QEMU's user-mode port forwarding. If
@@ -377,7 +377,11 @@ While a desktop covers the active pane (`src/keyboard.ts`):
   a key is sent as the Windows key with that key (Ctrl is let go on the remote first): with ⌘ as Ctrl, ⌃⌘ would only
   mean Ctrl again, so no combination is lost. Tabby's ⌃⌘F (full screen) stays Tabby's.
 - **View only** (per desktop, kept across reconnects): keys stop at the router, and a layer over the picture takes
-  the mouse (the wheel scrolls an actual-size picture instead). The layer carries the "View only" label.
+  the mouse (the wheel scrolls an actual-size picture instead). The layer carries the "View only" label. The
+  clipboard is paused both ways: IronRDP's component (patch 69, `setClipboardPaused`) and the FreeRDP bridge
+  (`freerdpClipboard.ts`) stop reading this computer's clipboard and drop what the remote copies, and withdraw what
+  this computer offered if it is still the latest on the remote's clipboard; files are neither sent, served nor
+  offered (`fileTransfer.ts`).
 - **Send keys** (menus): the desktop is shown and focused, and the combination goes to IronRDP as key events with
   their `code`, which it sends as scancodes, the way typed keys go.
 - **Stuck keys:** macOS sends no keyup for a key pressed while ⌘ is down, so the remote gets one right after the

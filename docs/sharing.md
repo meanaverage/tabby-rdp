@@ -2,9 +2,9 @@
 
 # Clipboard, files and desktop controls
 
-These sharing features describe the default IronRDP client. The experimental FreeRDP preview currently supports
-display, input and clipboard text, the ways the clipboard setting below allows (none in view only); pictures and files
-on the clipboard, file transfer, shared drives and audio are pending. See [client capabilities](../native/README.md).
+The default IronRDP client supports the sharing features below. The FreeRDP client supports clipboard
+text and file/folder transfers, in the directions the clipboard setting allows (none in view only). Pictures on the
+clipboard, shared drives and audio still need IronRDP. See [client capabilities](../native/README.md).
 
 ## Clipboard
 
@@ -36,6 +36,10 @@ Remote Desktop › Desktops › Open desktops) still go to your clipboard: they 
 ## Files
 
 Copy files or folders in Finder and press ⌘V on the desktop, or drop them onto it, or use **Remote Desktop › Send files…** in the pane's menu; they paste in Files or Explorer. A copied folder's links go along only when they lead somewhere inside it. Files copied on the remote offer **Save to Downloads**, which saves them there (never into a folder that was there before), marks them as downloaded, as a browser does (so macOS can ask before an app among them first opens), and takes invisible characters that could disguise a name out of it. They go the ways the [clipboard](#clipboard) does.
+
+FreeRDP uses these same send/save controls. Each upload file must be smaller than 4 GiB, each download file at most
+2 GiB, and an offer may contain at most 10,000 entries. Empty folders are omitted. Relative names must fit 259 UTF-16 characters. Copying something
+else on the remote clipboard cancels an unfinished download; keep the copied files selected until it finishes.
 
 ## Shared folders
 
@@ -101,7 +105,7 @@ In the desktop's menus: Ctrl+Alt+Del, Win+R, Win+L, Ctrl+Shift+Esc, Print Screen
 
 ## View only
 
-In the desktop's menus: watch a desktop without touching it. No keys or clicks go to it while a "View only" label shows; the picture, clipboard and sound carry on. Kept across reconnects, until the desktop is closed.
+In the desktop's menus: watch a desktop without touching it. While the **View only** label shows, neither client sends keys, clicks or clipboard contents in either direction. What was offered from this computer is withdrawn when it is still the latest copy known on the remote; a server that already copied those contents can retain them. Turn view only on before copying anything the server should not receive. Copies received during view only are discarded. IronRDP can retain names and sizes from an earlier file offer on the remote, but refuses its contents while view only is on. It also permits explicitly saving files offered before view only; FreeRDP pauses those downloads too. When it ends, clipboard sharing follows the configured directions again. The picture and supported sound continue. View only persists across reconnects until the desktop closes.
 
 ## Screenshots
 

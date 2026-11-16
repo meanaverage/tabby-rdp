@@ -44,7 +44,12 @@ test('draft notes require an exact nonempty changelog and do not promise staged 
 
 test('publishing workflow keeps every staging gate, explicit tags and draft availability boundary', () => {
     const workflow = readFileSync(new URL('../../.github/workflows/publish.yml', import.meta.url), 'utf8')
-    assert.match(workflow, /needs: \[ironrdp, package, helpers\]/)
+    assert.match(workflow, /needs: \[ironrdp, freerdp, package, helpers\]/)
+    assert.match(workflow, /uses: \.\/\.github\/workflows\/freerdp\.yml/)
+    const freerdp = readFileSync(new URL('../../.github/workflows/freerdp.yml', import.meta.url), 'utf8')
+    assert.match(freerdp, /workflow_call:/)
+    assert.match(freerdp, /git diff --exit-code -- wasm\/freerdp/)
+    assert.match(freerdp, /git ls-files --others --exclude-standard -- wasm\/freerdp/)
     assert.match(workflow, /id-token: write/)
     assert.match(workflow, /sha256sum --strict -c -/)
     assert.match(workflow, /check-vendor\.mjs package/)
@@ -76,7 +81,7 @@ test("a release stages each platform's FreeRDP package before the plugin, which 
     // Before format 4, the plugin alone.
     assert.deepEqual(releasePackages(pkg('0.5.7')), [{ name: 'tabby-rdp', file: 'tabby-rdp-0.5.7.tgz' }])
     const committed = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8'))
-    assert.equal(releasePackages(committed).length, committed.tabbyRdp.freerdpPlatforms.length + 1)
+    assert.deepEqual(releasePackages(committed), [{ name: 'tabby-rdp', file: `tabby-rdp-${committed.version}.tgz` }])
     // The workflow takes exactly these by hash, checks each, and stages them in this order.
     const workflow = readFileSync(new URL('../../.github/workflows/publish.yml', import.meta.url), 'utf8')
     assert.equal(workflow.match(/node scripts\/release-plan\.mjs packages/g)?.length, 3)

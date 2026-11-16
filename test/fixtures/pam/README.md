@@ -1,0 +1,32 @@
+# TLS-only cached bitmap regression peer
+
+`native/pam-test-server.c` sends legacy drawing orders over TLS without NLA. It paints a control image, repaints
+black, then fills the desktop with cached bitmap tiles containing opaque, zero, partial or omitted alpha, plus a
+true-black control. It reports whether the synthetic bracketed PAM username arrived intact. It never validates a
+real account and never connects to another server. Its default listener is loopback; an explicit bind address is
+available for isolated VM-to-VM testing. Every peer has a 15-second watchdog after accepting a connection.
+
+After the pinned native CI build, `node scripts/build-pam-fixture.mjs` builds the peer separately from the production
+bundle. CI retains the executable alongside the native bundle. `controller.cjs` starts one peer at a time and
+returns its port. Run it only on a disposable test server, restrict its firewall to the test client, and supply
+`TRD_PAM_BIND`, `TRD_PAM_CLIENT`, `TRD_PAM_SERVER`, `TRD_PAM_CERT` and `TRD_PAM_KEY`. The controller's HTTP port defaults
+to 8766. The test certificate and key are synthetic; never pass real credentials to this peer.
+
+On the client, set `TRD_PAM_CONTROLLER`, an independently verified `TRD_PAM_FINGERPRINT`, and optionally
+`TRD_PAM_OUTPUT`, then run `node --import tsx test/run.ts freerdp-pam`. The suite exercises both runtimes through
+Tabby's actual canvas, all combinations of glyph caching/bitmap caching/relaxed checks, and announced versus deliberately unannounced
+drawing orders. All alpha variants run with announced bitmap caching; the other cases use a transparent tile.
+Strict checks must reject orders that were not negotiated. Glyph caching is varied as a setting; this peer does
+not generate glyph-cache text orders. Native/WASM results are compared case by case.
+
+This tests protocol and renderer behavior related to PAM compatibility. It does not emulate Senhasegura's login
+widgets, MFA, appliance policies or handoff to a target session, and cannot certify those flows.
+
+The native build workflow also runs `test/unit/freerdp-pam.ts` on Windows and Linux, ARM64 and x64. That suite
+connects both the native and WASM cores to a local peer and checks TLS policy callbacks, the bracketed username,
+RGB preservation and strict/relaxed rejection. The Tabby suite additionally checks Chromium canvas alpha behavior.
+
+On 2026-11-16, Windows Server 2025 x64 running Tabby 1.0.236 passed all 64 canvas cases (224 assertions) against the
+Windows Server 2022 x64 peer. Native and WASM outcomes matched in every case. The core-only CI matrix separately
+passed 18 peer cases each on Linux and Windows, x64 and ARM64. This evidence supports protocol parity, not certification
+of a Senhasegura installation.

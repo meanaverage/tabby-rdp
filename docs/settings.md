@@ -33,7 +33,23 @@ The Settings tab groups everyday controls first, followed by SSH integration, Fr
 
 | Setting | Default | Behavior |
 |---|---|---|
-| RDP client (`client`) | IronRDP (`ironrdp`) | Experimental FreeRDP (`freerdp`) needs a matching native helper. Profiles and desktops can override the default; changes apply on reconnect. A global FreeRDP default falls back to IronRDP locally when its helper is absent; an explicit override reports the missing build. [Capabilities](../native/README.md). |
+| RDP client (`client`) | IronRDP (`ironrdp`) | FreeRDP (`freerdp`) uses bundled WebAssembly. The earlier `freerdp-wasm` name is accepted as an alias. Profiles and desktops can override the default; changes apply on reconnect. No separate FreeRDP helper package is needed. [Capabilities](../native/README.md). |
+
+### FreeRDP WebAssembly settings coverage
+
+| Controls | FreeRDP behavior |
+|---|---|
+| Client choice; profile/group overrides | Applied on reconnect, including saved `freerdp-wasm` aliases. |
+| Size, sharpness, scaling, resize/reconnect policy | Applied through the shared desktop sizing and FreeRDP display-control paths. |
+| Keyboard modes, shortcuts, input and view only | Applied by the FreeRDP canvas and shared keyboard controls. |
+| Clipboard directions | Applied to text and file/folder transfers; images are unavailable. Narrowing stops transfers; widening requires reconnect. |
+| Glyph cache, bitmap cache, relaxed drawing orders | Passed independently to FreeRDP on each connection. |
+| Sound, microphone, H.264, shared folders | Unavailable; these settings apply to IronRDP connections only. |
+| Header, overlays, status, accounts, updates, SSH discovery and idle shutdown | Shared plugin behavior, independent of the selected RDP client. |
+| Diagnostic log | Plugin connection messages are available. IronRDP protocol logging and its PDU trace detail do not become FreeRDP protocol logs. |
+
+Hyper-V VMConnect requires IronRDP. The bundled FreeRDP build uses NTLM and does not provide Windows SSPI or
+Kerberos. See [platform and live-test coverage](compatibility.md#freerdp-client). Choose IronRDP when a connection needs its additional channels or authentication support.
 
 ### Display
 
@@ -43,7 +59,7 @@ The Settings tab groups everyday controls first, followed by SSH integration, Fr
 | Keep the resolution: scale to fit or actual size (`zoom`) | Scale to fit (`fit`) | With `resize: off`: `actual` shows one remote pixel per point, with scroll bars when the desktop is larger than the pane (a Retina-sized desktop shows at twice the size). |
 | Sharpness (`sharpness`) | Standard (`standard`) | Retina (`retina`): device pixels, with the remote's scale set to match. |
 | For *this desktop* only (`desktopSharpness`) | As above | In the menu of a tab with a desktop open: Standard or Retina for that desktop, whatever the default. Kept by desktop (`user@host`, `user@host#address` for one behind a host, or `rdp#address` for a remote desktop profile's own tab). |
-| Video decoding (`h264`) | On | H.264 decoded by Tabby's browser engine (hardware-accelerated where available), for what the remote sends as video; applies on the next connection. |
+| Video decoding (`h264`) | On | IronRDP only. H.264 decoded by Tabby's browser engine (hardware-accelerated where available), for what the remote sends as video; applies on the next connection. |
 | Auto-hide header (`headerAutoHide`) | Never (`never`) | Under Display. `automatic`: only a connected remote desktop alone in the active tab; any split, even with a maximized pane, keeps the header visible. `always`: auto-hide across all tabs. Also available from **View › Hide Header** where Tabby has a native View menu. Existing hidden/removed Windows and Linux menu bars stay that way. |
 | Minimum window size (`headerMinWidth`, `headerMinHeight`) | None (`0`, `0`) | Optional limits for Automatic, in logical pixels. Each nonblank dimension must meet its limit. Uses the actual window size, including manually resized windows. Never and Always ignore the limits. |
 | Show connection status (`connectionStatus`) | Off | The indicator in the desktop's corner; fades when the pointer comes near. |
@@ -60,15 +76,15 @@ The Settings tab groups everyday controls first, followed by SSH integration, Fr
 
 | Setting | Default | Behavior |
 |---|---|---|
-| Sound (`sound`) | On | Applies on the next connection. |
-| Microphone (`microphone`) | Off | Send your microphone to a remote desktop that asks for it, as one does while an app there records. Turning it on applies on the next connection; turning it off stops it at once, also on a desktop still connecting. A desktop's menu can stop it for that desktop alone, until it is turned back on there or that Tabby window is closed. |
+| Sound (`sound`) | On | IronRDP only. Applies on the next connection. |
+| Microphone (`microphone`) | Off | IronRDP only. Send your microphone to a remote desktop that asks for it, as one does while an app there records. Turning it on applies on the next connection; turning it off stops it at once, also on a desktop still connecting. A desktop's menu can stop it for that desktop alone, until it is turned back on there or that Tabby window is closed. |
 
 ### Clipboard and shared folders
 
 | Setting | Default | Behavior |
 |---|---|---|
-| Clipboard sharing (`clipboard`) | Both ways (`both`) | Or only from the remote desktop to this computer (`fromRemote`), or off (`off`), for text, pictures and files alike (FreeRDP shares text only); a desktop's own (`clipboard` in its profile or its `desktops` entry) takes its place ([Clipboard](sharing.md#clipboard)). Applies in full on the next connection; narrowing it also stops the sending at once to open desktops that follow it. |
-| Shared folders (`sharedFolders`) | None | `[{ path, name, readOnly }]`: folders shared as drives with every remote desktop ([Shared folders](sharing.md#shared-folders)). Applies on the next connection. |
+| Clipboard sharing (`clipboard`) | Both ways (`both`) | Or only from the remote desktop to this computer (`fromRemote`), or off (`off`), for text, pictures and files alike (FreeRDP WebAssembly shares text and files, but not pictures); a desktop's own (`clipboard` in its profile or its `desktops` entry) takes its place ([Clipboard](sharing.md#clipboard)). Applies in full on the next connection; narrowing it also stops the sending at once to open desktops that follow it. |
+| Shared folders (`sharedFolders`) | None | IronRDP only. `[{ path, name, readOnly }]`: folders shared as drives with every remote desktop ([Shared folders](sharing.md#shared-folders)). Applies on the next connection. |
 
 ### SSH hosts
 

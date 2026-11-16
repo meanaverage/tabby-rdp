@@ -1,0 +1,127 @@
+From e5a96909efd4cfc955a440dc063789252d4ee882 Mon Sep 17 00:00:00 2001
+From: meanaverage <18336095+meanaverage@users.noreply.github.com>
+Date: Mon, 16 Nov 2026 12:27:59 -0800
+Subject: [PATCH] test(web): carry final upstream clipboard lifecycle
+ regressions
+
+Import the additional session-ended and destroyed-before-ready regression tests from Devolutions/IronRDP#2345 (ddcffc42c06dc11cd21cf8c9ce2266cd5bdaed9f). The runtime implementation already matches, except for retained downstream per-component focus isolation. Keep those focus tests too.
+---
+ .../src/readyEvent.test.ts                    | 31 +++++++++++
+ .../src/services/clipboardLifecycle.test.ts   | 54 +++++++++++++++++++
+ 2 files changed, 85 insertions(+)
+
+diff --git a/web-client/iron-remote-desktop/src/readyEvent.test.ts b/web-client/iron-remote-desktop/src/readyEvent.test.ts
+index 7f2b036..dd9cf99 100644
+--- a/web-client/iron-remote-desktop/src/readyEvent.test.ts
++++ b/web-client/iron-remote-desktop/src/readyEvent.test.ts
+@@ -95,6 +95,37 @@ describe('ready event', () => {
+         expect(calls).toContain('remoteClipboardChangedCallback');
+     });
+ 
++    it('does not fire for a component destroyed while its clipboard was being set up', async () => {
++        let grantPermission!: () => void;
++        stubClipboardApi(
++            () =>
++                new Promise((resolve) => {
++                    grantPermission = () => resolve({ state: 'granted' });
++                }),
++        );
++
++        const target = document.createElement('div');
++        document.body.appendChild(target);
++        const mounted = mount(IronRemoteDesktop, {
++            target,
++            props: { scale: 'fit', verbose: 'false', flexcenter: 'true', module: createRecordingModule([]) },
++        });
++        await vi.waitFor(() => expect(navigator.permissions.query).toHaveBeenCalled());
++
++        // The component's own element, which the event would be dispatched on.
++        const inner = target.querySelector('div') as HTMLDivElement;
++        const ready = vi.fn();
++        inner.addEventListener('ready', ready);
++        target.addEventListener('ready', ready);
++
++        // Without the check, the component dispatches on the element Svelte cleared on unmount, and the error that
++        // throws fails the run.
++        unmount(mounted);
++        grantPermission();
++        await new Promise((resolve) => setTimeout(resolve, 20));
++        expect(ready).not.toHaveBeenCalled();
++    });
++
+     it('still fires when the clipboard is unavailable', async () => {
+         vi.stubGlobal('isSecureContext', false);
+ 
+diff --git a/web-client/iron-remote-desktop/src/services/clipboardLifecycle.test.ts b/web-client/iron-remote-desktop/src/services/clipboardLifecycle.test.ts
+index 645829c..ed97b15 100644
+--- a/web-client/iron-remote-desktop/src/services/clipboardLifecycle.test.ts
++++ b/web-client/iron-remote-desktop/src/services/clipboardLifecycle.test.ts
+@@ -3,6 +3,7 @@ import { RemoteDesktopService } from './remote-desktop.service';
+ import { ClipboardService } from './clipboard.service';
+ import type { RemoteDesktopModule } from '../interfaces/RemoteDesktopModule';
+ import type { ClipboardData } from '../interfaces/ClipboardData';
++import { ConfigBuilder } from './ConfigBuilder';
+ 
+ /**
+  * Clipboard monitoring and the clipboard write that waits for focus belong to each component. A page can show
+@@ -200,4 +201,57 @@ describe('clipboard lifecycle', () => {
+         one.clipboard.dispose();
+         two.clipboard.dispose();
+     });
++    it('stops monitoring when the session ends on its own', async () => {
++        let endSession!: () => void;
++        const session = {
++            desktopSize: () => ({ width: 800, height: 600 }),
++            run: () =>
++                new Promise((resolve) => {
++                    endSession = () => resolve({ reason: () => 'ended' });
++                }),
++            shutdown: vi.fn(),
++            releaseAllInputs: vi.fn(),
++            invokeExtension: vi.fn(),
++        };
++        // A session builder whose setters all return it, and whose connect() gives the session above.
++        const connecting = {
++            ...module,
++            SessionBuilder: class {
++                constructor() {
++                    const builder: object = new Proxy(this, {
++                        get: (_target, name: string) => (name === 'connect' ? async () => session : () => builder),
++                    });
++                    return builder;
++                }
++            },
++            DesktopSize: class {
++                constructor(
++                    public width: number,
++                    public height: number,
++                ) {}
++            },
++        } as unknown as RemoteDesktopModule;
++        const service = new RemoteDesktopService(connecting);
++        service.setCanvas(document.createElement('canvas'));
++        const clipboard = new ClipboardService(service, connecting);
++        await clipboard.initClipboard();
++        const config = new ConfigBuilder()
++            .withDestination('host:3389')
++            .withProxyAddress('ws://proxy')
++            .withAuthToken('token')
++            .build();
++        const running = (await service.connect(config)).run();
++
++        reads.mockClear();
++        await vi.advanceTimersByTimeAsync(300);
++        expect(reads).toHaveBeenCalled();
++
++        endSession();
++        await running;
++        reads.mockClear();
++        await vi.advanceTimersByTimeAsync(500);
++        expect(reads).not.toHaveBeenCalled();
++        clipboard.dispose();
++    });
++
+ });
+-- 
+2.54.0 (Apple Git-157)
+

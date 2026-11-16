@@ -356,9 +356,16 @@ function parseSps (nal: Uint8Array): { width: number, height: number } | null {
             rbsp.push(nal[i])
         }
         let pos = 0
-        const bit = () => { const b = (rbsp[pos >> 3] >> (7 - (pos & 7))) & 1; pos++; return b }
+        const bit = () => {
+            if (pos >= rbsp.length * 8) { throw new Error('Truncated SPS') }
+            const b = (rbsp[pos >> 3] >> (7 - (pos & 7))) & 1; pos++; return b
+        }
         const bits = (n: number) => { let v = 0; for (let i = 0; i < n; i++) v = v * 2 + bit(); return v }
-        const ue = () => { let zeros = 0; while (bit() === 0 && zeros < 32) zeros++; return (1 << zeros) - 1 + bits(zeros) }
+        const ue = () => {
+            let zeros = 0
+            while (bit() === 0) { if (++zeros > 31) { throw new Error('Oversized SPS value') } }
+            return 2 ** zeros - 1 + bits(zeros)
+        }
         const se = () => { const v = ue(); return v & 1 ? (v + 1) / 2 : -v / 2 }
         const profile = bits(8)
         bits(8)  // constraints
@@ -389,6 +396,7 @@ function parseSps (nal: Uint8Array): { width: number, height: number } | null {
         } else if (pocType === 1) {
             bit(); se(); se()
             const n = ue()
+            if (n > 255) { return null }
             for (let i = 0; i < n; i++) se()
         }
         ue()  // max_num_ref_frames
@@ -527,6 +535,7 @@ export class PduTrace {
         const trace = this
         const handed = new Map<number, number>()
         const wrapper = Object.create(decoder) as T
+        if (typeof decoder.close === 'function') { wrapper.close = () => { handed.clear(); decoder.close!() } }
         wrapper.decode = (frame: any, done: (id: number, pixels: Uint8Array | null, error?: string) => void) => {
             const t = trace.now()
             handed.set(frame.id, t)
@@ -616,8 +625,10 @@ export class PduTrace {
         }
         this.events.push(event)
         if (this.events.length > MAX_EVENTS) {
-            this.events.splice(0, this.events.length - MAX_EVENTS)
-            this.dropped++
+            // Trim in batches so a long trace does not shift 150,000 entries for every event.
+            const count = Math.max(this.events.length - MAX_EVENTS, Math.ceil(MAX_EVENTS / 10))
+            this.events.splice(0, count)
+            this.dropped += count
         }
         return event
     }

@@ -208,8 +208,8 @@ export class RDPProfileSettingsComponent implements ProfileSettingsComponent<RDP
             <div class="mb-3">
                 <label>RDP client</label>
                 <select class="form-control" name="client" aria-label="RDP client"></select>
-                <div class="text-muted small">Applies on the next connection. FreeRDP preview supports display and input;
-                    clipboard, sound and shared folders are unavailable.</div>
+                <div class="text-muted small">Applies on the next connection. FreeRDP supports display, input and clipboard text/files.
+                    Clipboard images, sound, microphone and shared folders require IronRDP.</div>
             </div>` + `
             <div class="mb-3">
                 <label>Account</label>

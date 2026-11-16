@@ -1,7 +1,7 @@
-# FreeRDP preview
+# FreeRDP
 
 Settings › Remote Desktop › Settings › **RDP client** selects the default client. RDP profiles and the add/edit
-desktop form have an override. An empty override follows Settings. Existing configurations continue to use IronRDP.
+desktop form have an override. An empty override follows Settings. IronRDP remains the default. Existing FreeRDP selections use the bundled WebAssembly build on reconnect; `freerdp-wasm` is accepted as an alias for `freerdp`.
 Changes apply on the next connection; use Reconnect to compare clients on the same desktop. Accounts, certificate
 trust and desktop identities are shared between the clients.
 
@@ -17,25 +17,27 @@ Each RDP profile or configured desktop can follow Settings, enable any of these 
 Changes apply on the next FreeRDP connection. IronRDP uses its own graphics capabilities.
 
 An RDP profile tab's ellipsis/right-click menu also has **RDP client**: **Follow default**, **IronRDP**, or
-**FreeRDP (experimental)**. The checkmark shows the saved next-connection choice; **Current session** names the
+**FreeRDP**. The checkmark shows the saved next-connection choice; **Current session** names the
 client already running. Changing the choice offers **Reconnect to apply** or **Keep current session**, without
 disconnecting automatically. A saved profile keeps its override; an unsaved quick connection keeps it in that tab.
 
-The initial FreeRDP preview renders inside the Tabby tab and supports keyboard, mouse, Unicode input, view only,
+FreeRDP renders inside the Tabby tab and supports keyboard, mouse, Unicode input, view only,
 screenshots, scaling, reconnect and the display-control channel. It uses the plugin's existing direct, SSH and RD
-Gateway transports, credential store and certificate/NLA prompts. Each attempt has its own native process.
+Gateway transports, credential store and certificate/NLA prompts. Each FreeRDP attempt has its own Electron utility process.
 
-The preview shares clipboard **text** the ways the clipboard setting allows (both ways, only from the remote desktop, or
-off, which leaves the clipboard channel out); in view only, no clipboard goes either way. It does **not** yet implement pictures and files on the clipboard, audio
+FreeRDP shares clipboard **text and files/folders** the ways the clipboard setting allows (both ways, only from the remote desktop, or
+off, which leaves the clipboard channel out); in view only, no clipboard goes either way. It does **not** yet implement pictures on the clipboard, audio
 playback/capture, shared folders, or Hyper-V VMConnect.
-The supplied FreeRDP 3.33.0 build uses native bitmap decoding (and the graphics pipeline for GNOME), with optional H.264 codecs
-disabled. The macOS/Linux builds omit Kerberos/GSSAPI and use NTLM. Windows can use native SSPI; Kerberos and domain-policy behavior are not qualified. Hyper-V consoles that
-inherit the global client setting continue to use IronRDP. A synced global FreeRDP default also uses IronRDP on a computer without its native helper; an explicit desktop/profile choice still reports the missing build. It has not been benchmarked against IronRDP on Windows Server. Native decoding alone does not establish
-that this implementation will be faster: the cost of transferring pixels to the canvas also matters.
+The supplied FreeRDP 3.33.1 build uses bitmap decoding (and the graphics pipeline for GNOME), with optional H.264
+codecs disabled. Authentication uses NTLM on every platform. Windows SSPI and Kerberos are not provided; the earlier native Windows client could use SSPI. Domain-policy behavior remains unqualified. Hyper-V consoles that inherit the global client setting continue to use IronRDP.
 
-## Build
+This is FreeRDP's core compiled to WebAssembly with Tabby's adapter and canvas. It is not FreeRDP's separate SDL/browser
+client. The bracketed PAM username handling, TLS-only consent, caching options and opaque desktop pixels are shared
+with the earlier native integration. Synthetic tests cannot qualify a particular PAM appliance, MFA flow or policy.
 
-Build on each intended OS and CPU architecture. Requires Node 18+, CMake, a C compiler and an OpenSSL 3 development
+## Native comparison build
+
+Native builds are generated on demand for development and benchmarks, and retained as CI artifacts. They are not committed or published as dependencies. Build on each intended OS and CPU architecture. Requires Node 18+, CMake, a C compiler and an OpenSSL 3 development
 installation with its license text. macOS also needs Xcode command-line tools; Linux needs `patchelf`; Windows
 needs Visual Studio C++ build tools (including `dumpbin`), Perl and Ninja for the target architecture.
 
@@ -64,45 +66,75 @@ system ABI; Windows requires the applicable Microsoft C runtime. Builds for othe
 Windows helpers require the matching Microsoft Visual C++ Redistributable, as described in the
 [requirements](../docs/compatibility.md#requirements). The plugin does not install it automatically.
 
-The plugin's npm package contains no native code. Each platform's helper is published in a package of its own,
-`@tabby-rdp/freerdp-<platform>-<arch>`, which the plugin names as an optional dependency. When Tabby installs or updates
-the plugin, npm installs the package for that computer alongside it and skips the others. No native executable is
-downloaded or compiled when Tabby loads the plugin. A helper built in a checkout's `native/bin` is used ahead of an
-installed package. An explicit FreeRDP choice without the matching
-helper produces an installation message before asking for credentials. A global default can be shared across computers:
-when only that default requests an unavailable helper, the connection uses IronRDP and records the fallback in its log.
+The native comparison build records its sources, binary hashes and licenses in `native/bin/<platform>/BUILD.json`.
+These developer artifacts are not published as part of package format 6. The plugin includes portable FreeRDP
+WebAssembly and the existing platform-specific Go network helpers used by IronRDP.
 
-`native/bin` is generated and ignored by Git. For a public release, qualify each intended platform/architecture,
-explicitly include the reviewed native outputs in the release commit (`git add -f native/bin/<platform>-<arch>`), and
-list the platform in `package.json`'s `tabbyRdp.freerdpPlatforms`. `npm run pack:release` then makes its package from
-that folder, and the package checks require the published files to match the release commit. A build on one computer
-supplies only that computer's platform/architecture. Publishing a new platform's package for the first time is a
-manual step; see [CONTRIBUTING.md](../CONTRIBUTING.md#releasing).
+## WebAssembly build
 
-Helper packages exist for macOS ARM64, Windows ARM64/x64 and Linux ARM64/x64. FreeRDP helpers for Intel Macs
-are not yet available; IronRDP remains available there.
+The selectable WebAssembly client compiles the same windowless Tabby adapter and upstream FreeRDP/WinPR to WASM.
+It does not embed the upstream SDL browser interface. Emscripten pthreads run in an isolated Electron utility process;
+a loopback WebSocket bridge carries the existing authenticated direct, SSH or RD Gateway transport. No remote proxy
+service is required. It shares native FreeRDP's certificate/NLA policy, canvas, input and clipboard controls.
+IronRDP remains the default. See the comparison methodology in [the performance fixture](../test/fixtures/performance/README.md).
+
+Requires Git, Node, CMake, Ninja and Emscripten, with the toolchain commit/version pinned in `wasm-source.json`:
+
+```sh
+git clone https://github.com/emscripten-core/emsdk.git .qa/emsdk
+git -C .qa/emsdk checkout 35ff8a6d150541276abbc6bae512ca90bcfbe220
+.qa/emsdk/emsdk install 6.0.12
+.qa/emsdk/emsdk activate 6.0.12
+npm run build:freerdp:wasm
+npm run build
+```
+
+Alternatively set `EMSDK` to an installation of that version. The script verifies the FreeRDP, LibreSSL and zlib
+source archives, builds static WASM libraries, and records source/artifact hashes in `wasm/freerdp/BUILD.json`.
+The portable output and licenses are committed and included in the plugin package. CI rebuilds them with normalized compiler paths and timestamps, compares every file byte for byte, and requires this comparison and protocol tests before release staging. It never downloads a compiler
+or builds at connection time. Native comparison binaries are not published with the plugin.
 
 ## Licensing
 
 The Tabby helper is MIT licensed. FreeRDP and WinPR are Apache-2.0; OpenSSL 3 is Apache-2.0. Their full licenses and
 FreeRDP's bundled attribution notice accompany the generated binaries. WinPR's built-in Unicode converter also
-carries its own full `Unicode-NOTICE`. Keep all these notices in each platform's package, whose `package.json` declares
-`MIT AND Apache-2.0`.
+carries its own full `Unicode-NOTICE`. Keep these notices with native comparison artifacts.
+The WebAssembly bundle additionally includes LibreSSL, zlib and Emscripten license/attribution files in
+`wasm/freerdp/licenses`. Keep those files with the WASM and JavaScript artifacts.
 The source/build identity is recorded in `BUILD.json`. New codecs, channels or native dependencies require reviewing
 their own licensing and updating the packaging inventory; changing FreeRDP's top-level license file is insufficient.
 
 ## Verification
 
+FreeRDP 3.33.1 native protocol/security and clipboard callback checks pass on macOS ARM64, Linux ARM64/x64 and
+Windows ARM64/x64. The WASM protocol/security checks pass on macOS ARM64 and Linux x64. The packaged WASM
+client also passes TLS policy, process restart/cleanup and canvas checks inside Tabby on macOS ARM64, Linux x64 and
+Windows x64. These hosted checks use synthetic peers and need no private RDP server.
+
+On macOS ARM64, both clients pass live Windows Server 2022 clipboard tests: nested-folder and empty-file downloads,
+binary contents, folder uploads with a 2 MiB file verified by SHA-256, drag/drop, Finder folder paste with Command-V,
+and Save to Downloads with preserved paths. Windows Server 2025 x64 also passes all 38 packed WASM lifecycle checks against Windows Server 2022,
+including text, file/folder upload and download, Windows folder clipboard paste with Ctrl-V, resize, reconnect and cleanup.
+Live Linux file-transfer qualification remains pending. A [Windows native/WASM comparison](../test/fixtures/performance/README.md#windows-comparison-2026-11-16)
+measures similar frame rates and input latency, with higher WASM CPU and memory use. The older qualification below does not qualify the new builds.
+
 ```sh
 npm run typecheck
 npm run test:unit
+TRD_TEST_FREERDP_RUNTIME=wasm node --import tsx --test test/unit/freerdp.ts
 npm test -- --hidden visual-smoke
 # With TRD_TEST_DIRECT, TRD_TEST_DIRECT_USER and TRD_TEST_DIRECT_PASSWORD for a dedicated server:
 npm test -- --hidden freerdp
-# Verify the installed packages as well (the plugin's, with this computer's helper package), including executable
-# permissions and relocated native libraries:
+# Verify the installed plugin package as well:
 npm test -- --packed --hidden freerdp
 ```
+
+The [TLS-only PAM regression peer](../test/fixtures/pam/README.md) passes all 64 native/WASM cases (224 assertions)
+through Tabby's canvas on Windows Server 2025 x64 against a Windows Server 2022 peer. It covers bracketed usernames,
+TLS-only consent, independently toggled glyph/bitmap caching and relaxed checks, announced/unannounced drawing
+orders, opaque/zero/partial/omitted bitmap alpha and genuine black pixels. Native and WASM results match in every
+case. Linux and Windows, x64 and ARM64, also pass 18 core-level peer cases each in CI. The peer does not generate glyph-cache
+text orders or emulate Senhasegura MFA, appliance policies or session handoff; those still need appliance testing.
 
 The FreeRDP unit tests run framing, bounds, keyboard and authenticated-relay tests on every platform. When the
 helper exists, they additionally run real native TLS/NLA certificate-rejection tests, verifying that no username

@@ -24,3 +24,24 @@ else()
     target_compile_options(tabby-freerdp PRIVATE -Wall -Wextra -Werror=implicit-function-declaration)
 endif()
 install(TARGETS tabby-freerdp RUNTIME DESTINATION .)
+
+if(EMSCRIPTEN)
+    target_link_options(tabby-freerdp PRIVATE
+        "-sMODULARIZE=1" "-sEXPORT_NAME=createFreeRDP" "-sENVIRONMENT=node"
+        "-sPROXY_TO_PTHREAD" "-sPTHREAD_POOL_SIZE=16" "-sINVOKE_RUN=0" "-sEXIT_RUNTIME=1"
+        "-sSTACK_SIZE=4194304" "-sINITIAL_MEMORY=134217728" "-sMAXIMUM_MEMORY=1073741824" "-sALLOW_MEMORY_GROWTH=1"
+        "-sWEBSOCKET_SUBPROTOCOL=binary" "-sFORCE_FILESYSTEM=1"
+        "-sEXPORTED_RUNTIME_METHODS=callMain,HEAPU8" "-sEXPORTED_FUNCTIONS=_main,_tabby_input_buffer,_tabby_output_buffer")
+endif()
+
+if(TRD_BUILD_TESTS AND NOT EMSCRIPTEN)
+    enable_testing()
+    add_executable(tabby-clipboard-test clipboard-test.c)
+    get_target_property(TRD_INCLUDES tabby-freerdp INCLUDE_DIRECTORIES)
+    if(TRD_INCLUDES)
+        target_include_directories(tabby-clipboard-test PRIVATE ${TRD_INCLUDES})
+    endif()
+    target_compile_features(tabby-clipboard-test PRIVATE c_std_11)
+    target_link_libraries(tabby-clipboard-test PRIVATE ${TRD_LIBRARIES} OpenSSL::SSL OpenSSL::Crypto)
+    add_test(NAME clipboard COMMAND tabby-clipboard-test)
+endif()
