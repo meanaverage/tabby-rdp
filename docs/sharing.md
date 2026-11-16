@@ -38,7 +38,7 @@ Remote Desktop › Desktops › Open desktops) still go to your clipboard: they 
 Copy files or folders in Finder and press ⌘V on the desktop, or drop them onto it, or use **Remote Desktop › Send files…** in the pane's menu; they paste in Files or Explorer. A copied folder's links go along only when they lead somewhere inside it. Files copied on the remote offer **Save to Downloads**, which saves them there (never into a folder that was there before), marks them as downloaded, as a browser does (so macOS can ask before an app among them first opens), and takes invisible characters that could disguise a name out of it. They go the ways the [clipboard](#clipboard) does.
 
 FreeRDP uses these same send/save controls. Each upload file must be smaller than 4 GiB, each download file at most
-2 GiB, and an offer may contain at most 10,000 entries. Relative names must fit 259 UTF-16 characters. Copying something
+2 GiB, and an offer may contain at most 10,000 entries. Empty folders are omitted. Relative names must fit 259 UTF-16 characters. Copying something
 else on the remote clipboard cancels an unfinished download; keep the copied files selected until it finishes.
 
 ## Shared folders

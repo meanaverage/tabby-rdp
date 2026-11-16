@@ -275,3 +275,21 @@ remote machine. Actual client/guest identity and installed plugin content are ve
 See [setup, baseline review and acceptance](../docs/visual-qa.md#native-client-and-desktop-matrix). A Windows desktop reached
 from macOS is **macOS-client / Windows-server coverage**, not Windows-client coverage. Unsupported/unconfigured combinations
 remain visible and cannot count as a pass. Architecture is recorded from the Tabby process, independently of the test driver.
+
+### FreeRDP WebAssembly and clipboard files
+
+`TRD_TEST_FREERDP_RUNTIME=wasm npm test -- --hidden freerdp` runs the same real Tabby lifecycle checks with the
+selectable WASM client. Omit that variable for native FreeRDP. Both use the dedicated direct-server credentials
+above; add `--packed` to qualify the installed test package.
+
+After `npm run build`, `node test/freerdp-files-live.cjs` checks file transfers against a dedicated Windows desktop.
+Set `TRD_TEST_DIRECT` to its hostname, optional `TRD_TEST_DIRECT_PORT`, `TRD_TEST_DIRECT_USER`,
+`TRD_TEST_DIRECT_PASSWORD`, optional `TRD_TEST_DIRECT_DOMAIN`, and `TRD_TEST_CERT_SHA256` to its expected colon-separated
+certificate fingerprint. Set `TRD_TEST_FREERDP_RUNTIME=wasm` to repeat with WebAssembly. It requires NLA, opens
+PowerShell and Explorer, replaces that account's clipboard, and creates/removes a uniquely named temporary folder.
+It checks nested-folder and empty-file downloads, binary contents, and a folder upload containing a 2 MiB binary
+verified by SHA-256 plus an empty file. It exercises the protocol/provider directly; the `freerdp` suite also checks Tabby's send/save notifications, disk
+downloads, drag/drop and macOS Finder folder paste, alongside worker lifecycle, rendering, input, resize and text
+clipboard. `npm test -- --packed --hidden freerdp-runtime freerdp-rendering` runs portable/native TLS policy and
+process cleanup plus canvas checks inside the installed Tabby, without a remote server. Hosted Windows, Linux and
+macOS jobs run these checks; they do not replace live-server file-transfer qualification on each client OS.

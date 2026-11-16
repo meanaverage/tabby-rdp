@@ -75,9 +75,10 @@ export function freeRDPFileProvider (
         private localGeneration = 0
         private remoteGeneration = 0
         private requests = new Map<number, number>()
-        private downloads = new Set<number>()
+        private downloads = new Map<number, number>()
 
         downloadFile (file: FileInfo, index: number): any {
+            if (this.availableFiles[index] !== file) { throw new Error('The remote clipboard changed before this file could be saved') }
             const handle = super.downloadFile(file, index)
             handle.completion.finally(() => this.downloads.delete(handle.transferId)).catch(() => undefined)
             return handle
@@ -100,7 +101,8 @@ export function freeRDPFileProvider (
         sendRequestFileContents (stream: number, index: number, flags: number, position: number, size: number): void {
             if (!ways().fromRemote) { throw new Error('Clipboard files cannot come from this desktop') }
             if (!Number.isSafeInteger(position) || position < 0 || size > MAX_RANGE) { throw new Error('Invalid file contents request') }
-            this.downloads.add(stream)
+            if (flags === 1 && !this.downloads.has(stream)) { this.downloads.set(stream, this.remoteGeneration) }
+            if (this.downloads.get(stream) !== this.remoteGeneration) { throw new Error('The remote clipboard changed during the download') }
             send('q', numbers(this.remoteGeneration, stream, index, flags, position % 0x100000000, Math.floor(position / 0x100000000), size))
         }
 
@@ -118,7 +120,7 @@ export function freeRDPFileProvider (
                 for (const [stream, generation] of this.requests) { send('s', numbers(generation, stream, 1)) }
                 this.requests.clear()
                 // Without clipboard locking, a new offer invalidates unfinished downloads.
-                for (const stream of this.downloads) {
+                for (const stream of this.downloads.keys()) {
                     this.handleFileContentsResponse({ streamId: stream, isError: true, data: new Uint8Array() })
                 }
                 this.downloads.clear()

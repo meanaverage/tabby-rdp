@@ -96,12 +96,17 @@ test('remote file downloads complete through SIZE and RANGE; clipboard replaceme
     assert.equal(sent.at(-1)!.data.readUInt32BE(12), 2)
     provider.receive('s', Buffer.concat([numbers(stream, 0), Buffer.from('hello')]))
     assert.equal(await (await download.completion).text(), 'hello')
-    const cancelled = provider.downloadFile(provider.availableFiles[0], 0)
+    const oldFile = provider.availableFiles[0]
+    const cancelled = provider.downloadFile(oldFile, 0)
     const rejected = assert.rejects(cancelled.completion, /failed to provide/)
     provider.receive('l', numbers(2))
     await rejected
     provider.receive('f', Buffer.concat([numbers(1), encodeFileList(entries)]))
     assert.deepEqual(provider.availableFiles, [])
+    provider.receive('f', Buffer.concat([numbers(2), encodeFileList([{ name: 'new.txt', size: 3 }])]))
+    assert.throws(() => provider.downloadFile(oldFile, 0), /clipboard changed/)
+    // An asynchronous disk write from the old transfer must not restart it against the new clipboard.
+    assert.throws(() => provider.sendRequestFileContents(cancelled.transferId, 0, 2, 0, 3), /clipboard changed/)
 })
 
 test('permissions and stale upload generations prevent file data from being returned', async t => {

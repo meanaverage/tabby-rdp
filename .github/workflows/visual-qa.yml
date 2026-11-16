@@ -50,13 +50,13 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y xvfb openbox libgtk-3-0 libnss3 libasound2t64 libgbm1 libsecret-1-0 dbus-x11
       - name: Linux native smoke
-        timeout-minutes: 3
+        timeout-minutes: 5
         if: runner.os == 'Linux'
-        run: dbus-run-session -- xvfb-run -a -s '-screen 0 1280x900x24' sh -c 'openbox >/dev/null 2>&1 & node --import tsx test/run.ts --packed --hidden smoke-host visual-smoke'
+        run: dbus-run-session -- xvfb-run -a -s '-screen 0 1280x900x24' sh -c 'openbox >/dev/null 2>&1 & node --import tsx test/run.ts --packed --hidden smoke-host visual-smoke freerdp-runtime freerdp-rendering'
       - name: Windows and macOS native smoke
-        timeout-minutes: 3
+        timeout-minutes: 5
         if: runner.os != 'Linux'
-        run: node --import tsx test/run.ts --packed --hidden smoke-host visual-smoke
+        run: node --import tsx test/run.ts --packed --hidden smoke-host visual-smoke freerdp-runtime freerdp-rendering
       - name: Retain only this job's public GUI evidence
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

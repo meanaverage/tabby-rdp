@@ -1,5 +1,8 @@
 // Real Tabby lifecycle against a dedicated RDP test server. Also accepts the local FreeRDP sample server.
 // No provisioning, VM startup, or performance claim. Credentials use the runner's isolated in-memory store.
+import { spawn } from 'node:child_process'
+import * as fs from 'node:fs'
+import * as path from 'node:path'
 import { suite, type CanvasInfo } from '../lib/harness.js'
 import { parseAddress } from '../../src/desktopForm.js'
 
@@ -10,6 +13,8 @@ await suite('freerdp', async t => {
         t.skip('FreeRDP desktop lifecycle', 'set TRD_TEST_DIRECT, TRD_TEST_DIRECT_USER and TRD_TEST_DIRECT_PASSWORD for a dedicated test server')
         return
     }
+    // Clipboard ownership and Automatic header behavior require a genuinely focused window.
+    await t.ev(`const w = require('@electron/remote').getCurrentWindow(); w.show(); w.focus()`); await t.sleep(500)
     await t.settings({ client: 'ironrdp', resize: 'off', sharpness: 'standard', h264: false, microphone: false, sound: false })
     await t.ev(`
         const before = new Set(H.panes())
@@ -67,6 +72,8 @@ await suite('freerdp', async t => {
     await t.ev(`
         H.nativeProcess = H.session(H.nativePane).ui.native
         H.nativeChild = H.nativeProcess.child
+        H.nativeClosed = false
+        H.nativeChild.once('close', () => { H.nativeClosed = true })
         H.nativeKeys = 0
         const send = H.nativeProcess.send.bind(H.nativeProcess)
         H.nativeProcess.send = (type, data) => { if (type === 'K') H.nativeKeys++; send(type, data) }
@@ -125,7 +132,7 @@ await suite('freerdp', async t => {
     t.check('view only blocks native keyboard input', await t.ev('return H.nativeKeys === 0'))
     await t.ev('H.inZone(() => RD.desktop.setViewOnly(H.nativePane, false))')
     await t.ev('H.inZone(() => RD.desktop.disconnect(H.nativePane))')
-    t.check('disconnect reaps the native process', !!await t.waitFor(`return H.nativeChild.exitCode !== null`, 5))
+    t.check('disconnect reaps the native process', !!await t.waitFor(`return H.nativeClosed`, 5))
     t.check('disconnect removes the native UI', await t.ev(`return !H.nativePane.element.nativeElement.querySelector('.trd-freerdp')`))
     await t.ev('H.nativePane.profile.options.glyphCache = true; H.inZone(() => RD.desktop.showDesktop(H.nativePane))')
     t.check('FreeRDP reconnects with glyph caching and strict drawing-order checks', await settle())
@@ -154,14 +161,21 @@ await suite('freerdp', async t => {
         t.check('its clipboard is set up for text both ways', !!await t.waitFor(`return H.session(H.nativePane).log.some(line => line.startsWith('clipboard: both ways'))`, 5))
         await t.sleep(3000)
         await t.clickDesktop('H.nativePane')
+        await t.ev(`const w = require('@electron/remote').getCurrentWindow(); w.show(); w.focus(); H.canvasElement(H.nativePane).focus()`)
         await t.escape()
-        await t.tap('Meta')
-        await t.sleep(3000)
-        await t.type('notepad')
-        await t.sleep(2000)
+        await t.clipboard('notepad'); await t.sleep(500)
+        // Run opens Notepad directly; clicking the centre of a restored desktop could focus Explorer instead.
+        await t.ev(`
+            const n = H.session(H.nativePane).ui.native
+            const send = (scan, up = false) => { const b = Buffer.alloc(12); b.writeUInt32BE(up ? 0x8000 : 0); b.writeUInt32BE(scan, 4); n.send('K', b) }
+            send(0x15b); send(0x13); send(0x13, true); send(0x15b, true)
+        `)
+        await t.sleep(1200)
+        await t.press('a', ['Control'])
+        await t.press('v', ['Control']); await t.sleep(500)
         await t.enter()
-        await t.sleep(4000)
-        await t.clickDesktop('H.nativePane')  // Notepad opens over the middle of the screen: give it the keyboard
+        await t.sleep(3000)
+        await t.ev(`const w = require('@electron/remote').getCurrentWindow(); w.show(); w.focus(); H.canvasElement(H.nativePane).focus()`)
         await t.press('n', ['Control'])
         await t.sleep(1500)
         const copyBack = async (expected: string) => {
@@ -176,6 +190,7 @@ await suite('freerdp', async t => {
             }
             return got
         }
+        await t.dump('H.nativePane', 'freerdp-notepad')
         // Windows → here: typed in Notepad, copied there.
         const marker = `fclip${Date.now() % 100000}`
         await t.type(marker)
@@ -210,6 +225,53 @@ await suite('freerdp', async t => {
         await t.press('a', ['Control'])
         await t.key('Delete', 'Delete', 46)
         await t.press('w', ['Control'])
+        // Exercise the shared FileTransfer UI/storage layer, in addition to the standalone protocol fixture.
+        const here = await t.tempDir('trd-freerdp-files-')
+        const folder = 'tabby-ui-files-' + Date.now()
+        const remote = `$p=Join-Path $env:TEMP '${folder}';`
+        const command = async (script: string) => {
+            await t.clipboard('powershell -NoProfile'); await t.sleep(500)
+            await t.ev(`
+                const n = H.session(H.nativePane).ui.native
+                const send = (scan, up = false) => { const b = Buffer.alloc(12); b.writeUInt32BE(up ? 0x8000 : 0); b.writeUInt32BE(scan, 4); n.send('K', b) }
+                send(0x15b); send(0x13); send(0x13, true); send(0x15b, true)
+            `)
+            await t.sleep(600); await t.press('v', ['Control']); await t.sleep(400); await t.enter(); await t.sleep(2000)
+            await t.clipboard(script + ';exit'); await t.sleep(500)
+            await t.press('v', ['Control']); await t.sleep(400); await t.enter(); await t.sleep(2000)
+        }
+        await command(remote + `New-Item -ItemType Directory -Force -Path "$p\\nested"|Out-Null;[IO.File]::WriteAllText("$p\\nested\\remote.txt",'remote file marker');Set-Clipboard -Path $p`)
+        const offered = await t.waitFor(`return H.session(H.nativePane).files.offered.some(f => f.name === 'remote.txt')`, 10)
+        t.check('remote file clipboard offers Save to Downloads', offered && /copied on the remote/.test(await t.ev<string>('return H.toast(H.nativePane)')))
+        if (offered) {
+            const saved = await t.ev<string[]>(`return await H.session(H.nativePane).files.saveAll(${JSON.stringify(here)})`)
+            const file = saved.find(p => p.endsWith('remote.txt'))
+            t.check('Save to Downloads keeps nested paths and exact contents', !!file && (await t.readFile(file)) === 'remote file marker', saved.map(p => path.basename(p)))
+        }
+        await command(remote + 'Start-Process explorer.exe $p')
+        await t.ev(`
+            const dt = new DataTransfer(); dt.items.add(new File(['dropped file marker'], 'dropped.txt'))
+            H.overlay(H.nativePane).dispatchEvent(new DragEvent('drop', { dataTransfer: dt, bubbles: true, cancelable: true }))
+        `)
+        t.check('dropped file offers a paste notification', !!await t.waitFor(`return /ready: paste/.test(H.toast(H.nativePane))`, 5))
+        await t.press('v', ['Control'])
+        t.check('dropped file pastes through the FreeRDP provider', !!await t.waitFor(`return /Copied 1 file/.test(H.toast(H.nativePane))`, 10), await t.ev('return H.toast(H.nativePane)'))
+        await command(remote + `Set-Clipboard -Value ('DROP:'+ [IO.File]::ReadAllText("$p\\dropped.txt"))`)
+        t.check('dropped file has exact contents on Windows', (await t.clipboard()) === 'DROP:dropped file marker')
+        if (t.platform === 'darwin' && process.platform === 'darwin') {
+            const local = path.join(here, 'copied-folder')
+            fs.mkdirSync(local); fs.writeFileSync(path.join(local, 'inner.txt'), 'copied folder marker')
+            await command(remote + 'Start-Process explorer.exe $p')
+            const writer = spawn('osascript', ['-l', 'JavaScript', '-e', `ObjC.import('AppKit'); var pb = $.NSPasteboard.generalPasteboard; pb.clearContents; pb.writeObjects($([$.NSURL.fileURLWithPath(${JSON.stringify(local)})])); delay(60); ''`], { stdio: 'ignore' })
+            t.onCleanup(() => writer.kill())
+            await t.sleep(700)
+            await t.press('v', ['Meta'])
+            t.check('Finder folder clipboard pastes with Command-V', !!await t.waitFor(`return /Copied 1 file/.test(H.toast(H.nativePane))`, 10), await t.ev('return H.toast(H.nativePane)'))
+            writer.kill()
+            await command(remote + `Set-Clipboard -Value ('FOLDER:'+ [IO.File]::ReadAllText("$p\\copied-folder\\inner.txt"))`)
+            t.check('Finder folder arrives with its file intact', (await t.clipboard()) === 'FOLDER:copied folder marker')
+        }
+        await command(remote + "Remove-Item -LiteralPath $p -Recurse -Force;Set-Clipboard -Value ''")
         await t.ev(`H.nativePane.profile.options.clipboard = 'off'`)
     }
     await t.ev(`
