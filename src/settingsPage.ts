@@ -455,7 +455,7 @@ export class RemoteDesktopSettingsComponent implements OnInit, OnDestroy {
                     <tr><td>${k('⌃⌘')} + key</td><td>The Windows key with it: ${k('⌃⌘R')} for Win+R, ${k('⌃⌘E')} for Explorer.</td></tr>` : ''}
                     <tr><td>Right-click › <b>Send keys</b></td><td>Ctrl+Alt+Del, Win+L, Task Manager and others this computer keeps for itself.</td></tr>
                     <tr><td>Drop files on the desktop</td><td>Then paste them in Files or Explorer. Files copied there offer <b>Save to Downloads</b>.</td></tr>
-                    <tr><td>Right-click › <b>View only</b></td><td>Watch without touching: no keys or clicks go to the desktop.</td></tr>
+                    <tr><td>Right-click › <b>View only</b></td><td>Watch without touching: no keys or clicks go to the desktop, and no clipboard either way.</td></tr>
                     <tr><td>Right-click › <b>Save a screenshot</b></td><td>The full-resolution screen, to Downloads and the clipboard.</td></tr>
                 </tbody></table>
             </section>` + `

@@ -2,7 +2,7 @@
 
 # Clipboard, files and desktop controls
 
-The default IronRDP client supports the sharing features below. Both experimental FreeRDP clients support clipboard
+The default IronRDP client supports the sharing features below. The experimental FreeRDP WebAssembly client supports clipboard
 text and file/folder transfers, in the directions the clipboard setting allows (none in view only). Pictures on the
 clipboard, shared drives and audio still need IronRDP. See [client capabilities](../native/README.md).
 
@@ -105,7 +105,7 @@ In the desktop's menus: Ctrl+Alt+Del, Win+R, Win+L, Ctrl+Shift+Esc, Print Screen
 
 ## View only
 
-In the desktop's menus: watch a desktop without touching it. No keys or clicks go to it while a "View only" label shows; the picture, clipboard and sound carry on. Kept across reconnects, until the desktop is closed.
+In the desktop's menus: watch a desktop without touching it. While the **View only** label shows, neither client sends keys, clicks or clipboard contents in either direction. What was offered from this computer is withdrawn when it is still the latest copy known on the remote; a server that already copied those contents can retain them. Turn view only on before copying anything the server should not receive. Copies received during view only are discarded. When it ends, clipboard sharing follows the configured directions again. The picture and supported sound continue. View only persists across reconnects until the desktop closes.
 
 ## Screenshots
 

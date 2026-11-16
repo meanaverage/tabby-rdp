@@ -12,8 +12,10 @@
 /** Sliding window size (MS-RDPEGFX 3.1.9.1.1). */
 export const HISTORY_SIZE = 2_500_000
 
-/** The most one segment decompresses to (a resource limit, as IronRDP's). */
-const MAX_DECOMPRESSED_PER_SEGMENT = 64 * 1024 * 1024
+/** MS-RDPEGFX 3.1.9.1.2 limits each segment to 65,535 uncompressed bytes. */
+const MAX_DECOMPRESSED_PER_SEGMENT = 65535
+/** Diagnostic output only; reject before allocating a large declared message. */
+const MAX_DECOMPRESSED_MESSAGE = 64 * 1024 * 1024
 
 const SEGMENTED_SINGLE = 0xe0
 const SEGMENTED_MULTIPART = 0xe1
@@ -163,6 +165,7 @@ export class ZgfxDecompressor {
             const view = new DataView(input.buffer, input.byteOffset, input.byteLength)
             const count = view.getUint16(1, true)
             const uncompressedSize = view.getUint32(3, true)
+            if (uncompressedSize > MAX_DECOMPRESSED_MESSAGE) { throw new ZgfxError('message decompresses beyond the limit') }
             let offset = 7
             let total = 0
             for (let i = 0; i < count; i++) {
@@ -177,6 +180,7 @@ export class ZgfxDecompressor {
                 const part = this.segment(input.subarray(offset, offset + size))
                 offset += size
                 total += part.length
+                if (total > uncompressedSize) { throw new ZgfxError('multipart output exceeds its declared size') }
                 out.push(part)
             }
             if (total !== uncompressedSize) {
@@ -202,6 +206,7 @@ export class ZgfxDecompressor {
             return new Uint8Array(0)
         }
         if (!(header & PACKET_COMPRESSED)) {
+            if (data.length > MAX_DECOMPRESSED_PER_SEGMENT) { throw new ZgfxError('segment decompresses beyond the limit') }
             this.write(data)
             return data
         }
@@ -217,7 +222,11 @@ export class ZgfxDecompressor {
             throw new ZgfxError('invalid trailing bit count')
         }
         const bits = new BitReader(encoded, bitCount)
-        const out: number[] = []
+        const out = new Uint8Array(MAX_DECOMPRESSED_PER_SEGMENT)
+        let produced = 0
+        const reserve = (length: number) => {
+            if (produced + length > out.length) { throw new ZgfxError('segment decompresses beyond the limit') }
+        }
         while (bits.remaining > 0) {
             let token: Token | undefined
             for (let len = 1; len <= MAX_PREFIX; len++) {
@@ -240,11 +249,13 @@ export class ZgfxDecompressor {
             }
             if (token.kind === 'null') {
                 const value = bits.bits(8)
+                reserve(1)
                 this.writeByte(value)
-                out.push(value)
+                out[produced++] = value
             } else if (token.kind === 'literal') {
+                reserve(1)
                 this.writeByte(token.value)
-                out.push(token.value)
+                out[produced++] = token.value
             } else {
                 const distance = token.value + bits.bits(token.bits)
                 if (distance === 0) {
@@ -252,10 +263,10 @@ export class ZgfxDecompressor {
                     const length = bits.bits(15)
                     bits.alignToByte()
                     const raw = bits.bytes(length)
+                    reserve(length)
                     this.write(raw)
-                    for (const b of raw) {
-                        out.push(b)
-                    }
+                    out.set(raw, produced)
+                    produced += length
                 } else {
                     if (distance > HISTORY_SIZE) {
                         throw new ZgfxError(`match distance ${distance} beyond the history`)
@@ -272,17 +283,14 @@ export class ZgfxDecompressor {
                         }
                         length = (1 << valueBits) + bits.bits(valueBits)
                     }
-                    if (out.length + length > MAX_DECOMPRESSED_PER_SEGMENT) {
-                        throw new ZgfxError('segment decompresses beyond the limit')
-                    }
-                    this.copyMatch(distance, length, out)
+                    reserve(length)
+                    this.copyMatch(distance, length, out, produced)
+                    produced += length
                 }
             }
-            if (out.length > MAX_DECOMPRESSED_PER_SEGMENT) {
-                throw new ZgfxError('segment decompresses beyond the limit')
-            }
+
         }
-        return Uint8Array.from(out)
+        return out.slice(0, produced)
     }
 
     private writeByte (value: number): void {
@@ -300,7 +308,7 @@ export class ZgfxDecompressor {
     }
 
     /** Copies `length` bytes from `distance` back in the history (overlapping as a match may), to the output and history. */
-    private copyMatch (distance: number, length: number, out: number[]): void {
+    private copyMatch (distance: number, length: number, out: Uint8Array, offset: number): void {
         if (distance > this.filled) {
             throw new ZgfxError(`match distance ${distance} beyond what the history holds (${this.filled})`)
         }
@@ -309,7 +317,7 @@ export class ZgfxDecompressor {
             const b = this.history[from]
             from = (from + 1) % HISTORY_SIZE
             this.writeByte(b)
-            out.push(b)
+            out[offset + i] = b
         }
     }
 }

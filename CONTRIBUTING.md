@@ -122,7 +122,7 @@ minor version (see the milestones).
 shrinkwrap, so `package.json` alone decides what a user's npm installs. Packing refuses a runtime dependency that isn't
 an exact version, isn't what the lock installs, or has dependencies of its own (whose ranges would float), and anything
 else the lock would install at run time. The committed `package-lock.json` locks development and runtime dependencies
-for `npm ci`; npm never publishes it. Build with Node 22.22.3 or newer on the Node 22 line (CI uses Node 22). Angular 22.2.3 is a development dependency used for type checking;
+for `npm ci`; npm never publishes it. Build with Node 22.22.3 or newer on the Node 22 line (CI uses Node 22). Angular 22.2.4 is a development dependency used for type checking;
 Tabby supplies Angular at runtime. The plugin uses TypeScript compilation, not Angular template compilation. TypeScript 7 provides the build CLI;
 `@typescript/typescript6` provides the compiler API used by the IronRDP factory-generation tool. Both are development
 dependencies. Build scripts invoke the TypeScript 7 entry point explicitly because the compatibility package's
@@ -163,7 +163,7 @@ authentication). The workflow publishes `vendor/` as committed in the tagged com
 series and found it identical and the patched crates' tests have passed (`ironrdp.yml`; without that, the package
 isn't staged, nor the GitHub release created). So run `npm run build:ironrdp` on an Apple Silicon Mac and commit its
 output, `vendor/SHA256SUMS` included, before tagging if the patches changed (it needs the network: it checks the base
-commit against IronRDP's history, even with IronRDP and the tools already there). The package is built in a job of its
+commit against IronRDP's history, even with IronRDP and the tools already there). FreeRDP WASM is also independently rebuilt and compared byte for byte, with protocol tests required by `freerdp.yml`. The package is built in a job of its
 own, which reports the package's SHA-256; the job that stages it takes the package by that hash (any job of the run
 can replace an artifact, the IronRDP jobs with their many builds and tests included), and checks it against the tagged
 commit: `vendor/` as the commit's `vendor/SHA256SUMS` lists it, the two runtime metadata files as deterministically

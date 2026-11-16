@@ -433,9 +433,10 @@ test('the events are bounded', () => {
     for (let i = 0; i < MAX_EVENTS + 5; i++) {
         trace.local('plugin', 'Tick', { i })
     }
-    assert.equal(trace.events.length, MAX_EVENTS)
-    assert.equal(trace.dropped, 5)
-    assert.equal(trace.events[0].attrs.i, 5)
+    assert.ok(trace.events.length <= MAX_EVENTS)
+    assert.equal(trace.events.length + trace.dropped, MAX_EVENTS + 5)
+    assert.equal(trace.events[0].attrs.i, trace.dropped)
+    assert.equal(trace.events.at(-1)!.attrs.i, MAX_EVENTS + 4)
 })
 
 test('the H.264 decoder wrapper traces each access unit and its result, passing everything through', async () => {
@@ -445,7 +446,8 @@ test('the H.264 decoder wrapper traces each access unit and its result, passing 
         stats: { frames: 0 },
         decode (frame: any, done: (id: number, pixels: Uint8Array | null, error?: string) => void) { calls.push(['decode', frame.id]); tick(7); done(frame.id, frame.id === 2 ? null : new Uint8Array(16)) },
         endSurfaces (ids: number[]) { calls.push(['end', ids]) },
-        close () { calls.push(['close']) },
+        closed: false,
+        close () { this.closed = true; calls.push(['close']) },
     }
     const wrapped = trace.wrapH264Decoder(decoder)
     const results: any[] = []
@@ -459,4 +461,6 @@ test('the H.264 decoder wrapper traces each access unit and its result, passing 
     assert.equal(trace.events[0].attrs.endedSurfaces, '0')
     assert.equal(trace.events[0].attrs.regionArea, 64)
     assert.equal(trace.events[1].attrs.latencyMs, 7)
+    wrapped.close()
+    assert.equal(decoder.closed, true)
 })

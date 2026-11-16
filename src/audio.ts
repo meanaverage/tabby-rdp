@@ -6,6 +6,8 @@
 export class AudioPlayer {
     private context: AudioContext | null = null
     private gain: GainNode | null = null
+    private channels: GainNode[] = []
+    private levels = [1, 1]
     /** Web Audio time at which the next block starts. */
     private next = 0
     /** Seconds of audio received and scheduled (for tests and troubleshooting). */
@@ -22,7 +24,7 @@ export class AudioPlayer {
             if (message?.type === 'wave') {
                 this.play(message.sampleRate, message.channels, message.data)
             } else if (message?.type === 'volume') {
-                this.volume((Number(message.left) + Number(message.right)) / 2)
+                this.volume(Number(message.left), Number(message.right))
             } else if (message?.type === 'close') {
                 this.next = 0
             }
@@ -39,7 +41,20 @@ export class AudioPlayer {
         this.context ??= new AudioContext({ latencyHint: 'interactive' })
         if (!this.gain) {
             this.gain = this.context.createGain()
-            this.gain.connect(this.context.destination)
+            // Upmix mono before splitting so both speaker gains also apply to mono streams.
+            this.gain.channelCount = 2
+            this.gain.channelCountMode = 'explicit'
+            const split = this.context.createChannelSplitter(2)
+            const merge = this.context.createChannelMerger(2)
+            this.gain.connect(split)
+            this.channels = this.levels.map((level, channel) => {
+                const gain = this.context!.createGain()
+                gain.gain.value = level
+                split.connect(gain, channel)
+                gain.connect(merge, 0, channel)
+                return gain
+            })
+            merge.connect(this.context.destination)
         }
         if (this.context.state === 'suspended') {
             this.context.resume().catch(() => null)
@@ -68,15 +83,19 @@ export class AudioPlayer {
         this.received += buffer.duration
     }
 
-    private volume (level: number): void {
-        if (this.gain && Number.isFinite(level)) {
-            this.gain.gain.value = Math.max(0, Math.min(1, level))
-        }
+    private volume (left: number, right: number): void {
+        if (![left, right].every(Number.isFinite)) { return }
+        // MS-RDPEA 2.2.2.2 specifies logarithmic levels, without a required dB span.
+        // Use a 60 dB range with exact silence at zero and unity at full volume.
+        this.levels = [left, right].map(level => level <= 0 ? 0 : 10 ** (3 * (Math.min(1, level) - 1)))
+        this.channels.forEach((gain, channel) => { gain.gain.value = this.levels[channel] })
     }
 
     close (): void {
         this.context?.close().catch(() => null)
         this.context = null
         this.gain = null
+        this.channels = []
+        this.next = 0
     }
 }

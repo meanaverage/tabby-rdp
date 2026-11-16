@@ -92,7 +92,7 @@ npm run build
 
 Alternatively set `EMSDK` to an installation of that version. The script verifies the FreeRDP, LibreSSL and zlib
 source archives, builds static WASM libraries, and records source/artifact hashes in `wasm/freerdp/BUILD.json`.
-The portable output and licenses are committed and included in the plugin package. It never downloads a compiler
+The portable output and licenses are committed and included in the plugin package. CI rebuilds them with normalized compiler paths and timestamps, compares every file byte for byte, and requires this comparison and protocol tests before release staging. It never downloads a compiler
 or builds at connection time. Native comparison binaries are not published with the plugin.
 
 ## Licensing

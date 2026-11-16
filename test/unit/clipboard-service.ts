@@ -126,6 +126,7 @@ test('a paste of files ending starts the reading of this computer\'s clipboard a
             provider.onUploadFinished = () => calls.push('resume')
         },
         setEnableClipboard () { },
+        async setClipboardPaused () { },
     }
     const rdp = { Backend: {}, RdpFileTransferProvider: class { handleFileContentsRequest () { } on () { } dispose () { } } }
     const session: any = {
@@ -133,6 +134,7 @@ test('a paste of files ending starts the reading of this computer\'s clipboard a
         // Not closed while it connects (run() stops waiting for the component once it is).
         disposed: new Promise<void>(() => { }),
         host: { replaceChildren: () => ready({ detail: { irgUserInteraction: ui } }) },
+        pauseClipboard () { calls.push('pauseClipboard') },
         // The connection stops here, once the clipboard is set up.
         overlay: { addEventListener () { }, removeEventListener () { }, classList: { remove () { } }, getBoundingClientRect () { throw new Error('stopped here') } },
         files: null,
@@ -143,6 +145,8 @@ test('a paste of files ending starts the reading of this computer\'s clipboard a
     const outcome = await svc.run(pane, { key: 'rdp', label: 'Win' }, session.spec, session, rdp, { credentials: { username: 'u', password: 'p' } })
     assert.equal(outcome.error, 'stopped here')
     assert.equal(session.clipboard, 'both')
+    // Paused, or not, for view only once it is set up.
+    assert.deepEqual(calls.splice(0), ['pauseClipboard'])
     session.files.provider.onUploadFinished()
     assert.deepEqual(calls, ['resume'])
     // The setting narrows elsewhere, and a paste of files ends before Tabby says so: the reading stays stopped.
@@ -167,12 +171,14 @@ async function setUpFor (setting: string, own?: string): Promise<{ mode: string,
             provider.onUploadFinished = () => calls.push('resume')
         },
         setEnableClipboard (enable: boolean) { calls.push(`setEnableClipboard(${enable})`) },
+        async setClipboardPaused () { },
     }
     const rdp = { Backend: {}, RdpFileTransferProvider: class { handleFileContentsRequest () { } on () { } dispose () { } } }
     const session: any = {
         ...desktop('off', own),
         disposed: new Promise<void>(() => { }),
         host: { replaceChildren: () => ready({ detail: { irgUserInteraction: ui } }) },
+        pauseClipboard () { },
         overlay: { addEventListener () { }, removeEventListener () { }, classList: { remove () { } }, getBoundingClientRect () { throw new Error('stopped here') } },
         files: null,
     }
@@ -217,6 +223,35 @@ test('a new RDP profile made from the template follows the clipboard of its type
     assert.equal(ownClipboard(withDefaults({ ...profile, group: 'g1' }, groups).options.clipboard), 'fromRemote')
     // No defaults: none of its own, so the setting's.
     assert.equal(ownClipboard(withDefaults(profile).options.clipboard), undefined)
+})
+
+test('view only pauses IronRDP\'s clipboard and ending it resumes it; FreeRDP\'s (no such call) pauses itself', async () => {
+    const { DesktopSession } = require('../../dist/desktop.service.js')
+    const calls: boolean[] = []
+    let failing = false
+    const session = Object.assign(Object.create(DesktopSession.prototype), {
+        log: [] as string[],
+        overlay: new LayerElement(),
+        viewOnly: false,
+        ui: {
+            async setClipboardPaused (paused: boolean) {
+                calls.push(paused)
+                if (failing) {
+                    throw new Error('no session')
+                }
+            },
+        },
+    })
+    session.setViewOnly(true)
+    session.setViewOnly(false)
+    assert.deepEqual(calls, [true, false])
+    failing = true
+    session.setViewOnly(true)
+    await new Promise(resolve => setImmediate(resolve))
+    assert.ok(session.log.includes('clipboard: not paused for view only: no session'), session.log.join('\n'))
+    // A FreeRDP view has no such call: nothing to do here.
+    session.ui = { setReadOnly () { } }
+    assert.doesNotThrow(() => session.setViewOnly(false))
 })
 
 /** An element of the page, as far as a desktop's layer (DesktopSession) uses one. */

@@ -527,6 +527,7 @@ export class PduTrace {
         const trace = this
         const handed = new Map<number, number>()
         const wrapper = Object.create(decoder) as T
+        if (typeof decoder.close === 'function') { wrapper.close = () => { handed.clear(); decoder.close!() } }
         wrapper.decode = (frame: any, done: (id: number, pixels: Uint8Array | null, error?: string) => void) => {
             const t = trace.now()
             handed.set(frame.id, t)
@@ -616,8 +617,10 @@ export class PduTrace {
         }
         this.events.push(event)
         if (this.events.length > MAX_EVENTS) {
-            this.events.splice(0, this.events.length - MAX_EVENTS)
-            this.dropped++
+            // Trim in batches so a long trace does not shift 150,000 entries for every event.
+            const count = Math.max(this.events.length - MAX_EVENTS, Math.ceil(MAX_EVENTS / 10))
+            this.events.splice(0, count)
+            this.dropped += count
         }
         return event
     }

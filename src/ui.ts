@@ -176,7 +176,7 @@ export function desktopActions (desktop: RemoteDesktopService, keyboard: Desktop
         },
         {
             type: 'checkbox',
-            label: 'View only (no keyboard or mouse input)',
+            label: 'View only (no keyboard, mouse or clipboard)',
             checked: viewOnly,
             click: () => desktop.setViewOnly(pane, !viewOnly),
         },
