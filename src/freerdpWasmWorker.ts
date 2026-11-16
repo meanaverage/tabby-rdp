@@ -109,7 +109,9 @@ async function start (config: { module: string, websocket: string }): Promise<vo
             clearInterval(timer)
             if (!stopping) { pumpOutput(true); port.postMessage({ type: 'exit', code }) }
             stopping = true
-            setTimeout(() => process.exit(code), 0)
+            // The renderer normally kills us after receiving the ordered final output and exit
+            // messages. Leave time for Electron's message port to flush; bound a missing owner.
+            setTimeout(() => process.exit(code), 5000)
         },
     })
     inputAddress = moduleInstance._tabby_input_buffer()

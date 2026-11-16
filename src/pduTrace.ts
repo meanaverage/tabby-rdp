@@ -356,9 +356,16 @@ function parseSps (nal: Uint8Array): { width: number, height: number } | null {
             rbsp.push(nal[i])
         }
         let pos = 0
-        const bit = () => { const b = (rbsp[pos >> 3] >> (7 - (pos & 7))) & 1; pos++; return b }
+        const bit = () => {
+            if (pos >= rbsp.length * 8) { throw new Error('Truncated SPS') }
+            const b = (rbsp[pos >> 3] >> (7 - (pos & 7))) & 1; pos++; return b
+        }
         const bits = (n: number) => { let v = 0; for (let i = 0; i < n; i++) v = v * 2 + bit(); return v }
-        const ue = () => { let zeros = 0; while (bit() === 0 && zeros < 32) zeros++; return (1 << zeros) - 1 + bits(zeros) }
+        const ue = () => {
+            let zeros = 0
+            while (bit() === 0) { if (++zeros > 31) { throw new Error('Oversized SPS value') } }
+            return 2 ** zeros - 1 + bits(zeros)
+        }
         const se = () => { const v = ue(); return v & 1 ? (v + 1) / 2 : -v / 2 }
         const profile = bits(8)
         bits(8)  // constraints
@@ -389,6 +396,7 @@ function parseSps (nal: Uint8Array): { width: number, height: number } | null {
         } else if (pocType === 1) {
             bit(); se(); se()
             const n = ue()
+            if (n > 255) { return null }
             for (let i = 0; i < n; i++) se()
         }
         ue()  // max_num_ref_frames

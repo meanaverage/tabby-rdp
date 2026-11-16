@@ -33,11 +33,11 @@ async function source(name, pin, archiveName) {
 const configure = (name, source, args) => {
     const build = join(work, `build-${name}`)
     run(emcmake, ['cmake', '-S', source, '-B', build, '-G', 'Ninja', '-DCMAKE_BUILD_TYPE=Release',
-        `-DCMAKE_INSTALL_PREFIX=${prefix}`, `-DCMAKE_PREFIX_PATH=${prefix}`, `-DCMAKE_FIND_ROOT_PATH=${prefix}`,
+        '-DCMAKE_INSTALL_PREFIX=/tabby-freerdp', `-DCMAKE_PREFIX_PATH=${prefix}`, `-DCMAKE_FIND_ROOT_PATH=${prefix}`,
         `-DCMAKE_C_FLAGS=-pthread -ffile-prefix-map=${root}=.`, `-DCMAKE_CXX_FLAGS=-pthread -ffile-prefix-map=${root}=.`, '-DCMAKE_EXE_LINKER_FLAGS=-pthread',
         '-DBUILD_SHARED_LIBS=OFF', ...args])
     run('cmake', ['--build', build, '--parallel', '8', ...(name === 'freerdp' ? ['--target', 'tabby-freerdp'] : [])])
-    if (name !== 'freerdp') run('cmake', ['--install', build])
+    if (name !== 'freerdp') run('cmake', ['--install', build, '--prefix', prefix])
     return build
 }
 const ssl = await source('libressl', pins.libressl, `libressl-${pins.libressl.version}.tar.gz`)

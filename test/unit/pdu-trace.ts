@@ -464,3 +464,16 @@ test('the H.264 decoder wrapper traces each access unit and its result, passing 
     wrapped.close()
     assert.equal(decoder.closed, true)
 })
+
+test('H264 diagnostics reject truncated SPS and excessive picture-order cycles', () => {
+    const short = inspectH264(Buffer.from([0, 0, 1, 0x67, 66]))
+    assert.equal(short.width, undefined)
+    assert.equal(short.height, undefined)
+    const ue = (value: number) => { const n = (value + 1).toString(2); return '0'.repeat(n.length - 1) + n }
+    // Baseline profile, SPS 0, frame-number 0, POC type 1, then 256 cycle entries (maximum 255).
+    const bits = '01000010' + '00000000' + '00011110' + ue(0) + ue(0) + ue(1) + '0' + ue(0) + ue(0) + ue(256)
+    const padded = bits + '0'.repeat((8 - bits.length % 8) % 8)
+    const payload: number[] = [0, 0, 1, 0x67]
+    for (let i = 0; i < padded.length; i += 8) payload.push(parseInt(padded.slice(i, i + 8), 2))
+    assert.equal(inspectH264(Uint8Array.from(payload)).width, undefined)
+})

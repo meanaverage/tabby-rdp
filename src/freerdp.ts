@@ -60,7 +60,11 @@ export function nativeHelperPath (): string {
 export function requireFreeRDP (): void {
     if (!hasFreeRDP()) {
         const platform = `${process.platform}-${process.arch}`
-        const platforms: unknown = require('../package.json').tabbyRdp?.freerdpPlatforms
+        const metadata = require('../package.json').tabbyRdp
+        if (metadata?.packageFormat === 6) {
+            throw new Error(`The native FreeRDP comparison build for ${platform} is missing. Build it with npm run build:freerdp; the packaged client uses WebAssembly.`)
+        }
+        const platforms: unknown = metadata?.freerdpPlatforms
         throw new Error(Array.isArray(platforms) && platforms.includes(platform)
             ? `FreeRDP's helper for ${platform} is not installed. npm installs it with the plugin, as ${freeRDPPackage(platform)}: reinstall tabby-rdp, or choose IronRDP in this desktop's settings.`
             : `FreeRDP is not available for ${platform}. Choose IronRDP in this desktop's settings.`)

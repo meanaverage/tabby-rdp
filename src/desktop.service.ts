@@ -3354,7 +3354,10 @@ export class RemoteDesktopService {
         if (!this.clipboardWaysOf(session).toRemote) {
             return false
         }
-        const answered = session.files?.clipboardAnswered() ?? new Promise<boolean>(resolve => setTimeout(() => resolve(true), 300))
+        // FreeRDP's generation-tagged acknowledgements are for file offers only. Text keeps
+        // the original short settling delay instead of waiting for an unrelated file event.
+        const answered = (session.client !== 'freerdp' ? session.files?.clipboardAnswered() : undefined)
+            ?? new Promise<boolean>(resolve => setTimeout(() => resolve(true), 300))
         try {
             await session.ui.sendClipboardData()
         } catch (e: any) {

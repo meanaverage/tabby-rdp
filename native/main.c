@@ -320,6 +320,9 @@ static UINT clipboard_monitor_ready(CliprdrClientContext* cliprdr, const CLIPRDR
     CLIPRDR_CAPABILITIES caps = { 0 };
     caps.cCapabilitiesSets = 1; caps.capabilitySets = (CLIPRDR_CAPABILITY_SET*)&general;
     EnterCriticalSection(&c->offerLock);
+    // A restarted clipboard peer begins a new initialization sequence. A response lost
+    // with the old peer must not prevent the latest local offer from being announced.
+    c->offerPending = FALSE; c->offerAgain = FALSE;
     UINT rc = cliprdr->ClientCapabilities(cliprdr, &caps);
     if (rc == CHANNEL_RC_OK) {
         c->clipboardReady = TRUE;

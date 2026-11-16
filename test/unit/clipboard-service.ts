@@ -779,3 +779,22 @@ test('an .rdp file that turns the clipboard off doesn\'t open a profile for its 
         assert.deepEqual([quiet.asked.length, quiet.opened.length, quiet.saved], [0, 1, existing.options.clipboard])
     }
 })
+
+test('FreeRDP text paste-to-all uses the short settling delay, not file acknowledgements', async t => {
+    t.mock.timers.enable({ apis: ['setTimeout'] })
+    const { RemoteDesktopService } = require('../../dist/desktop.service.js')
+    const service = Object.create(RemoteDesktopService.prototype)
+    service.clipboardWaysOf = () => ({ toRemote: true, fromRemote: true })
+    let sent = 0, resolved = false
+    const result = service.sendClipboard({ client: 'freerdp', log: [],
+        files: { clipboardAnswered () { throw new Error('file acknowledgement used for text') } },
+        ui: { async sendClipboardData () { sent++ } },
+    }).then((ok: boolean) => { resolved = true; return ok })
+    await Promise.resolve()
+    assert.equal(sent, 1)
+    t.mock.timers.tick(299)
+    await Promise.resolve()
+    assert.equal(resolved, false)
+    t.mock.timers.tick(1)
+    assert.equal(await result, true)
+})

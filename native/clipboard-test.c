@@ -80,6 +80,11 @@ int main(void) {
     /* A delayed rejection of text cannot reject the new file offer. */
     assert(file_acks(outputFile, 7, FALSE) == 2);
     assert(offered == FILE_FORMAT && c.localGeneration == 7);
+    /* rdpclip restarts before answering: MonitorReady must start a fresh announcement. */
+    assert(c.offerPending);
+    offered = 0;
+    assert(clipboard_monitor_ready(&clip, NULL) == CHANNEL_RC_OK);
+    assert(offered == FILE_FORMAT && c.offerPending && !c.offerAgain);
     offerResponse.common.msgFlags = CB_RESPONSE_OK;
     assert(clipboard_server_format_list_response(&clip, &offerResponse) == CHANNEL_RC_OK);
     assert(!c.offerPending);

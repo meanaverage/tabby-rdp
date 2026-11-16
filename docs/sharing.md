@@ -105,7 +105,7 @@ In the desktop's menus: Ctrl+Alt+Del, Win+R, Win+L, Ctrl+Shift+Esc, Print Screen
 
 ## View only
 
-In the desktop's menus: watch a desktop without touching it. While the **View only** label shows, neither client sends keys, clicks or clipboard contents in either direction. What was offered from this computer is withdrawn when it is still the latest copy known on the remote; a server that already copied those contents can retain them. Turn view only on before copying anything the server should not receive. Copies received during view only are discarded. When it ends, clipboard sharing follows the configured directions again. The picture and supported sound continue. View only persists across reconnects until the desktop closes.
+In the desktop's menus: watch a desktop without touching it. While the **View only** label shows, neither client sends keys, clicks or clipboard contents in either direction. What was offered from this computer is withdrawn when it is still the latest copy known on the remote; a server that already copied those contents can retain them. Turn view only on before copying anything the server should not receive. Copies received during view only are discarded. IronRDP can retain names and sizes from an earlier file offer on the remote, but refuses its contents while view only is on. It also permits explicitly saving files offered before view only; FreeRDP pauses those downloads too. When it ends, clipboard sharing follows the configured directions again. The picture and supported sound continue. View only persists across reconnects until the desktop closes.
 
 ## Screenshots
 
