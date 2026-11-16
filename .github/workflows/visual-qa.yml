@@ -43,6 +43,8 @@ jobs:
       - run: npm run build
       - run: npm run build:helpers
       - run: npm run typecheck:test
+      - name: File clipboard contracts on each client OS
+        run: node --import tsx --test test/unit/freerdp-files.ts test/unit/freerdp-clipboard.ts test/unit/freerdp-wasm.ts
       # The full unit suite remains required in ci.yml; these jobs qualify actual native hosts.
       - name: Install pinned official Tabby
         run: node scripts/qa/install-host.mjs

@@ -52,6 +52,9 @@ jobs:
           grep -q 'dist/index.js' plugin.txt
           grep -q 'vendor/iron-remote-desktop-rdp.js' plugin.txt
           grep -q 'vendor/ironrdp_web_bg.wasm' plugin.txt
+          grep -q 'wasm/freerdp/tabby-freerdp.wasm' plugin.txt
+          grep -q 'wasm/freerdp/tabby-freerdp.js' plugin.txt
+          grep -q 'wasm/freerdp/BUILD.json' plugin.txt
           grep -q 'remote/trd-pty.py' plugin.txt
           grep -q 'bin/SHA256SUMS' plugin.txt
           for platform in darwin-arm64 darwin-x64 linux-arm linux-arm64 linux-x64; do grep -q "bin/$platform/tabby-rdp-proxy" plugin.txt; done

@@ -29,7 +29,7 @@ Both previews share clipboard **text and files/folders** the ways the clipboard 
 off, which leaves the clipboard channel out); in view only, no clipboard goes either way. It does **not** yet implement pictures on the clipboard, audio
 playback/capture, shared folders, or Hyper-V VMConnect.
 The supplied FreeRDP 3.33.1 build uses native bitmap decoding (and the graphics pipeline for GNOME), with optional H.264 codecs
-disabled. The macOS/Linux builds omit Kerberos/GSSAPI and use NTLM. Windows can use native SSPI; Kerberos and domain-policy behavior are not qualified. Hyper-V consoles that
+disabled. The macOS/Linux builds omit Kerberos/GSSAPI and use NTLM. The WebAssembly build uses NTLM on every platform. Native Windows can use SSPI; Kerberos and domain-policy behavior are not qualified. Hyper-V consoles that
 inherit the global client setting continue to use IronRDP. A synced global FreeRDP default also uses IronRDP on a computer without its native helper; an explicit desktop/profile choice still reports the missing build. It has not been benchmarked against IronRDP on Windows Server. Native decoding alone does not establish
 that this implementation will be faster: the cost of transferring pixels to the canvas also matters.
 
@@ -80,7 +80,7 @@ supplies only that computer's platform/architecture. Publishing a new platform's
 manual step; see [CONTRIBUTING.md](../CONTRIBUTING.md#releasing).
 
 Helper packages exist for macOS ARM64, Windows ARM64/x64 and Linux ARM64/x64. FreeRDP helpers for Intel Macs
-are not yet available; IronRDP remains available there.
+are not yet available; IronRDP and the experimental WebAssembly client remain available there.
 
 ## WebAssembly build
 
@@ -119,10 +119,15 @@ their own licensing and updating the packaging inventory; changing FreeRDP's top
 
 ## Verification
 
-FreeRDP 3.33.1 native and WebAssembly pass certificate/NLA rejection checks on macOS ARM64. Both also pass
-synthetic bitmap rendering checks in Tabby, including transparent source pixels. Live server and additional
-platform coverage is recorded with each test package; the older qualification below does not qualify the new builds.
+FreeRDP 3.33.1 native protocol/security and clipboard callback checks pass on macOS ARM64, Linux ARM64/x64 and
+Windows ARM64/x64. The WASM protocol/security checks pass on macOS ARM64 and Linux x64. Packaged native and WASM
+clients also pass TLS policy, process restart/cleanup and canvas checks inside Tabby on macOS ARM64, Linux x64 and
+Windows x64. These hosted checks use synthetic peers and need no private RDP server.
 
+On macOS ARM64, both clients pass live Windows Server 2022 clipboard tests: nested-folder and empty-file downloads,
+binary contents, folder uploads with a 2 MiB file verified by SHA-256, drag/drop, Finder folder paste with Command-V,
+and Save to Downloads with preserved paths. Live file transfers from Windows/Linux clients, other servers, and
+performance benchmarks remain pending. The older qualification below does not qualify the new builds.
 
 ```sh
 npm run typecheck

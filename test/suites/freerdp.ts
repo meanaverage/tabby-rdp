@@ -166,6 +166,7 @@ await suite('freerdp', async t => {
         await t.clipboard('notepad'); await t.sleep(500)
         // Run opens Notepad directly; clicking the centre of a restored desktop could focus Explorer instead.
         await t.ev(`
+            if (!H.session(H.nativePane)?.ui?.native) throw new Error(JSON.stringify({ state: H.session(H.nativePane)?.state, log: H.session(H.nativePane)?.log.slice(-15) }))
             const n = H.session(H.nativePane).ui.native
             const send = (scan, up = false) => { const b = Buffer.alloc(12); b.writeUInt32BE(up ? 0x8000 : 0); b.writeUInt32BE(scan, 4); n.send('K', b) }
             send(0x15b); send(0x13); send(0x13, true); send(0x15b, true)
