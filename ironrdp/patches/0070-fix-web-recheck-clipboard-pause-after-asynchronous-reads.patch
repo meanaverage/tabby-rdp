@@ -1,0 +1,63 @@
+From 3601db19f3cb0ee6cb770deaa1f1aa7718faf715 Mon Sep 17 00:00:00 2001
+From: meanaverage <18336095+meanaverage@users.noreply.github.com>
+Date: Mon, 16 Nov 2026 13:07:36 -0800
+Subject: [PATCH] fix(web): recheck clipboard pause after asynchronous reads
+
+---
+ .../src/services/clipboard.service.ts               | 10 ++++++++++
+ .../src/services/clipboardPause.test.ts             | 13 +++++++++++++
+ 2 files changed, 23 insertions(+)
+
+diff --git a/web-client/iron-remote-desktop/src/services/clipboard.service.ts b/web-client/iron-remote-desktop/src/services/clipboard.service.ts
+index c00e4df..16a7d81 100644
+--- a/web-client/iron-remote-desktop/src/services/clipboard.service.ts
++++ b/web-client/iron-remote-desktop/src/services/clipboard.service.ts
+@@ -280,6 +280,11 @@ export class ClipboardService {
+             }
+         }
+ 
++        // Reading or converting a clipboard item can outlive a view-only transition.
++        if (this.paused || this.disposed) {
++            throwIronError('The clipboard is paused or disposed.');
++        }
++
+         if (!clipboardData.isEmpty()) {
+             this.lastSentClipboardData = clipboardData;
+             this.offeredLatest = true;
+@@ -626,6 +631,11 @@ export class ClipboardService {
+         const clipboardData = new this.module.ClipboardData();
+         clipboardData.addText('text/plain', value);
+ 
++        // Reading or converting a clipboard item can outlive a view-only transition.
++        if (this.paused || this.disposed) {
++            throwIronError('The clipboard is paused or disposed.');
++        }
++
+         if (!clipboardData.isEmpty()) {
+             this.lastSentClipboardData = clipboardData;
+             this.offeredLatest = true;
+diff --git a/web-client/iron-remote-desktop/src/services/clipboardPause.test.ts b/web-client/iron-remote-desktop/src/services/clipboardPause.test.ts
+index 62ae415..a5ab2da 100644
+--- a/web-client/iron-remote-desktop/src/services/clipboardPause.test.ts
++++ b/web-client/iron-remote-desktop/src/services/clipboardPause.test.ts
+@@ -259,4 +259,17 @@ describe('paused clipboard', () => {
+         expect(sent).toEqual(['secret']);
+         clipboard.dispose();
+     });
++    it('does not send a clipboard read that finishes after pausing', async () => {
++        const { clipboard } = await started();
++        let finish!: (value: unknown) => void;
++        reads.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
++        const sending = clipboard.sendClipboardData();
++        const rejected = expect(sending).rejects.toMatchObject({ backtrace: expect.any(Function) });
++        await clipboard.setPaused(true);
++        finish([{ types: ['text/plain'], getType: async () => ({ text: async () => 'secret' }) }]);
++        await rejected;
++        expect(sent).toEqual([]);
++        clipboard.dispose();
++    });
++
+ });
+-- 
+2.54.0 (Apple Git-157)
+

@@ -127,7 +127,7 @@ on the GNOME desktop. It is optional and off by default. [How desk works](docs/d
 
 ## RDP client preview
 
-**Settings › Remote Desktop › Settings › RDP client** selects **IronRDP** or experimental **FreeRDP**. Profiles and
+**Settings › Remote Desktop › Settings › RDP client** selects **IronRDP** or **FreeRDP WebAssembly (experimental)**. Profiles and
 behind-host desktops can override the default. Changes apply on the next connection.
 
 In an RDP profile tab's **…** menu, choose **RDP client** to switch that profile and optionally **Reconnect to apply**.
@@ -135,9 +135,9 @@ In an RDP profile tab's **…** menu, choose **RDP client** to switch that profi
 | Client | Availability | Capabilities |
 |---|---|---|
 | IronRDP (default) | macOS, Windows and Linux | The features above, subject to the server's capabilities |
-| FreeRDP (experimental) | macOS ARM64; Windows and Linux ARM64/x64 native helpers | In-tab display, keyboard/mouse, clipboard text, scaling, resize, view only, screenshots and reconnect. Clipboard pictures and files, file transfer, audio, shared folders, Hyper-V and H.264 are pending. |
+| FreeRDP WebAssembly (experimental) | Bundled for macOS, Windows and Linux | In-tab display, keyboard/mouse, clipboard text and files/folders, scaling, resize, view only, screenshots and reconnect. Pictures, audio, shared folders, Hyper-V and H.264 are pending. No separate FreeRDP package is needed. |
 
-Windows Server performance has **not been benchmarked**. See [FreeRDP builds, licensing and capability notes](native/README.md).
+A [Windows VM comparison](test/fixtures/performance/README.md#windows-comparison-2026-11-16) found similar frame rates and input latency, with higher WASM CPU and memory use. See [FreeRDP builds, licensing and capability notes](native/README.md).
 To try the preview, open **Settings › Remote Desktop › Updates**, choose **Preview**, and install the offered version.
 
 <a id="settings"></a>
@@ -160,7 +160,7 @@ To try the preview, open **Settings › Remote Desktop › Updates**, choose **P
 ## Development
 
 IronRDP is a Rust RDP client compiled to WebAssembly. We ship a reviewed patch series and contribute fixes upstream;
-see [IronRDP and contributions](docs/ironrdp.md). The optional native FreeRDP helper is built separately.
+see [IronRDP and contributions](docs/ironrdp.md). The portable FreeRDP build has its own pinned toolchain and source records.
 
 ```sh
 npm ci --ignore-scripts
@@ -186,8 +186,10 @@ names and addresses; check those before attaching one.
 
 ## License
 
-[MIT](LICENSE). IronRDP is MIT or Apache-2.0 ([license](vendor/IRONRDP-LICENSE)); FreeRDP, WinPR and OpenSSL 3
-are Apache-2.0, with their license notices and WinPR's Unicode conversion notice included in each platform's helper package. [FreeRDP licensing](native/README.md#licensing).
+[MIT](LICENSE). IronRDP is MIT or Apache-2.0 ([license](vendor/IRONRDP-LICENSE)); FreeRDP and WinPR are Apache-2.0.
+The bundled WebAssembly includes their license notices, WinPR's Unicode conversion notice, and LibreSSL, zlib and
+Emscripten notices. Native development builds additionally include OpenSSL 3's Apache-2.0 license.
+See [FreeRDP licensing](native/README.md#licensing).
 Header icons are from [Font Awesome Free](https://fontawesome.com) (CC BY 4.0).
 
 tabby-rdp is an independent project, not affiliated with Tabby, Devolutions or the GNOME Project.

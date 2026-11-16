@@ -199,7 +199,7 @@ system keychain doesn't answer (Linux without an unlocked keyring), the keychain
 | [keyboard](suites/keyboard.ts) | Tabby shortcuts kept off the covered console, ⌘ as Ctrl, no stuck keys, the shortcuts that stay Tabby's. |
 | [focus](suites/focus.ts) | A desktop next to a terminal: the pointer over it (also in a maximized pane's margin) leaves the keyboard in the terminal, a click hands it over, leaving its tab for Settings takes it away, and leaving by the tab's shortcut leaves no modifier held on the remote (through the terminal `desk` opens). |
 | [actions](suites/actions.ts) | Send keys (also from the console), ⌃⌘ with a key as Super with it, View only (label, mouse, keys, across a reconnect), screenshots to Downloads and the clipboard, actual size with a fixed resolution. |
-| [clipboard](suites/clipboard.ts) | Text both ways, through the terminal `desk` opens. |
+| [clipboard](suites/clipboard.ts) | Text both ways, through the terminal `desk` opens; in view only, none either way (the desktop's clipboard read and set from its console with xclip or wl-clipboard). |
 | [files](suites/files.ts) | Files both ways with Files (Nautilus): copy there and save here; drop here and paste there. |
 | [audio](suites/audio.ts) | A tone played on the desktop arrives as sound; with sound off, none is set up. |
 | [microphone](suites/microphone.ts) | Recording on the desktop opens the microphone here, a tone fed in as the microphone arrives there, and it is released when the recording stops; with the setting off, none is set up. |
@@ -275,3 +275,21 @@ remote machine. Actual client/guest identity and installed plugin content are ve
 See [setup, baseline review and acceptance](../docs/visual-qa.md#native-client-and-desktop-matrix). A Windows desktop reached
 from macOS is **macOS-client / Windows-server coverage**, not Windows-client coverage. Unsupported/unconfigured combinations
 remain visible and cannot count as a pass. Architecture is recorded from the Tabby process, independently of the test driver.
+
+### FreeRDP WebAssembly and clipboard files
+
+`TRD_TEST_FREERDP_RUNTIME=wasm npm test -- --hidden freerdp` runs the same real Tabby lifecycle checks with the
+selectable WASM client. Omit that variable for native FreeRDP. Both use the dedicated direct-server credentials
+above; add `--packed` to qualify the installed test package.
+
+After `npm run build`, `node test/freerdp-files-live.cjs` checks file transfers against a dedicated Windows desktop.
+Set `TRD_TEST_DIRECT` to its hostname, optional `TRD_TEST_DIRECT_PORT`, `TRD_TEST_DIRECT_USER`,
+`TRD_TEST_DIRECT_PASSWORD`, optional `TRD_TEST_DIRECT_DOMAIN`, and `TRD_TEST_CERT_SHA256` to its expected colon-separated
+certificate fingerprint. Set `TRD_TEST_FREERDP_RUNTIME=wasm` to repeat with WebAssembly. It requires NLA, opens
+PowerShell and Explorer, replaces that account's clipboard, and creates/removes a uniquely named temporary folder.
+It checks nested-folder and empty-file downloads, binary contents, and a folder upload containing a 2 MiB binary
+verified by SHA-256 plus an empty file. It exercises the protocol/provider directly; the `freerdp` suite also checks Tabby's send/save notifications, disk
+downloads, drag/drop and macOS Finder folder paste, alongside worker lifecycle, rendering, input, resize and text
+clipboard. `npm test -- --packed --hidden freerdp-runtime freerdp-rendering` runs portable/native TLS policy and
+process cleanup plus canvas checks inside the installed Tabby, without a remote server. Hosted Windows, Linux and
+macOS jobs run these checks; they do not replace live-server file-transfer qualification on each client OS.

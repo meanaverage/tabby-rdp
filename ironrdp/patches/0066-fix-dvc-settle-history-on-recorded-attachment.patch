@@ -1,0 +1,48 @@
+From 68e119de8f3f7aac0fa4f75136d2f92812e2a5c8 Mon Sep 17 00:00:00 2001
+From: meanaverage <18336095+meanaverage@users.noreply.github.com>
+Date: Mon, 16 Nov 2026 12:30:47 -0800
+Subject: [PATCH] fix(dvc): settle decline history when attaching recorded
+ channels
+
+Carry the prerequisite attach behavior used by final upstream #2341. The attachment API, like accepted Create requests, clears old decline history after successful initialization.
+---
+ crates/ironrdp-dvc/src/client.rs                  |  4 +++-
+ crates/ironrdp-testsuite-core/tests/dvc/client.rs | 10 ++++++++++
+ 2 files changed, 13 insertions(+), 1 deletion(-)
+
+diff --git a/crates/ironrdp-dvc/src/client.rs b/crates/ironrdp-dvc/src/client.rs
+index 9bd1525..6e2469c 100644
+--- a/crates/ironrdp-dvc/src/client.rs
++++ b/crates/ironrdp-dvc/src/client.rs
+@@ -206,7 +206,9 @@ impl DrdynvcClient {
+         T: DvcClientProcessor + 'static,
+     {
+         self.dynamic_channels
+-            .attach_established_channel(channel_id, Box::new(channel))
++            .attach_established_channel(channel_id, Box::new(channel))?;
++        self.client_closed.retain(|(closed_id, _)| *closed_id != channel_id);
++        Ok(())
+     }
+ 
+     /// Bind a listener.
+diff --git a/crates/ironrdp-testsuite-core/tests/dvc/client.rs b/crates/ironrdp-testsuite-core/tests/dvc/client.rs
+index 651d9b8..6077eca 100644
+--- a/crates/ironrdp-testsuite-core/tests/dvc/client.rs
++++ b/crates/ironrdp-testsuite-core/tests/dvc/client.rs
+@@ -614,3 +614,13 @@ fn declined_channel_history_forgets_oldest_after_64_entries() {
+     assert!(client.process(&data(2, b"retained")).unwrap().is_empty());
+     assert!(client.process(&data(65, b"newest")).unwrap().is_empty());
+ }
++
++#[test]
++fn attaching_a_recorded_channel_settles_its_previous_decline() {
++    let mut client = DrdynvcClient::new();
++    client.process(&create_request(7, "unhandled")).unwrap();
++    client.attach_established_dynamic_channel(7, RecordedDvc::default()).unwrap();
++    client.process(&data(7, b"recorded")).unwrap();
++    let channel = client.get_dvc_by_channel_id::<RecordedDvc>(7).unwrap();
++    assert_eq!(channel.processor().received, vec![b"recorded".to_vec()]);
++}
+-- 
+2.54.0 (Apple Git-157)
+

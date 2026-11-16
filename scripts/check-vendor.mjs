@@ -552,7 +552,7 @@ function compareFiles (files, sameAs, problems) {
  * else. Nothing in it is built, so every file is checked. */
 function checkFreeRDPPackage ({ files, committed, manifest, platform, blobId, problems, tarball, revision, commit, version, sameAs }) {
     const expected = new Map()
-    if (!(manifest?.tabbyRdp?.packageFormat >= 4)) {
+    if (![4, 5].includes(manifest?.tabbyRdp?.packageFormat)) {
         problems.push(`${tarball}: a FreeRDP package, which ${revision} doesn't publish (package format 4 does)`)
     } else {
         try {

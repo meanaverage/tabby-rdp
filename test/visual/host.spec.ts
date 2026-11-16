@@ -97,7 +97,7 @@ test(hostedSmoke ? 'Native Tabby settings smoke (no baseline qualification)' : '
         await soundToggle.evaluate(el => (el as HTMLInputElement).blur())
         const clientChoice = settings.locator('[data-setting=client]')
         await expect(clientChoice).toBeVisible()
-        await expect(clientChoice.locator('option')).toHaveText(['IronRDP', 'FreeRDP (experimental)'])
+        await expect(clientChoice.locator('option')).toHaveText(['IronRDP', 'FreeRDP WebAssembly (experimental)'])
         const originalClient = await clientChoice.inputValue()
         await clientChoice.selectOption('freerdp')
         await expect.poll(() => page.evaluate(() => (window as any).__remoteDesktop.desktop.settings().client)).toBe('freerdp')

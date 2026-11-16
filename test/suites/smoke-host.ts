@@ -25,17 +25,14 @@ await suite('smoke-host', async t => {
         const decorators = RD.injector.get(require('tabby-terminal').TerminalDecorator).map(d => d.constructor.name);
         return ['RemoteDesktopToolbarButton', 'DeskTriggerDecorator', 'RDPProfileOpener'].every(n => decorators.includes(n));
     `))
-    // This computer's FreeRDP helper, where the plugin is installed: from its platform's package when npm installed the
-    // plugin (--packed, with that package beside it), else a build in native/bin. A platform without one has none.
-    const helper = await ev<{ platform: string, listed: boolean, found: boolean, path: string }>(`
-        const freerdp = require('tabby-rdp/dist/freerdp.js'), platform = process.platform + '-' + process.arch;
-        return { platform, listed: require('tabby-rdp/package.json').tabbyRdp.freerdpPlatforms.includes(platform),
-            found: freerdp.hasFreeRDP(), path: freerdp.nativeHelperPath().split(require('path').sep).join('/') }
+    const freeRDP = await ev<{ found: boolean, bundled: boolean, optional: boolean }>(`
+        const wasm = require('tabby-rdp/dist/freerdpWasm.js'), path = require('path')
+        const loaded = Object.keys(require('module')._cache).find(file => file.split(path.sep).join('/').endsWith('/dist/freerdpWasm.js'))
+        const root = path.dirname(path.dirname(loaded))
+        return { found: wasm.hasFreeRDPWasm(), bundled: wasm.freeRDPWasmPath() === path.join(root, 'wasm', 'freerdp', 'tabby-freerdp.js'),
+            optional: !!require('tabby-rdp/package.json').optionalDependencies }
     `)
-    check("the FreeRDP helper is found on a platform that has one, and only there", helper.found === helper.listed, helper)
-    if (process.env.TRD_TEST_PACKED === '1' && helper.listed) {
-        check("the packed plugin's FreeRDP helper comes from its platform's package", helper.path.includes(`/node_modules/@tabby-rdp/freerdp-${helper.platform}/`), helper)
-    }
+    check('FreeRDP WebAssembly is bundled without native optional dependencies', freeRDP.found && freeRDP.bundled && !freeRDP.optional, freeRDP)
     t.onCleanup(() => ev(`const s = RD.app.tabs.find(x => x instanceof require('tabby-settings').SettingsTabComponent); if (s) await H.inZone(() => RD.app.closeTab(s, false))`))
     await ev(`Object.assign(H, {
         async smokeLocal () {

@@ -12,8 +12,10 @@ import { consoleScript, DeskGate, deskKeyDigest, DeskRequest, MACHINE_ID_COMMAND
 import { AudioPlayer } from './audio'
 import { IronRDPLoader } from './ironrdp'
 import { RDPClient, ownRDPClient, rdpClient, RDP_CLIENT_LABELS, isRDPElement } from './rdpClient'
-import { FreeRDPProcess, requireFreeRDP, hasFreeRDP } from './freerdp'
+import { FreeRDPProcess } from './freerdp'
+import { freeRDPFileProvider } from './freerdpFiles'
 import { FreeRDPClipboard, freeRDPClipboardLog } from './freerdpClipboard'
+import { hasFreeRDPWasm, requireFreeRDPWasm } from './freerdpWasm'
 import { FreeRDPView } from './freerdpView'
 import { createH264Decoder } from './h264'
 import { CLIPBOARD_LABELS, ClipboardMode, clipboardSetting, ClipboardWays, clipboardWays, narrowest, ownClipboard, setUpClipboard, splitPaste } from './clipboard'
@@ -400,7 +402,10 @@ export class DesktopSession {
     drives: SharedDrives | null = null
     /** Decodes H.264 for the graphics pipeline (IronRDP's WebCodecsH264Decoder), when this connection uses it. */
     h264: any = null
-    /** No keyboard or mouse input goes to the remote (keys: see keyboard.ts; the mouse: a layer over the picture). */
+    /**
+     * No keyboard or mouse input goes to the remote (keys: see keyboard.ts; the mouse: a layer over the picture), and
+     * no clipboard either way (see pauseClipboard).
+     */
     viewOnly = false
     /** The host's own desktop: the certificate its setup reported for this connection. */
     pinnedCertificate: string | null = null
@@ -481,7 +486,7 @@ export class DesktopSession {
         this.overlay.className = 'trd-overlay'
         this.overlay.innerHTML = `
             <div class="trd-host"></div>
-            <div class="trd-view-only" title="View only: no keyboard or mouse input goes to the remote desktop"></div>
+            <div class="trd-view-only" title="View only: no keyboard or mouse input goes to the remote desktop, and no clipboard either way"></div>
             <div class="trd-mic"><i class="fas fa-microphone"></i></div>
             <div class="trd-osd"></div>
             <div class="trd-status"><div class="trd-status-text"></div><div class="trd-status-actions"></div><a class="trd-status-help">What does this mean?</a></div>`
@@ -537,8 +542,25 @@ export class DesktopSession {
     setViewOnly (viewOnly: boolean): void {
         this.viewOnly = viewOnly
         this.ui?.setReadOnly?.(viewOnly)
+        this.pauseClipboard()
         this.overlay.classList.toggle('trd-view-only-on', viewOnly)
         this.log.push(`view only: ${viewOnly ? 'on' : 'off'}`)
+    }
+
+    /**
+     * No clipboard goes either way in view only. IronRDP's component pauses its clipboard for it: what this computer
+     * offered is withdrawn if it is still the latest on the remote's clipboard, and what the remote copies is dropped
+     * (setUpClipboard leaves out the clipboard of a component that can't). FreeRDP's clipboard pauses itself (see
+     * freerdpClipboard.ts), and files don't go meanwhile (see FileTransfer).
+     */
+    pauseClipboard (): void {
+        if (typeof this.ui?.setClipboardPaused !== 'function') {
+            return
+        }
+        const viewOnly = this.viewOnly
+        Promise.resolve(this.ui.setClipboardPaused(viewOnly)).catch((e: any) => {
+            this.log.push(`clipboard: not ${viewOnly ? 'paused' : 'resumed'} for view only: ${e?.backtrace?.() ?? e?.message ?? e}`)
+        })
     }
 
     private labelTimer?: ReturnType<typeof setTimeout>
@@ -1217,7 +1239,7 @@ export class RemoteDesktopService {
 
     private effectiveClient (override: unknown, hyperv = false): RDPClient {
         const own = ownRDPClient(override), preferred = own ?? this.settings().client
-        return !own && (hyperv || preferred === 'freerdp' && !hasFreeRDP()) ? 'ironrdp' : preferred
+        return !own && (hyperv || preferred === 'freerdp' && !hasFreeRDPWasm()) ? 'ironrdp' : preferred
     }
 
     /** The profile's next-connection choice, with the currently running client shown separately. */
@@ -2902,7 +2924,7 @@ export class RemoteDesktopService {
         return !!this.sessions.get(pane)?.viewOnly
     }
 
-    /** View only: the pane's desktop gets no keyboard or mouse input (the picture, clipboard and sound go on). */
+    /** View only: the pane's desktop gets no keyboard or mouse input and no clipboard (the picture and sound go on). */
     setViewOnly (pane: DesktopPane, viewOnly: boolean): void {
         const session = this.sessions.get(pane)
         if (session) {
@@ -3093,6 +3115,11 @@ export class RemoteDesktopService {
         session.log.push('microphone: stopped for this desktop, its reconnects included')
         session.mic?.turnOff()
         this.changed$.next()
+    }
+
+    /** Whether this connection's client supports microphone redirection. */
+    canUseMicrophone (pane: DesktopPane): boolean {
+        return this.sessions.get(pane)?.client === 'ironrdp'
     }
 
     /** Whether the microphone was stopped for the pane's desktop (see stopMicrophone). */
@@ -3327,7 +3354,10 @@ export class RemoteDesktopService {
         if (!this.clipboardWaysOf(session).toRemote) {
             return false
         }
-        const answered = session.files?.clipboardAnswered() ?? new Promise<boolean>(resolve => setTimeout(() => resolve(true), 300))
+        // FreeRDP's generation-tagged acknowledgements are for file offers only. Text keeps
+        // the original short settling delay instead of waiting for an unrelated file event.
+        const answered = (session.client !== 'freerdp' ? session.files?.clipboardAnswered() : undefined)
+            ?? new Promise<boolean>(resolve => setTimeout(() => resolve(true), 300))
         try {
             await session.ui.sendClipboardData()
         } catch (e: any) {
@@ -3580,9 +3610,9 @@ export class RemoteDesktopService {
             const client = this.effectiveClient(spec.client, !!spec.hyperv)
             if (client !== preferred) { session.log.push('client: using IronRDP because the global FreeRDP default is unavailable for this desktop on this computer') }
             session.client = client
-            if (client === 'freerdp') {
+            if (client !== 'ironrdp') {
                 if (spec.hyperv) { throw new Error('FreeRDP does not support Hyper-V consoles in Tabby yet. Choose IronRDP for this desktop.') }
-                requireFreeRDP()
+                requireFreeRDPWasm()
             }
             const gateway = spec.gateway ? parseGateway(spec.gateway) : null
             if (spec.gateway && !gateway) {
@@ -3598,7 +3628,7 @@ export class RemoteDesktopService {
             // Signing in to a Windows account can take a few tries; a GNOME desktop the plugin set up can't fail that way.
             for (let attempt = 0; ; attempt++) {
                 // Resolve availability before opening a credential form; a missing native build asks for no password.
-                const backend = client === 'freerdp' ? Promise.resolve({ client }) : this.loadIronRDP(session)
+                const backend = client !== 'ironrdp' ? Promise.resolve({ client }) : this.loadIronRDP(session)
                 const [asked, rdp]: [Endpoint | null | 'stopped', any] = await Promise.all([endpoint ?? this.endpointFor(pane, target, spec, session, automatic, retryError), backend])
                 if (!alive()) {
                     return
@@ -3642,7 +3672,7 @@ export class RemoteDesktopService {
                     session.proxy.close()
                     session.proxy = null
                 }
-                if (!session.proxy && client !== 'freerdp') {
+                if (!session.proxy && client === 'ironrdp') {
                     const proxy = await startRDCleanPathProxy(
                         // A desktop connected to directly is reached by the proxy's own connection; one behind an SSH host
                         // through a channel of the SSH connection, carried to the proxy.
@@ -4337,7 +4367,7 @@ export class RemoteDesktopService {
         session.plainSignIn = false
         const settings = this.settingsFor(session)
         const size = session.initialSize ?? remoteSizeFor(session.overlay.getBoundingClientRect(), settings)
-        const native = new FreeRDPProcess()
+        const native = new FreeRDPProcess('wasm')
         const ui = new FreeRDPView(native, session.host)
         ui.setReadOnly(session.viewOnly)
         session.ui = ui
@@ -4345,14 +4375,14 @@ export class RemoteDesktopService {
         const stop = () => ui.shutdown()
         signal.addEventListener('abort', stop, { once: true })
         session.onConnectionEnd(stop)
-        session.log.push(`client: ${RDP_CLIENT_LABELS.freerdp}`)
+        session.log.push(`client: ${RDP_CLIENT_LABELS[session.client ?? 'freerdp']}`)
         const relaxOrderChecks = spec.relaxOrderChecks ?? this.settingsFor(session).relaxOrderChecks
         const glyphCache = spec.glyphCache ?? settings.glyphCache
         session.log.push(`FreeRDP glyph caching: ${glyphCache ? 'enabled (experimental)' : 'disabled'}`)
         const bitmapCache = spec.bitmapCache ?? settings.bitmapCache
         session.log.push(`FreeRDP bitmap caching: ${bitmapCache ? 'enabled (experimental)' : 'disabled'}`)
         session.log.push(`FreeRDP drawing order checks: ${relaxOrderChecks ? 'relaxed' : 'strict'}`)
-        session.log.push('FreeRDP preview: pictures and files on the clipboard, audio, microphone and shared folders are unavailable')
+        session.log.push('FreeRDP preview: pictures on the clipboard, audio, microphone and shared folders are unavailable')
         // Text through the clipboard channel, the ways the settings let it go as they are now, for this connection.
         session.clipboard = settings.clipboard
         session.log.push(freeRDPClipboardLog(session.clipboard))
@@ -4368,6 +4398,16 @@ export class RemoteDesktopService {
             },
             narrow: ways => native.narrowClipboard(ways),
         }, () => this.clipboardWaysOf(session), { focused: () => ui.isFocused(), viewOnly: () => ui.isViewOnly() })
+        const fileModule = await importESM(vendor('iron-remote-desktop-rdp.js'))
+        if (!alive()) { clipboard.stop(); native.shutdown(); return { connected: false } }
+        session.files?.dispose()
+        const Provider = freeRDPFileProvider(fileModule.RdpFileTransferProvider,
+            (type, data) => native.send(type, data),
+            () => session.viewOnly ? { toRemote: false, fromRemote: false } : this.clipboardWaysOf(session),
+            () => clipboard.localFiles())
+        session.files = new FileTransfer({ RdpFileTransferProvider: Provider }, session.overlay,
+            message => session.log.push(message), () => session.viewOnly ? { toRemote: false, fromRemote: false } : this.clipboardWaysOf(session))
+        clipboard.filesPending = () => session.files?.provider.isUploadInProgress() ?? false
         ui.clipboardSender = () => clipboard.sendNow()
         const { username, domain } = signInParts(endpoint.credentials.username, endpoint.domain ?? spec.domain ?? '')
         const gateway = spec.gateway ? parseGateway(spec.gateway) : null
@@ -4387,6 +4427,10 @@ export class RemoteDesktopService {
                 bitmapCache,
                 clipboard: clipboardWays(session.clipboard),
                 remoteText: text => clipboard.remote(text),
+                clipboardFiles: (type, data) => {
+                    if (type === 'l') { clipboard.remoteChanged() }
+                    session.files?.provider.receive(type, data)
+                },
                 open: async abort => {
                     const stream = gateway ? await this.throughGatewayStream(target, spec, session, gateway, endpoint, abort) : await target.openTcp(endpoint.host, endpoint.port)
                     if (abort.aborted) { stream.destroy(); throw new Error('Connection cancelled') }
@@ -4404,7 +4448,7 @@ export class RemoteDesktopService {
             onConnected(Date.now())
             clipboard.start()
             session.remoteSize = { ...info, scale: 100 }
-            session.graphics = 'FreeRDP native bitmaps'
+            session.graphics = 'FreeRDP WebAssembly bitmaps'
             ui.setVisibility(session.visible)
             this.applyKeyboardMode(session)
             if (size.scale !== 100 || spec.kind === 'windows') { this.applySize(session, size) }
@@ -4504,10 +4548,13 @@ export class RemoteDesktopService {
             // clipboard goes only the ways the settings let it, as they are now, for this connection (see clipboard.ts).
             session.files?.dispose()
             // What it reads for the remote waits for room in the connection (see ServerFlow).
-            session.files = new FileTransfer(rdp, session.overlay, m => session.log.push(m), () => this.clipboardWaysOf(session), session.proxy ?? undefined)
+            session.files = new FileTransfer(rdp, session.overlay, m => session.log.push(m), () => this.clipboardWaysOf(session), session.proxy ?? undefined,
+                () => session.viewOnly)
             const clipboard = setUpClipboard(session.ui, session.files.provider, this.settingsFor(session).clipboard, () => this.clipboardWaysOf(session).toRemote)
             session.clipboard = clipboard.mode
             session.stopSending = clipboard.stopSending
+            // A desktop in view only connects with its clipboard paused.
+            session.pauseClipboard()
             session.log.push(`clipboard: ${clipboard.mode === 'both' ? 'both ways'
                 : clipboard.mode === 'fromRemote' ? 'only from the remote desktop (this computer\'s is neither read nor sent)' : 'off (no clipboard channel)'}`)
             // The component outlines itself while it has the keyboard; the desktop should look like the

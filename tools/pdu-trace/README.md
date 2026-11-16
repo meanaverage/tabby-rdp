@@ -24,7 +24,9 @@ A diagnostic log written before the trace existed can be turned into a coarser t
 `node tools/pdu-trace/from-log.mjs <log>` (after `npm run build`): the resize requests, resets and surfaces are in a
 debug log; frames, acknowledgements and the decoder's timing are not.
 
-## FreeRDP, for comparison
+## Native FreeRDP, for comparison
+
+These WLOG instructions apply only to the native development helper. The packaged WebAssembly client suppresses FreeRDP logs and does not expose its in-memory log files; its plugin diagnostic log remains available.
 
 The FreeRDP helper's traffic doesn't pass the proxy (TLS is its own), so it can't be tapped; FreeRDP logs each
 graphics command it receives instead. Start Tabby, or the suite, with FreeRDP's logging aimed at a file (the plugin

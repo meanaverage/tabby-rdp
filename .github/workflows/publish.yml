@@ -15,10 +15,9 @@ name: Publish
 # committed file in it, with the two metadata files projected to runtime-only form), and stages that very file. dist/ is as the package job built it: only a maintainer's own build
 # (`--same-as`, CONTRIBUTING.md) checks it before the staged package is approved.
 #
-# The FreeRDP helper is published in a package per platform (@tabby-rdp/freerdp-<platform>, from native/bin as committed),
-# which the plugin's package.json names as optional dependencies. They go the same way, each taken by its hash and
-# checked against the tag, and are staged before the plugin: approve them first. A new one's first version is published
-# by hand (npm's trusted publishing needs the package to exist; CONTRIBUTING.md), and is checked here rather than staged.
+# Package format 6 includes FreeRDP WASM in the plugin. freerdp.yml rebuilds it from pinned sources,
+# compares every artifact with the tag and runs its protocol tests before npm staging. Older package
+# formats remain supported by the metadata tools for historical release verification.
 #
 # Actions are pinned to a commit, their tag in the comment: a tag can be moved to other code, a commit can't
 # (CONTRIBUTING.md, "Actions").
@@ -34,6 +33,10 @@ jobs:
   ironrdp:
     name: IronRDP
     uses: ./.github/workflows/ironrdp.yml
+
+  freerdp:
+    name: FreeRDP
+    uses: ./.github/workflows/freerdp.yml
 
   package:
     name: Package
@@ -97,7 +100,7 @@ jobs:
 
   publish:
     name: Publish to npm
-    needs: [ironrdp, package, helpers]
+    needs: [ironrdp, freerdp, package, helpers]
     runs-on: ubuntu-24.04
     permissions:
       contents: read

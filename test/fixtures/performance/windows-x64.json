@@ -1,0 +1,490 @@
+{
+  "schema": 1,
+  "seconds": 20,
+  "pairs": 3,
+  "rows": [
+    {
+      "runtime": "native",
+      "compatibility": false,
+      "pair": 1,
+      "connectMs": 485,
+      "firstPixelMs": 1734,
+      "latencyMs": [
+        45,
+        109,
+        69,
+        55,
+        94,
+        66,
+        129,
+        54,
+        76,
+        115,
+        115,
+        49
+      ],
+      "motion": {
+        "fps": 14.820359281437126,
+        "cpuPercentOneCore": 58.426787015278144,
+        "privateMiB": 522.185546875,
+        "bytesIn": 669187,
+        "samples": 20
+      },
+      "idle": {
+        "fps": 0.1989258006763477,
+        "cpuPercentOneCore": 7.772184022727851,
+        "privateMiB": 455.9015625,
+        "bytesIn": 204,
+        "samples": 5
+      }
+    },
+    {
+      "runtime": "wasm",
+      "compatibility": false,
+      "pair": 1,
+      "connectMs": 954,
+      "firstPixelMs": 2185,
+      "latencyMs": [
+        60,
+        100,
+        102,
+        51,
+        87,
+        86,
+        66,
+        97,
+        115,
+        64,
+        86,
+        114
+      ],
+      "motion": {
+        "fps": 15.545336399080275,
+        "cpuPercentOneCore": 83.16442443950274,
+        "privateMiB": 835.7033203125,
+        "bytesIn": 708067,
+        "samples": 20
+      },
+      "idle": {
+        "fps": 0.19984012789768185,
+        "cpuPercentOneCore": 13.539214677619348,
+        "privateMiB": 806.53515625,
+        "bytesIn": 204,
+        "samples": 5
+      }
+    },
+    {
+      "runtime": "wasm",
+      "compatibility": false,
+      "pair": 2,
+      "connectMs": 931,
+      "firstPixelMs": 2193,
+      "latencyMs": [
+        97,
+        83,
+        69,
+        82,
+        92,
+        88,
+        96,
+        80,
+        49,
+        38,
+        65,
+        57
+      ],
+      "motion": {
+        "fps": 15.29770534419837,
+        "cpuPercentOneCore": 84.9466719956239,
+        "privateMiB": 828.9185855263158,
+        "bytesIn": 715825,
+        "samples": 19
+      },
+      "idle": {
+        "fps": 0.19888623707239458,
+        "cpuPercentOneCore": 8.55384210129756,
+        "privateMiB": 789.7078125,
+        "bytesIn": 204,
+        "samples": 5
+      }
+    },
+    {
+      "runtime": "native",
+      "compatibility": false,
+      "pair": 2,
+      "connectMs": 300,
+      "firstPixelMs": 1477,
+      "latencyMs": [
+        113,
+        66,
+        100,
+        84,
+        46,
+        72,
+        77,
+        38,
+        109,
+        100,
+        53,
+        83
+      ],
+      "motion": {
+        "fps": 14.6295186738566,
+        "cpuPercentOneCore": 57.67029036624232,
+        "privateMiB": 439.8505859375,
+        "bytesIn": 668898,
+        "samples": 20
+      },
+      "idle": {
+        "fps": 0.2,
+        "cpuPercentOneCore": 3.8886510499969,
+        "privateMiB": 456.8359375,
+        "bytesIn": 153,
+        "samples": 5
+      }
+    },
+    {
+      "runtime": "native",
+      "compatibility": false,
+      "pair": 3,
+      "connectMs": 305,
+      "firstPixelMs": 1691,
+      "latencyMs": [
+        73,
+        82,
+        35,
+        116,
+        114,
+        99,
+        54,
+        34,
+        64,
+        68,
+        46,
+        37
+      ],
+      "motion": {
+        "fps": 15.246950609878024,
+        "cpuPercentOneCore": 55.91660186689175,
+        "privateMiB": 443.0583984375,
+        "bytesIn": 707897,
+        "samples": 20
+      },
+      "idle": {
+        "fps": 0.2,
+        "cpuPercentOneCore": 3.631996838217038,
+        "privateMiB": 437.8603515625,
+        "bytesIn": 153,
+        "samples": 4
+      }
+    },
+    {
+      "runtime": "wasm",
+      "compatibility": false,
+      "pair": 3,
+      "connectMs": 904,
+      "firstPixelMs": 2007,
+      "latencyMs": [
+        94,
+        51,
+        147,
+        109,
+        58,
+        78,
+        81,
+        130,
+        67,
+        130,
+        131,
+        82
+      ],
+      "motion": {
+        "fps": 15.190885468718768,
+        "cpuPercentOneCore": 80.36457389073142,
+        "privateMiB": 843.0501953125,
+        "bytesIn": 703185,
+        "samples": 20
+      },
+      "idle": {
+        "fps": 0.1996007984031936,
+        "cpuPercentOneCore": 8.29365690777932,
+        "privateMiB": 846.0673828125,
+        "bytesIn": 204,
+        "samples": 4
+      }
+    },
+    {
+      "runtime": "native",
+      "compatibility": true,
+      "pair": 1,
+      "connectMs": 295,
+      "firstPixelMs": 1855,
+      "latencyMs": [
+        166,
+        64,
+        73,
+        79,
+        86,
+        98,
+        116,
+        83,
+        47,
+        110,
+        34,
+        112
+      ],
+      "motion": {
+        "fps": 15.54145220128929,
+        "cpuPercentOneCore": 71.19062653994422,
+        "privateMiB": 465.97245065789474,
+        "bytesIn": 474707,
+        "samples": 19
+      },
+      "idle": {
+        "fps": 0.1988071570576541,
+        "cpuPercentOneCore": 4.278679941865659,
+        "privateMiB": 458.79140625,
+        "bytesIn": 153,
+        "samples": 5
+      }
+    },
+    {
+      "runtime": "wasm",
+      "compatibility": true,
+      "pair": 1,
+      "connectMs": 897,
+      "firstPixelMs": 2124,
+      "latencyMs": [
+        63,
+        127,
+        132,
+        62,
+        101,
+        99,
+        79,
+        149,
+        110,
+        69,
+        159,
+        134
+      ],
+      "motion": {
+        "fps": 14.898510148985102,
+        "cpuPercentOneCore": 107.07912718565392,
+        "privateMiB": 850.272615131579,
+        "bytesIn": 477170,
+        "samples": 19
+      },
+      "idle": {
+        "fps": 0.19952114924181963,
+        "cpuPercentOneCore": 10.890361188085153,
+        "privateMiB": 820.64375,
+        "bytesIn": 153,
+        "samples": 5
+      }
+    },
+    {
+      "runtime": "wasm",
+      "compatibility": true,
+      "pair": 2,
+      "connectMs": 939,
+      "firstPixelMs": 2097,
+      "latencyMs": [
+        107,
+        81,
+        86,
+        126,
+        51,
+        102,
+        85,
+        51,
+        126,
+        164,
+        36,
+        53
+      ],
+      "motion": {
+        "fps": 15.289297491755772,
+        "cpuPercentOneCore": 108.96045867609178,
+        "privateMiB": 860.492578125,
+        "bytesIn": 477063,
+        "samples": 20
+      },
+      "idle": {
+        "fps": 0.1992825827022718,
+        "cpuPercentOneCore": 11.669873772835977,
+        "privateMiB": 854.440625,
+        "bytesIn": 204,
+        "samples": 5
+      }
+    },
+    {
+      "runtime": "native",
+      "compatibility": true,
+      "pair": 2,
+      "connectMs": 214,
+      "firstPixelMs": 1443,
+      "latencyMs": [
+        61,
+        83,
+        99,
+        107,
+        124,
+        103,
+        142,
+        51,
+        97,
+        79,
+        69,
+        66
+      ],
+      "motion": {
+        "fps": 15.899205039748013,
+        "cpuPercentOneCore": 76.94359241477476,
+        "privateMiB": 479.04765625,
+        "bytesIn": 479890,
+        "samples": 20
+      },
+      "idle": {
+        "fps": 0.19952114924181963,
+        "cpuPercentOneCore": 3.8888291874384695,
+        "privateMiB": 473.1359375,
+        "bytesIn": 153,
+        "samples": 5
+      }
+    },
+    {
+      "runtime": "native",
+      "compatibility": true,
+      "pair": 3,
+      "connectMs": 282,
+      "firstPixelMs": 1790,
+      "latencyMs": [
+        133,
+        81,
+        78,
+        50,
+        71,
+        113,
+        50,
+        88,
+        130,
+        81,
+        122,
+        163
+      ],
+      "motion": {
+        "fps": 16.1,
+        "cpuPercentOneCore": 73.14088508946004,
+        "privateMiB": 486.012109375,
+        "bytesIn": 478118,
+        "samples": 20
+      },
+      "idle": {
+        "fps": 0.19912385503783353,
+        "cpuPercentOneCore": 3.8907666780198813,
+        "privateMiB": 487.77265625,
+        "bytesIn": 153,
+        "samples": 5
+      }
+    },
+    {
+      "runtime": "wasm",
+      "compatibility": true,
+      "pair": 3,
+      "connectMs": 964,
+      "firstPixelMs": 2017,
+      "latencyMs": [
+        71,
+        84,
+        135,
+        79,
+        91,
+        111,
+        98,
+        73,
+        77,
+        99,
+        72,
+        143
+      ],
+      "motion": {
+        "fps": 15.088683487384461,
+        "cpuPercentOneCore": 106.78558997334211,
+        "privateMiB": 869.797697368421,
+        "bytesIn": 481237,
+        "samples": 19
+      },
+      "idle": {
+        "fps": 0.19996000799840033,
+        "cpuPercentOneCore": 10.488858486492157,
+        "privateMiB": 836.31875,
+        "bytesIn": 153,
+        "samples": 5
+      }
+    }
+  ],
+  "date": "2026-11-16",
+  "sourceCommit": "28909262a983c23aefce37c43678926c9546d7ea",
+  "freeRDP": "3.33.1",
+  "tabby": "1.0.236",
+  "client": {
+    "os": "Windows Server 2025 x64",
+    "vcpus": 6,
+    "memoryGiB": 8
+  },
+  "server": {
+    "os": "Windows Server 2022 x64",
+    "vcpus": 4,
+    "memoryGiB": 8
+  },
+  "resolution": [
+    1280,
+    800
+  ],
+  "pipeline": false,
+  "maximumOutputBatchBytes": 1048576,
+  "all48ChecksPassed": true,
+  "hashes": {
+    "wasm": "62436bbfe345d495f67b2f4ed6f083cc8dda71045086dd751d12bf0a4896aa1b",
+    "nativeExe": "4fc1ab4bee4d895e014ec23ec0f5b8893963bcbb8590b7baf1a2e5089e86b6af"
+  },
+  "aggregate": [
+    {
+      "runtime": "native",
+      "compatibility": false,
+      "medianFps": 14.8,
+      "meanCpuPercentOneCore": 57,
+      "meanPrivateMiB": 468,
+      "medianLatencyMs": 72.5,
+      "p95LatencyMs": 116
+    },
+    {
+      "runtime": "wasm",
+      "compatibility": false,
+      "medianFps": 15.3,
+      "meanCpuPercentOneCore": 83,
+      "meanPrivateMiB": 836,
+      "medianLatencyMs": 84.5,
+      "p95LatencyMs": 131
+    },
+    {
+      "runtime": "native",
+      "compatibility": true,
+      "medianFps": 15.9,
+      "meanCpuPercentOneCore": 74,
+      "meanPrivateMiB": 477,
+      "medianLatencyMs": 84.5,
+      "p95LatencyMs": 163
+    },
+    {
+      "runtime": "wasm",
+      "compatibility": true,
+      "medianFps": 15.1,
+      "meanCpuPercentOneCore": 108,
+      "meanPrivateMiB": 860,
+      "medianLatencyMs": 94.5,
+      "p95LatencyMs": 159
+    }
+  ]
+}

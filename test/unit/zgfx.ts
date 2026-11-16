@@ -54,3 +54,16 @@ test('malformed input is refused rather than read past', () => {
     // A match into an empty history.
     assert.throws(() => new ZgfxDecompressor().decompress(Uint8Array.from([0xe0, 0x24, 0x88, 0xc0, 0x05])), ZgfxError)
 })
+
+test('trace decompression refuses oversized segments and declared multipart output before allocating it', () => {
+    assert.throws(() => new ZgfxDecompressor().decompress(Uint8Array.from([0xe0, 0x04, ...new Uint8Array(65536)])), /beyond the limit/)
+    assert.throws(() => new ZgfxDecompressor().decompress(Uint8Array.from([0xe1, 1, 0, 0xff, 0xff, 0xff, 0xff])), /beyond the limit/)
+    // Literal 1 followed by a distance-one match of length 65,536, with only a few wire bytes.
+    const bits = '11001' + '10001' + '00001' + '1'.repeat(15) + '0' + '0'.repeat(16)
+    const padding = (8 - bits.length % 8) % 8
+    const padded = bits + '0'.repeat(padding)
+    const wire = [0xe0, 0x24]
+    for (let i = 0; i < padded.length; i += 8) wire.push(parseInt(padded.slice(i, i + 8), 2))
+    wire.push(padding)
+    assert.throws(() => new ZgfxDecompressor().decompress(Uint8Array.from(wire)), /beyond the limit/)
+})

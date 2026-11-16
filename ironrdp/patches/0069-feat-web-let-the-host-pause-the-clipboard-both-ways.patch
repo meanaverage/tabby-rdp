@@ -1,0 +1,509 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: meanaverage <meanaverage@users.noreply.github.com>
+Date: Sat, 31 Oct 2026 10:30:00 -0700
+Subject: [PATCH] feat(web): let the host pause the clipboard both ways
+
+A host that lets a session be watched without being controlled (a view
+only mode) had no way to keep the clipboard out of it: while the
+component had the focus, it went on reading the local clipboard and
+sending it to the server, and on writing what the server copied to the
+local clipboard.
+
+`setClipboardPaused(paused)` pauses the clipboard both ways, or resumes
+it. While paused, the local clipboard is neither read nor sent, and what
+the server copies is dropped rather than kept for later, in every
+clipboard mode; `sendClipboardData` is refused, and the initial
+clipboard request is answered with an empty clipboard. Pausing withdraws
+what this side offered (the server is sent an empty clipboard) only if
+it is still the latest there, so that a paste there gets nothing from
+here while a copy of the server's own is left alone. Resuming offers the
+local clipboard again if pausing withdrew it, and otherwise only once it
+changes, as usual; a copy the server made meanwhile isn't overwritten.
+
+Which copy is the latest is known only from what the session hands the
+component: a server copy in a format the session doesn't fetch (files
+only, say) isn't seen, and pausing then withdraws anyway.
+---
+ .../src/interfaces/UserInteraction.ts         |   7 +
+ .../src/services/PublicAPI.ts                 |   5 +
+ .../src/services/clipboard.service.ts         |  71 ++++-
+ .../src/services/clipboardPause.test.ts       | 262 ++++++++++++++++++
+ 4 files changed, 341 insertions(+), 4 deletions(-)
+ create mode 100644 web-client/iron-remote-desktop/src/services/clipboardPause.test.ts
+
+diff --git a/web-client/iron-remote-desktop/src/interfaces/UserInteraction.ts b/web-client/iron-remote-desktop/src/interfaces/UserInteraction.ts
+index afaed1b7..579c12aa 100644
+--- a/web-client/iron-remote-desktop/src/interfaces/UserInteraction.ts
++++ b/web-client/iron-remote-desktop/src/interfaces/UserInteraction.ts
+@@ -46,6 +46,13 @@ export interface UserInteraction {
+ 
+     sendClipboardData(): Promise<void>;
+ 
++    /**
++     * Pauses the clipboard both ways, or resumes it: for a session that is only watched, say. While paused, the local
++     * clipboard is neither read nor sent, and what the server copies is dropped. Pausing withdraws what this side
++     * offered, if it is still the latest on the server's clipboard; resuming offers it again.
++     */
++    setClipboardPaused(paused: boolean): Promise<void>;
++
+     invokeExtension(ext: Extension): void;
+ 
+     /**
+diff --git a/web-client/iron-remote-desktop/src/services/PublicAPI.ts b/web-client/iron-remote-desktop/src/services/PublicAPI.ts
+index 02231b15..b841bf0f 100644
+--- a/web-client/iron-remote-desktop/src/services/PublicAPI.ts
++++ b/web-client/iron-remote-desktop/src/services/PublicAPI.ts
+@@ -99,6 +99,10 @@ export class PublicAPI {
+         return await this.clipboardService.sendClipboardData();
+     }
+ 
++    private async setClipboardPaused(paused: boolean): Promise<void> {
++        return await this.clipboardService.setPaused(paused);
++    }
++
+     private invokeExtension(ext: Extension) {
+         this.remoteDesktopService.invokeExtension(ext);
+     }
+@@ -140,6 +144,7 @@ export class PublicAPI {
+             setEnableAutoClipboard: this.setEnableAutoClipboard.bind(this),
+             saveRemoteClipboardData: this.saveRemoteClipboardData.bind(this),
+             sendClipboardData: this.sendClipboardData.bind(this),
++            setClipboardPaused: this.setClipboardPaused.bind(this),
+             invokeExtension: this.invokeExtension.bind(this),
+             enableFileTransfer: this.enableFileTransfer.bind(this),
+         };
+diff --git a/web-client/iron-remote-desktop/src/services/clipboard.service.ts b/web-client/iron-remote-desktop/src/services/clipboard.service.ts
+index 65bd4cb3..c00e4df1 100644
+--- a/web-client/iron-remote-desktop/src/services/clipboard.service.ts
++++ b/web-client/iron-remote-desktop/src/services/clipboard.service.ts
+@@ -36,6 +36,13 @@ export class ClipboardService {
+     private monitorTimer?: ReturnType<typeof setTimeout>;
+     // Only the latest remote clipboard content is written once the window has the focus again.
+     private pendingFocus: (() => Promise<void> | void) | null = null;
++    // While paused (see setPaused), the clipboard goes neither way.
++    private paused: boolean = false;
++    // Whether the latest clipboard announced to the server is the one this side sent, as far as this side knows: the
++    // server's own copies are known only by the content the session fetches of them.
++    private offeredLatest: boolean = false;
++    // Whether pausing withdrew what this side had offered, which resuming offers again.
++    private withdrawn: boolean = false;
+ 
+     constructor(remoteDesktopService: RemoteDesktopService, module: RemoteDesktopModule) {
+         this.remoteDesktopService = remoteDesktopService;
+@@ -59,6 +66,37 @@ export class ClipboardService {
+         this.monitoringSuppressed = false;
+     }
+ 
++    /**
++     * Pauses the clipboard both ways, or resumes it: for a session that is only watched, say. While paused, the local
++     * clipboard is neither read nor sent, and what the server's clipboard gets is dropped, not kept for later. Pausing
++     * withdraws what this side offered the server, if it is still the latest there (the server is sent an empty
++     * clipboard), so that a paste there gets nothing from here; a copy of the server's own since then is left alone.
++     * Resuming offers the local clipboard again if pausing withdrew it, else only once it changes, as usual.
++     */
++    async setPaused(paused: boolean): Promise<void> {
++        if (paused === this.paused) {
++            return;
++        }
++        this.paused = paused;
++        if (!paused) {
++            if (this.withdrawn) {
++                this.withdrawn = false;
++                // The monitoring loop sends the local clipboard on its next turn with the focus.
++                this.lastClientClipboardItems = {};
++            }
++            return;
++        }
++        this.pendingFocus = null;
++        this.clipboardDataToSave = null;
++        this.ffClipboardDataToSave = null;
++        if (this.offeredLatest) {
++            this.offeredLatest = false;
++            this.withdrawn = true;
++            this.lastSentClipboardData = null;
++            await this.remoteDesktopService.onClipboardChangedEmpty();
++        }
++    }
++
+     /**
+      * Stops the monitoring loop and drops the clipboard write waiting for focus, until the next session starts.
+      */
+@@ -204,6 +242,9 @@ export class ClipboardService {
+     // Sends local clipboard's content to the server.
+     // Returns the result of the operation. On failure, it additionally raises an error session event.
+     async sendClipboardData(): Promise<void> {
++        if (this.paused) {
++            throwIronError('The clipboard is paused.');
++        }
+         if (this.ClipboardApiSupported !== ClipboardApiSupported.Full) {
+             return await this.ffSendClipboardData();
+         }
+@@ -241,6 +282,7 @@ export class ClipboardService {
+ 
+         if (!clipboardData.isEmpty()) {
+             this.lastSentClipboardData = clipboardData;
++            this.offeredLatest = true;
+             await this.remoteDesktopService.onClipboardChanged(clipboardData);
+         }
+     }
+@@ -329,9 +371,13 @@ export class ClipboardService {
+             if (this.disposed) {
+                 return;
+             }
+-            if (this.lastSentClipboardData) {
++            if (this.lastSentClipboardData && !this.paused) {
++                this.offeredLatest = true;
+                 await this.remoteDesktopService.onClipboardChanged(this.lastSentClipboardData);
+             } else {
++                // Paused: what was last sent is offered again on resuming.
++                this.withdrawn ||= this.paused && this.lastSentClipboardData !== null;
++                this.offeredLatest = false;
+                 await this.remoteDesktopService.onClipboardChangedEmpty();
+             }
+         } catch (err) {
+@@ -339,15 +385,26 @@ export class ClipboardService {
+         }
+     }
+ 
++    // The server copied something of its own: the latest there is no longer this side's, and nothing of this side's is
++    // to be offered again on resuming. True when the copy is to be dropped: while paused.
++    private serverCopied(): boolean {
++        this.offeredLatest = false;
++        this.withdrawn = false;
++        return this.paused;
++    }
++
+     // This callback is required to update client clipboard state when remote side has changed.
+     private onRemoteClipboardChangedManualMode(data: ClipboardData) {
++        if (this.serverCopied()) {
++            return;
++        }
+         this.clipboardDataToSave = data;
+         this.remoteDesktopService.emitClipboardRemoteUpdateEvent();
+     }
+ 
+     // This callback is required to update client clipboard state when remote side has changed.
+     private onRemoteClipboardChangedAutoMode(data: ClipboardData) {
+-        if (this.disposed) {
++        if (this.serverCopied() || this.disposed) {
+             return;
+         }
+         try {
+@@ -366,7 +423,7 @@ export class ClipboardService {
+     private async onMonitorClipboard(): Promise<void> {
+         let stopped = false;
+         try {
+-            if (this.disposed || !this.monitoringActive || this.monitoringSuppressed) {
++            if (this.disposed || !this.monitoringActive || this.monitoringSuppressed || this.paused) {
+                 return;
+             }
+ 
+@@ -435,12 +492,13 @@ export class ClipboardService {
+             }
+ 
+             // Clipboard has changed, we need to acknowledge remote side about it (unless the session ended, monitoring
+-            // was suppressed or another session took the focus while reading it).
++            // was suppressed or paused, or another session took the focus while reading it).
+             if (
+                 !sameValue &&
+                 !this.disposed &&
+                 this.monitoringActive &&
+                 !this.monitoringSuppressed &&
++                !this.paused &&
+                 this.isFocused()
+             ) {
+                 this.lastClientClipboardItems = values;
+@@ -463,6 +521,7 @@ export class ClipboardService {
+ 
+                 if (!clipboardData.isEmpty()) {
+                     this.lastSentClipboardData = clipboardData;
++                    this.offeredLatest = true;
+                     await this.remoteDesktopService.onClipboardChanged(clipboardData);
+                 }
+             }
+@@ -518,6 +577,9 @@ export class ClipboardService {
+     // Firefox specific function.
+     // This callback is required to update client clipboard state when remote side has changed.
+     private ffOnRemoteClipboardChanged(data: ClipboardData) {
++        if (this.serverCopied()) {
++            return;
++        }
+         const value = this.ffRetrieveTextData(data);
+         // Non-text clipboard data is ignored.
+         if (value === '') return;
+@@ -566,6 +628,7 @@ export class ClipboardService {
+ 
+         if (!clipboardData.isEmpty()) {
+             this.lastSentClipboardData = clipboardData;
++            this.offeredLatest = true;
+             await this.remoteDesktopService.onClipboardChanged(clipboardData);
+         }
+     }
+diff --git a/web-client/iron-remote-desktop/src/services/clipboardPause.test.ts b/web-client/iron-remote-desktop/src/services/clipboardPause.test.ts
+new file mode 100644
+index 00000000..62ae4156
+--- /dev/null
++++ b/web-client/iron-remote-desktop/src/services/clipboardPause.test.ts
+@@ -0,0 +1,262 @@
++import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
++import { RemoteDesktopService } from './remote-desktop.service';
++import { ClipboardService } from './clipboard.service';
++import type { RemoteDesktopModule } from '../interfaces/RemoteDesktopModule';
++import type { ClipboardData } from '../interfaces/ClipboardData';
++
++/**
++ * A paused clipboard (a session that is only watched) goes neither way: the local clipboard isn't read or sent, and
++ * what the server copies is dropped. Pausing withdraws what this side offered, unless the server copied something of
++ * its own since; resuming offers it again.
++ */
++
++function textData(text: string): ClipboardData {
++    return {
++        items: () => [{ mimeType: () => 'text/plain', value: () => text }],
++        isEmpty: () => false,
++    } as unknown as ClipboardData;
++}
++
++// The session's ClipboardData, keeping the text it is given so that a test can tell what was sent.
++class SentData {
++    text = '';
++    addText(_kind: string, text: string) {
++        this.text = text;
++    }
++    addBinary() {}
++    isEmpty() {
++        return this.text === '';
++    }
++}
++
++const module = { ClipboardData: SentData } as unknown as RemoteDesktopModule;
++
++describe('paused clipboard', () => {
++    let local: string;
++    let written: string[];
++    let reads: ReturnType<typeof vi.fn>;
++    // What the session was handed for the server: the text of each clipboard sent, '' for an empty one.
++    let sent: string[];
++
++    async function started(): Promise<{ service: RemoteDesktopService; clipboard: ClipboardService }> {
++        const service = new RemoteDesktopService(module);
++        vi.spyOn(service, 'onClipboardChanged').mockImplementation(async (data) => {
++            sent.push((data as unknown as SentData).text);
++        });
++        vi.spyOn(service, 'onClipboardChangedEmpty').mockImplementation(async () => {
++            sent.push('');
++        });
++        const clipboard = new ClipboardService(service, module);
++        await clipboard.initClipboard();
++        service.sessionStartedObservable.publish(null);
++        return { service, clipboard };
++    }
++
++    // What the service hands a clipboard update from the server to (the auto-mode callback ClipboardService installed).
++    function remoteCopies(service: RemoteDesktopService, text: string) {
++        (service as unknown as { onRemoteClipboardChanged: (data: ClipboardData) => void }).onRemoteClipboardChanged(
++            textData(text),
++        );
++    }
++
++    // The server asking for the client's clipboard as the channel starts.
++    function forceUpdate(service: RemoteDesktopService): Promise<void> {
++        return (service as unknown as { onForceClipboardUpdate: () => Promise<void> }).onForceClipboardUpdate();
++    }
++
++    // Turns of the monitoring loop (100 ms each) and the clipboard reads and writes they wait for; timers are fake.
++    const turns = (n = 3) => vi.advanceTimersByTimeAsync(100 * n + 1);
++
++    beforeEach(() => {
++        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
++        local = '';
++        written = [];
++        sent = [];
++        reads = vi.fn(async () =>
++            local === '' ? [] : [{ types: ['text/plain'], getType: async () => ({ text: async () => local }) }],
++        );
++        vi.spyOn(document, 'hasFocus').mockImplementation(() => true);
++        vi.stubGlobal('isSecureContext', true);
++        // jsdom's Blob can't be read back; the service only wraps the text in one.
++        vi.stubGlobal(
++            'Blob',
++            class {
++                constructor(readonly parts: string[]) {}
++            },
++        );
++        vi.stubGlobal(
++            'ClipboardItem',
++            class {
++                constructor(readonly items: Record<string, { parts: string[] }>) {}
++            },
++        );
++        vi.stubGlobal('navigator', {
++            ...navigator,
++            clipboard: {
++                read: reads,
++                write: vi.fn(async ([item]: [{ items: Record<string, { parts: string[] }> }]) => {
++                    written.push(item.items['text/plain'].parts[0]);
++                }),
++                readText: vi.fn(),
++                writeText: vi.fn(),
++            },
++            permissions: { query: vi.fn(async () => ({ state: 'granted' })) },
++        });
++    });
++
++    afterEach(() => {
++        vi.useRealTimers();
++        vi.restoreAllMocks();
++        vi.unstubAllGlobals();
++    });
++
++    it('neither reads the local clipboard nor sends it while paused', async () => {
++        const { clipboard } = await started();
++        await clipboard.setPaused(true);
++        local = 'copied here';
++        reads.mockClear();
++        await turns(5);
++
++        expect(reads).not.toHaveBeenCalled();
++        expect(sent).toEqual([]);
++        clipboard.dispose();
++    });
++
++    it("drops the server's copies while paused, and doesn't write them once resumed", async () => {
++        const { service, clipboard } = await started();
++        await clipboard.setPaused(true);
++        remoteCopies(service, 'copied there');
++        await turns();
++        expect(written).toEqual([]);
++
++        await clipboard.setPaused(false);
++        clipboard.flushFocused();
++        await turns();
++        expect(written).toEqual([]);
++        clipboard.dispose();
++    });
++
++    it("drops a server's copy that was waiting for the focus when pausing", async () => {
++        const { service, clipboard } = await started();
++        vi.mocked(document.hasFocus).mockImplementation(() => false);
++        remoteCopies(service, 'waiting');
++        await clipboard.setPaused(true);
++        vi.mocked(document.hasFocus).mockImplementation(() => true);
++        await clipboard.setPaused(false);
++        clipboard.flushFocused();
++        await turns();
++
++        expect(written).toEqual([]);
++        clipboard.dispose();
++    });
++
++    it('withdraws what this side offered, and offers it again on resuming', async () => {
++        const { clipboard } = await started();
++        local = 'secret';
++        await turns();
++        expect(sent).toEqual(['secret']);
++
++        await clipboard.setPaused(true);
++        expect(sent).toEqual(['secret', '']);
++
++        // Unchanged here meanwhile, it is offered again all the same: pausing took it back.
++        await clipboard.setPaused(false);
++        await turns();
++        expect(sent).toEqual(['secret', '', 'secret']);
++        clipboard.dispose();
++    });
++
++    it("leaves the server's own copy alone, and offers nothing new on resuming", async () => {
++        const { service, clipboard } = await started();
++        local = 'mine';
++        await turns();
++        remoteCopies(service, 'theirs');
++        await turns();
++        expect(written).toEqual(['theirs']);
++        // Here it is the server's copy now, which the monitoring loop doesn't send back.
++        local = 'theirs';
++        await turns();
++
++        await clipboard.setPaused(true);
++        await clipboard.setPaused(false);
++        await turns();
++        expect(sent).toEqual(['mine']);
++        clipboard.dispose();
++    });
++
++    it("doesn't offer this side's clipboard again over a copy the server made while paused", async () => {
++        const { service, clipboard } = await started();
++        local = 'mine';
++        await turns();
++        await clipboard.setPaused(true);
++        remoteCopies(service, 'theirs');
++        await clipboard.setPaused(false);
++        await turns();
++
++        expect(sent).toEqual(['mine', '']);
++        expect(written).toEqual([]);
++        clipboard.dispose();
++    });
++
++    it('sends copies made here while paused once resumed, as it does after the focus comes back', async () => {
++        const { service, clipboard } = await started();
++        remoteCopies(service, 'theirs');
++        await turns();
++        local = 'theirs';
++        await turns();
++        await clipboard.setPaused(true);
++        local = 'copied while watching';
++        await turns();
++        expect(sent).toEqual([]);
++
++        await clipboard.setPaused(false);
++        await turns();
++        expect(sent).toEqual(['copied while watching']);
++        clipboard.dispose();
++    });
++
++    it('answers the initial clipboard request with an empty one while paused', async () => {
++        const { service, clipboard } = await started();
++        local = 'secret';
++        await turns();
++        await clipboard.setPaused(true);
++        await forceUpdate(service);
++        expect(sent).toEqual(['secret', '', '']);
++
++        // Not paused, the last clipboard sent goes as usual.
++        await clipboard.setPaused(false);
++        await turns();
++        await forceUpdate(service);
++        expect(sent).toEqual(['secret', '', '', 'secret', 'secret']);
++        clipboard.dispose();
++    });
++
++    it('answers the initial clipboard request with an empty one while paused when nothing was withdrawn', async () => {
++        const { service, clipboard } = await started();
++        local = 'mine';
++        await turns();
++        remoteCopies(service, 'theirs');
++        await clipboard.setPaused(true);
++        await forceUpdate(service);
++        expect(sent).toEqual(['mine', '']);
++
++        // What the request would have got is offered on resuming.
++        await clipboard.setPaused(false);
++        await turns();
++        expect(sent).toEqual(['mine', '', 'mine']);
++        clipboard.dispose();
++    });
++
++    it('refuses to send the clipboard on request while paused', async () => {
++        const { clipboard } = await started();
++        local = 'secret';
++        await clipboard.setPaused(true);
++        await expect(clipboard.sendClipboardData()).rejects.toMatchObject({ backtrace: expect.any(Function) });
++        expect(sent).toEqual([]);
++
++        await clipboard.setPaused(false);
++        await clipboard.sendClipboardData();
++        expect(sent).toEqual(['secret']);
++        clipboard.dispose();
++    });
++});

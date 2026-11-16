@@ -2,7 +2,25 @@
 
 ## 0.6.3 (unreleased)
 
+**Fixed**
+- Bring the retained IronRDP patch series into line with final upstream drive-name, dynamic-channel, audio-training, clipboard-lifecycle and licensing-diagnostic corrections without changing the 0.6.x IronRDP base.
+
 **Changed**
+- Carry the view-only clipboard fix from #155 into the portable-client branch, including uploads that finish reading after view only starts.
+- Remove obsolete committed native FreeRDP binaries; native comparison builds remain available from CI and the build scripts.
+- Bound WebAssembly socket uploads and stop workers when their owner or input disappears. Match file clipboard acknowledgements to their offers and fail unavailable channels promptly.
+- Require an independent FreeRDP WASM rebuild and protocol checks before release staging. Preserve server audio volume before playback and apply separate logarithmic channel gains in IronRDP.
+- Include the pending dependency updates: Angular 22.2.4, Playwright 1.65.0 and WebSocket transport library `ws` 8.22.1.
+
+**Added**
+- File and folder clipboard transfers with FreeRDP: paste copied files into the remote desktop, drop files onto it, and save files copied remotely through the existing download notification. Transfers respect clipboard direction and view-only settings.
+- Ship FreeRDP as a portable WebAssembly client in the plugin package. Existing FreeRDP choices use it on reconnect; IronRDP remains the default. Separate native FreeRDP packages are no longer required.
+
+**Fixed**
+- FreeRDP shutdown uses Node timers explicitly, avoiding a cleanup exception when Electron provides browser timers.
+
+**Changed**
+- Update FreeRDP to 3.33.1. The WebAssembly build uses Emscripten 6.0.12 and LibreSSL 4.3.3.
 - Start the next development version from stable 0.6.2.
 
 ## 0.6.2

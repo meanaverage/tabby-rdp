@@ -27,6 +27,7 @@
   "files": [
     "dist",
     "!dist/**/*.map",
+    "wasm",
     "vendor",
     "bin",
     "remote",
@@ -57,14 +58,16 @@
     "test:visual": "npm run build && tsx test/run.ts --hidden visual-host",
     "test:qa": "node --test scripts/qa/*.test.mjs",
     "qa:baseline": "node scripts/qa/baseline.mjs",
-    "pack:release": "node scripts/pack.mjs"
+    "pack:release": "node scripts/pack.mjs",
+    "build:freerdp:wasm": "node scripts/build-freerdp-wasm.mjs"
   },
   "dependencies": {
-    "semver": "7.8.6"
+    "semver": "7.8.6",
+    "ws": "8.22.1"
   },
   "devDependencies": {
-    "@angular/core": "22.2.3",
-    "@playwright/test": "1.64.1",
+    "@angular/core": "22.2.4",
+    "@playwright/test": "1.65.0",
     "@types/node": "^26.6.5",
     "@types/semver": "^7.8.0",
     "@typescript/typescript6": "6.0.2",
@@ -73,19 +76,11 @@
     "tabby-settings": "1.0.231-nightly.0",
     "tabby-terminal": "1.0.231-nightly.0",
     "tsx": "^4.23.15",
-    "typescript": "~7.0.2",
-    "ws": "8.22.0"
+    "typescript": "~7.0.2"
   },
   "tabbyRdp": {
     "minimumTabbyVersion": "1.0.236",
     "rollbackFloor": "0.5.3",
-    "packageFormat": 5,
-    "freerdpPlatforms": [
-      "darwin-arm64",
-      "linux-arm64",
-      "linux-x64",
-      "win32-arm64",
-      "win32-x64"
-    ]
+    "packageFormat": 6
   }
 }

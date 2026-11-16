@@ -52,6 +52,9 @@ jobs:
           grep -q 'dist/index.js' plugin.txt
           grep -q 'vendor/iron-remote-desktop-rdp.js' plugin.txt
           grep -q 'vendor/ironrdp_web_bg.wasm' plugin.txt
+          grep -q 'wasm/freerdp/tabby-freerdp.wasm' plugin.txt
+          grep -q 'wasm/freerdp/tabby-freerdp.js' plugin.txt
+          grep -q 'wasm/freerdp/BUILD.json' plugin.txt
           grep -q 'remote/trd-pty.py' plugin.txt
           grep -q 'bin/SHA256SUMS' plugin.txt
           for platform in darwin-arm64 darwin-x64 linux-arm linux-arm64 linux-x64; do grep -q "bin/$platform/tabby-rdp-proxy" plugin.txt; done
@@ -61,9 +64,9 @@ jobs:
           if grep -qE ' (src|test|testbed|ironrdp)/' plugin.txt; then exit 1; fi
           # The troubleshooting page links this one packaged guide; other documentation stays out.
           awk '/ docs\// && !/ docs\/desk\.md[[:space:]]*$/ { bad = 1 } END { exit bad }' plugin.txt
-          # No native code in the plugin's package: the FreeRDP helper is in a package per platform.
+          # The portable FreeRDP core is bundled as WebAssembly; native comparison binaries stay out.
           if grep -q ' native/bin/' plugin.txt; then exit 1; fi
-          for platform in $(node -p "require('./package.json').tabbyRdp.freerdpPlatforms.join(' ')"); do
+          for platform in $(node --input-type=module -e "import { freeRDPPlatforms } from './scripts/package-metadata.mjs'; import fs from 'node:fs'; console.log(freeRDPPlatforms(JSON.parse(fs.readFileSync('package.json'))).join(' '))"); do
             awk -v name="@tabby-rdp/freerdp-$platform@" '/^# / { this = (index($2, name) == 1) } this' pack.txt | grep -qE '^ tabby-freerdp(\.exe)?$'
           done
       - name: The packages hold the commit's files
@@ -77,8 +80,7 @@ jobs:
             node scripts/check-vendor.mjs package "$package" HEAD
           done
       - name: Plugin build for PR testing
-        # The plugin's package and every platform's FreeRDP package: install the plugin's together with the one for
-        # the computer (CONTRIBUTING.md, "Releasing").
+        # Install the plugin tarball directly (CONTRIBUTING.md, "Releasing").
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: tabby-rdp-test-package

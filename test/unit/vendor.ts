@@ -559,7 +559,7 @@ test('format 1 (0.5.5): runtime publication excludes development tools and prese
     assert.ok(verify(contents.map(([name, data]) => [name, name === 'npm-shrinkwrap.json' ? JSON.stringify(altered) : data])).length,
         'a changed runtime dependency must fail publication')
     assert.throws(() => runtimeMetadata(manifest, { ...lock, version: '9.9.9' }), /disagree/)
-    assert.throws(() => runtimeMetadata({ ...manifest, tabbyRdp: { packageFormat: 6 } }, lock), /packageFormat/)
+    assert.throws(() => runtimeMetadata({ ...manifest, tabbyRdp: { packageFormat: 7 } }, lock), /packageFormat/)
 })
 
 test('format 3: as format 2, and package.json publishes its test script, the only script it publishes', () => {
@@ -736,4 +736,14 @@ test('format 5: the plugin carries only the seven executable network helpers ver
     assert.match(checkPackage(dir, pack(good, false), { revision: 'HEAD' }).problems.join('\n'), /not executable/)
     assert.match(checkPackage(dir, pack({ ...good, 'bin/other': 'x' }), { revision: 'HEAD' }).problems.join('\n'), /unexpected file in bin/)
     assert.match(checkPackage(dir, pack(good), { revision: 'HEAD', helpersSha256: '0'.repeat(64) }).problems.join('\n'), /differs from an independent helper build/)
+})
+
+test('format 6 embeds FreeRDP and publishes no optional platform dependencies', () => {
+    const manifest = { ...FORMAT_4, tabbyRdp: { packageFormat: 6 } }
+    const published = JSON.parse(runtimeMetadata(manifest, FORMAT_4_LOCK)['package.json'].toString())
+    assert.equal(published.optionalDependencies, undefined)
+    assert.equal(published.devDependencies, undefined)
+    assert.deepEqual(published.dependencies, FORMAT_4.dependencies)
+    assert.throws(() => runtimeMetadata({ ...manifest, tabbyRdp: { ...manifest.tabbyRdp, freerdpPlatforms: ['win32-x64'] } }, FORMAT_4_LOCK), /freerdpPlatforms/)
+    assert.throws(() => runtimeMetadata({ ...manifest, optionalDependencies: {} }, FORMAT_4_LOCK), /optional/)
 })

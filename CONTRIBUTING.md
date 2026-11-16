@@ -122,7 +122,7 @@ minor version (see the milestones).
 shrinkwrap, so `package.json` alone decides what a user's npm installs. Packing refuses a runtime dependency that isn't
 an exact version, isn't what the lock installs, or has dependencies of its own (whose ranges would float), and anything
 else the lock would install at run time. The committed `package-lock.json` locks development and runtime dependencies
-for `npm ci`; npm never publishes it. Build with Node 22.22.3 or newer on the Node 22 line (CI uses Node 22). Angular 22.2.3 is a development dependency used for type checking;
+for `npm ci`; npm never publishes it. Build with Node 22.22.3 or newer on the Node 22 line (CI uses Node 22). Angular 22.2.4 is a development dependency used for type checking;
 Tabby supplies Angular at runtime. The plugin uses TypeScript compilation, not Angular template compilation. TypeScript 7 provides the build CLI;
 `@typescript/typescript6` provides the compiler API used by the IronRDP factory-generation tool. Both are development
 dependencies. Build scripts invoke the TypeScript 7 entry point explicitly because the compatibility package's
@@ -142,15 +142,11 @@ a reviewed change, run `npm ci --ignore-scripts`, build, and check the packed pa
 architectures. `scripts/build-helper.mjs --all` uses the pinned Go toolchain and records every binary in
 `bin/SHA256SUMS`. The release workflow builds them on Linux and independently on macOS; the package check compares
 their lists byte for byte. Before approving an npm stage, rebuild the helpers from the release tag and compare its
-`bin/SHA256SUMS` to the staged package. The FreeRDP helper is published in a package per
-platform, `@tabby-rdp/freerdp-<platform>` (`linux-x64`, say), made from the committed `native/bin/<platform>` for each
-platform in `tabbyRdp.freerdpPlatforms`. The published `package.json` names each one as an optional dependency at the
-plugin's own version, so npm installs only the one for the computer, along with the plugin. The committed `package.json`
-names none, so the lock never has to resolve packages that are published with the release (package format 5,
-`scripts/package-metadata.mjs`). `pack:release` makes all of them: the plugin's package first, then one per platform. To
-try an unreleased build, install the plugin's package together with the one for the computer, in Tabby's plugin folder:
-`npm install ./tabby-rdp-<version>.tgz ./tabby-rdp-freerdp-<platform>-<version>.tgz`. On its own, the plugin's package
-installs without the helper, since npm finds no such version on the registry; FreeRDP then reports the helper missing.
+`bin/SHA256SUMS` to the staged package. FreeRDP WebAssembly is included in the plugin package, with its source manifest, artifact hashes and licenses
+under `wasm/freerdp/`. Package format 6 publishes only `tabby-rdp`; it adds no optional native FreeRDP dependencies.
+`pack:release` produces one tarball. Install it in Tabby's plugin folder with `npm install ./tabby-rdp-<version>.tgz`.
+Native FreeRDP builds remain in the source tree for comparison tests; they are not part of this release's packages.
+The metadata/checking tools retain support for older package formats so historical releases can still be verified.
 
 **Version metadata.** Keep `package.json` and the root entries in `package-lock.json` on the same version. The
 `tabbyRdp.minimumTabbyVersion` and `tabbyRdp.rollbackFloor` fields let release controls check compatibility and data
@@ -167,15 +163,12 @@ authentication). The workflow publishes `vendor/` as committed in the tagged com
 series and found it identical and the patched crates' tests have passed (`ironrdp.yml`; without that, the package
 isn't staged, nor the GitHub release created). So run `npm run build:ironrdp` on an Apple Silicon Mac and commit its
 output, `vendor/SHA256SUMS` included, before tagging if the patches changed (it needs the network: it checks the base
-commit against IronRDP's history, even with IronRDP and the tools already there). The package is built in a job of its
+commit against IronRDP's history, even with IronRDP and the tools already there). FreeRDP WASM is also independently rebuilt and compared byte for byte, with protocol tests required by `freerdp.yml`. The package is built in a job of its
 own, which reports the package's SHA-256; the job that stages it takes the package by that hash (any job of the run
 can replace an artifact, the IronRDP jobs with their many builds and tests included), and checks it against the tagged
 commit: `vendor/` as the commit's `vendor/SHA256SUMS` lists it, the two runtime metadata files as deterministically
 derived from the committed sources, every other file but `dist/` as committed, and nothing more. `dist/` is as the
-package job built it: nothing in the workflow checks it against another build. The FreeRDP packages go the same way,
-each taken by its hash and checked against the tag (`native/bin/<platform>` as committed, the README and license, and
-`package.json` as derived from the committed one). They are staged before the plugin, and a failure leaves the plugin
-unstaged. Approve them before the plugin: until they are live, an installation of the plugin goes without its helper.
+package job built it: nothing in the workflow checks it against another build.
 
 That check runs in the job that publishes, which can't vouch for itself (its Node.js and npm are whatever their download
 served for 26.8.2), and a package's own `vendor/SHA256SUMS` can't vouch for the package. So before approving, check the
@@ -189,9 +182,7 @@ git worktree add /tmp/tabby-rdp-v<version> v<version>     # the tag, built here:
 node scripts/check-vendor.mjs package tabby-rdp-<version>-<stage-id>.tgz --same-as /tmp/tabby-rdp-v<version>/tabby-rdp-<version>.tgz
 ```
 
-Check each staged FreeRDP package the same way, against the one your build of the tag made
-(`/tmp/tabby-rdp-v<version>/tabby-rdp-freerdp-<platform>-<version>.tgz`). Nothing in those is built, so the check
-against the tag alone covers every file; `--same-as` adds nothing but costs nothing either.
+
 
 The workflow creates a GitHub draft; preview versions also carry the prerelease flag and cannot become latest.
 After npm approval, verify the published version and its dist-tag, remove the draft's unpublished notice, check
@@ -212,19 +203,6 @@ owner/user `meanaverage`, repository `tabby-rdp`, workflow filename `publish.yml
 directly" unchecked: the workflow only stages. After a first release that way, **Settings › Publishing access** can be
 set to require two-factor authentication and disallow tokens.
 
-Trusted publishing can only be set up for a package that exists, so a new FreeRDP package (a new platform, or all of
-them the first time) has its first version published by hand, before the tag is pushed. The packages belong to the npm
-organization `tabby-rdp`, which a maintainer creates once (npmjs.com, **Add Organization**, free for public packages).
-From your build of the release commit, check each new package against the commit, then publish it with two-factor
-authentication; its `package.json` makes it public. Then set up its trusted publishing as above:
-
-```sh
-node scripts/check-vendor.mjs package tabby-rdp-freerdp-<platform>-<version>.tgz HEAD
-npm publish tabby-rdp-freerdp-<platform>-<version>.tgz --tag beta    # latest for a stable version
-```
-
-A version published by hand has no provenance. When the workflow finds a FreeRDP package's version already on npm, it
-downloads it and checks it against the tag instead of staging it; if that check fails, nothing is staged.
 
 ## Actions
 

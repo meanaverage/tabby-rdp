@@ -59,6 +59,7 @@ function ironrdp (connect: (config: string[]) => Promise<any>) {
             provider.onUploadFinished = () => { }
         },
         setEnableClipboard () { },
+        async setClipboardPaused () { },
         setVisibility () { },
         configBuilder () {
             const config: string[] = []
@@ -102,6 +103,7 @@ function session (svc: any, pane: object, onReady: () => void) {
         h264: null,
         disposed: new Promise<void>(() => { }),
         host: { replaceChildren: () => onReady() },
+        pauseClipboard () { },
         overlay: { addEventListener () { }, removeEventListener () { }, classList: { remove () { } }, getBoundingClientRect: () => ({ width: 1280, height: 800 }) },
         status () { },
         proxy: { url: 'ws://127.0.0.1:50000/0123456789abcdef', token: '0123456789abcdef', failure: null, stats: { bytesIn: 0, bytesOut: 0 }, close () { } },

@@ -1,0 +1,764 @@
+From fbcfe6d09e059fcde9737fb84feecfdceec33ca5 Mon Sep 17 00:00:00 2001
+From: meanaverage <18336095+meanaverage@users.noreply.github.com>
+Date: Mon, 16 Nov 2026 12:24:38 -0800
+Subject: [PATCH] fix(pdu): align licensing diagnostics with upstream review
+
+Backport final Devolutions/IronRDP#2344 (5c4dcfa7b1160a64ec0578f71c947b3bce5982ef): shared byte-length redaction, allocation-free certificate list formatting, field invariants and complete Debug snapshots. Include both outgoing license requests at debug level.
+---
+ .../ironrdp-connector/src/license_exchange.rs |   4 +-
+ .../rdp/server_license/client_license_info.rs |   8 +-
+ .../client_new_license_request/mod.rs         |  13 +-
+ .../client_platform_challenge_response/mod.rs |  10 +-
+ .../ironrdp-pdu/src/rdp/server_license/mod.rs |  21 +-
+ .../server_license_request/cert.rs            |  24 +-
+ .../server_license_request/mod.rs             |   7 +-
+ .../server_platform_challenge/mod.rs          |   8 +-
+ .../server_upgrade_license/mod.rs             |   9 +-
+ .../src/rdp/server_license/tests.rs           | 335 ++++++++++++++----
+ 10 files changed, 335 insertions(+), 104 deletions(-)
+
+diff --git a/crates/ironrdp-connector/src/license_exchange.rs b/crates/ironrdp-connector/src/license_exchange.rs
+index 226d091..23bda22 100644
+--- a/crates/ironrdp-connector/src/license_exchange.rs
++++ b/crates/ironrdp-connector/src/license_exchange.rs
+@@ -177,7 +177,7 @@ impl Sequence for LicenseExchangeSequence {
+                             ) {
+                                 Ok((client_license_info, encryption_data)) => {
+                                     trace!(?encryption_data, "Successfully generated Client License Info");
+-                                    trace!(message = ?client_license_info, "Send");
++                                    debug!(message = ?client_license_info, "Send");
+ 
+                                     let written = encode_send_data_request::<LicensePdu>(
+                                         send_data_indication_ctx.initiator_id,
+@@ -208,7 +208,7 @@ impl Sequence for LicenseExchangeSequence {
+                             ) {
+                                 Ok((new_license_request, encryption_data)) => {
+                                     trace!(?encryption_data, "Successfully generated Client New License Request");
+-                                    trace!(message = ?new_license_request, "Send");
++                                    debug!(message = ?new_license_request, "Send");
+ 
+                                     let written = encode_send_data_request::<LicensePdu>(
+                                         send_data_indication_ctx.initiator_id,
+diff --git a/crates/ironrdp-pdu/src/rdp/server_license/client_license_info.rs b/crates/ironrdp-pdu/src/rdp/server_license/client_license_info.rs
+index ad1245f..a4b6887 100644
+--- a/crates/ironrdp-pdu/src/rdp/server_license/client_license_info.rs
++++ b/crates/ironrdp-pdu/src/rdp/server_license/client_license_info.rs
+@@ -10,13 +10,12 @@ use md5::Digest as _;
+ use crate::crypto::rc4::Rc4;
+ use crate::crypto::rsa::encrypt_with_public_key;
+ use crate::rdp::headers::{BasicSecurityHeader, BasicSecurityHeaderFlags};
+-use crate::rdp::server_license::Withheld;
+ use crate::rdp::server_license::client_new_license_request::{compute_master_secret, compute_session_key_blob};
+ use crate::rdp::server_license::client_platform_challenge_response::CLIENT_HARDWARE_IDENTIFICATION_SIZE;
+ use crate::rdp::server_license::{
+     BlobHeader, BlobType, KEY_EXCHANGE_ALGORITHM_RSA, LicenseEncryptionData, LicenseHeader, MAC_SIZE, PLATFORM_ID,
+     PREAMBLE_SIZE, PreambleFlags, PreambleType, PreambleVersion, RANDOM_NUMBER_SIZE, ServerLicenseError,
+-    ServerLicenseRequest, compute_mac_data,
++    ServerLicenseRequest, Withheld, compute_mac_data,
+ };
+ 
+ const LICENSE_INFO_STATIC_FIELDS_SIZE: usize = 20;
+@@ -28,10 +27,15 @@ const LICENSE_INFO_STATIC_FIELDS_SIZE: usize = 20;
+ #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
+ pub struct ClientLicenseInfo {
+     pub license_header: LicenseHeader,
++    /// INVARIANT: `Debug` output withholds this field.
+     pub client_random: Vec<u8>,
++    /// INVARIANT: `Debug` output withholds this field.
+     pub encrypted_premaster_secret: Vec<u8>,
++    /// INVARIANT: `Debug` output withholds this field.
+     pub license_info: Vec<u8>,
++    /// INVARIANT: `Debug` output withholds this field.
+     pub encrypted_hwid: Vec<u8>,
++    /// INVARIANT: `Debug` output withholds this field.
+     pub mac_data: Vec<u8>,
+ }
+ 
+diff --git a/crates/ironrdp-pdu/src/rdp/server_license/client_new_license_request/mod.rs b/crates/ironrdp-pdu/src/rdp/server_license/client_new_license_request/mod.rs
+index 35ae3b0..9f0b0d4 100644
+--- a/crates/ironrdp-pdu/src/rdp/server_license/client_new_license_request/mod.rs
++++ b/crates/ironrdp-pdu/src/rdp/server_license/client_new_license_request/mod.rs
+@@ -1,7 +1,7 @@
+-use core::fmt;
+ #[cfg(test)]
+ mod tests;
+ 
++use core::fmt;
+ use std::io;
+ 
+ use bitflags::bitflags;
+@@ -14,10 +14,9 @@ use sha1::Digest as _;
+ use super::{
+     BasicSecurityHeader, BasicSecurityHeaderFlags, BlobHeader, BlobType, KEY_EXCHANGE_ALGORITHM_RSA,
+     LicenseEncryptionData, LicenseHeader, PREAMBLE_SIZE, PreambleFlags, PreambleType, PreambleVersion,
+-    RANDOM_NUMBER_SIZE, ServerLicenseError, ServerLicenseRequest, UTF8_NULL_TERMINATOR_SIZE,
++    RANDOM_NUMBER_SIZE, ServerLicenseError, ServerLicenseRequest, UTF8_NULL_TERMINATOR_SIZE, Withheld,
+ };
+ use crate::crypto::rsa::encrypt_with_public_key;
+-use crate::rdp::server_license::{Withheld, WithheldText};
+ use crate::utils::{self, CharacterSet};
+ 
+ const LICENSE_REQUEST_STATIC_FIELDS_SIZE: usize = 20;
+@@ -51,9 +50,13 @@ bitflags! {
+ #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
+ pub struct ClientNewLicenseRequest {
+     pub license_header: LicenseHeader,
++    /// INVARIANT: `Debug` output withholds this field.
+     pub client_random: Vec<u8>,
++    /// INVARIANT: `Debug` output withholds this field.
+     pub encrypted_premaster_secret: Vec<u8>,
++    /// INVARIANT: `Debug` output withholds this field.
+     pub client_username: String,
++    /// INVARIANT: `Debug` output withholds this field.
+     pub client_machine_name: String,
+ }
+ 
+@@ -264,8 +267,8 @@ impl fmt::Debug for ClientNewLicenseRequest {
+                 "encrypted_premaster_secret",
+                 &Withheld(&self.encrypted_premaster_secret),
+             )
+-            .field("client_username", &WithheldText(&self.client_username))
+-            .field("client_machine_name", &WithheldText(&self.client_machine_name))
++            .field("client_username", &Withheld(self.client_username.as_bytes()))
++            .field("client_machine_name", &Withheld(self.client_machine_name.as_bytes()))
+             .finish()
+     }
+ }
+diff --git a/crates/ironrdp-pdu/src/rdp/server_license/client_platform_challenge_response/mod.rs b/crates/ironrdp-pdu/src/rdp/server_license/client_platform_challenge_response/mod.rs
+index 4462234..e6c7793 100644
+--- a/crates/ironrdp-pdu/src/rdp/server_license/client_platform_challenge_response/mod.rs
++++ b/crates/ironrdp-pdu/src/rdp/server_license/client_platform_challenge_response/mod.rs
+@@ -1,7 +1,7 @@
+-use core::fmt;
+ #[cfg(test)]
+ mod test;
+ 
++use core::fmt;
+ use std::io::Write as _;
+ 
+ use byteorder::{LittleEndian, WriteBytesExt as _};
+@@ -15,10 +15,9 @@ use num_traits::FromPrimitive as _;
+ use super::{
+     BLOB_LENGTH_SIZE, BLOB_TYPE_SIZE, BasicSecurityHeader, BasicSecurityHeaderFlags, BlobHeader, BlobType,
+     LicenseEncryptionData, LicenseHeader, MAC_SIZE, PLATFORM_ID, PREAMBLE_SIZE, PreambleFlags, PreambleType,
+-    PreambleVersion, ServerLicenseError, ServerPlatformChallenge,
++    PreambleVersion, ServerLicenseError, ServerPlatformChallenge, Withheld,
+ };
+ use crate::crypto::rc4::Rc4;
+-use crate::rdp::server_license::Withheld;
+ 
+ const RESPONSE_DATA_VERSION: u16 = 0x100;
+ const RESPONSE_DATA_STATIC_FIELDS_SIZE: usize = 8;
+@@ -32,8 +31,11 @@ pub(crate) const CLIENT_HARDWARE_IDENTIFICATION_SIZE: usize = 20;
+ #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
+ pub struct ClientPlatformChallengeResponse {
+     pub license_header: LicenseHeader,
++    /// INVARIANT: `Debug` output withholds this field.
+     pub encrypted_challenge_response_data: Vec<u8>,
++    /// INVARIANT: `Debug` output withholds this field.
+     pub encrypted_hwid: Vec<u8>,
++    /// INVARIANT: `Debug` output withholds this field.
+     pub mac_data: Vec<u8>,
+ }
+ 
+@@ -208,6 +210,7 @@ impl LicenseDetailLevel {
+ pub struct PlatformChallengeResponseData {
+     pub client_type: ClientType,
+     pub license_detail_level: LicenseDetailLevel,
++    /// INVARIANT: `Debug` output withholds this field.
+     pub challenge: Vec<u8>,
+ }
+ 
+@@ -270,6 +273,7 @@ impl<'de> Decode<'de> for PlatformChallengeResponseData {
+ #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
+ pub struct ClientHardwareIdentification {
+     pub platform_id: u32,
++    /// INVARIANT: `Debug` output withholds this field.
+     pub data: Vec<u8>,
+ }
+ 
+diff --git a/crates/ironrdp-pdu/src/rdp/server_license/mod.rs b/crates/ironrdp-pdu/src/rdp/server_license/mod.rs
+index 30188dc..fa24277 100644
+--- a/crates/ironrdp-pdu/src/rdp/server_license/mod.rs
++++ b/crates/ironrdp-pdu/src/rdp/server_license/mod.rs
+@@ -26,8 +26,13 @@ mod server_license_request;
+ mod server_platform_challenge;
+ mod server_upgrade_license;
+ 
+-/// Bytes that stay out of `Debug` output: keying material, encrypted blobs and the license itself are shown as their
+-/// length only, so that a log at any level can be handed over.
++/// Bytes that stay out of `Debug` output, shown as their length only.
++///
++/// Keying material, encrypted blobs, the license itself and the user and machine names stay out so that a log at any
++/// level can be handed over.
++/// The server certificate's chain, modulus and signature are public, but a derived `Debug` would print their
++/// kilobytes as a decimal list and bury the rest of the exchange; their lengths, which tell the key size and the
++/// chain's shape, stay.
+ pub(crate) struct Withheld<'a>(pub(crate) &'a [u8]);
+ 
+ impl fmt::Debug for Withheld<'_> {
+@@ -36,15 +41,6 @@ impl fmt::Debug for Withheld<'_> {
+     }
+ }
+ 
+-/// Text that stays out of `Debug` output (a user or machine name), shown as its length only.
+-pub(crate) struct WithheldText<'a>(pub(crate) &'a str);
+-
+-impl fmt::Debug for WithheldText<'_> {
+-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+-        write!(f, "<{} characters withheld>", self.0.chars().count())
+-    }
+-}
+-
+ pub use self::client_new_license_request::{ClientNewLicenseRequest, PLATFORM_ID};
+ pub use self::client_platform_challenge_response::{
+     ClientHardwareIdentification, ClientPlatformChallengeResponse, PlatformChallengeResponseData,
+@@ -73,8 +69,11 @@ const MAC_SIZE: usize = 16;
+ #[derive(PartialEq, Eq, Clone, Default)]
+ #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
+ pub struct LicenseEncryptionData {
++    /// INVARIANT: `Debug` output withholds this field.
+     pub premaster_secret: Vec<u8>,
++    /// INVARIANT: `Debug` output withholds this field.
+     pub mac_salt_key: Vec<u8>,
++    /// INVARIANT: `Debug` output withholds this field.
+     pub license_key: Vec<u8>,
+ }
+ 
+diff --git a/crates/ironrdp-pdu/src/rdp/server_license/server_license_request/cert.rs b/crates/ironrdp-pdu/src/rdp/server_license/server_license_request/cert.rs
+index e97dede..3d46a35 100644
+--- a/crates/ironrdp-pdu/src/rdp/server_license/server_license_request/cert.rs
++++ b/crates/ironrdp-pdu/src/rdp/server_license/server_license_request/cert.rs
+@@ -1,4 +1,5 @@
+ use core::fmt;
++
+ use ironrdp_core::{
+     Decode, DecodeResult, Encode, EncodeResult, ReadCursor, WriteCursor, cast_length, ensure_fixed_part_size,
+     ensure_size, invalid_field_err, read_padding, write_padding,
+@@ -33,6 +34,7 @@ pub enum CertificateType {
+ #[derive(PartialEq, Eq)]
+ #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
+ pub struct X509CertificateChain {
++    /// INVARIANT: `Debug` output withholds this field.
+     pub certificate_array: Vec<Vec<u8>>,
+ }
+ 
+@@ -110,6 +112,7 @@ impl<'de> Decode<'de> for X509CertificateChain {
+ #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
+ pub struct ProprietaryCertificate {
+     pub public_key: RsaPublicKey,
++    /// INVARIANT: `Debug` output withholds this field.
+     pub signature: Vec<u8>,
+ }
+ 
+@@ -179,6 +182,7 @@ impl<'de> Decode<'de> for ProprietaryCertificate {
+ #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
+ pub struct RsaPublicKey {
+     pub public_exponent: u32,
++    /// INVARIANT: `Debug` output withholds this field.
+     pub modulus: Vec<u8>,
+ }
+ 
+@@ -252,17 +256,21 @@ impl<'de> Decode<'de> for RsaPublicKey {
+     }
+ }
+ 
++/// Certificates that stay out of `Debug` output, each shown as its length only.
++struct WithheldList<'a>(&'a [Vec<u8>]);
++
++impl fmt::Debug for WithheldList<'_> {
++    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
++        f.debug_list()
++            .entries(self.0.iter().map(|item| Withheld(item)))
++            .finish()
++    }
++}
++
+ impl fmt::Debug for X509CertificateChain {
+     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+         f.debug_struct("X509CertificateChain")
+-            .field(
+-                "certificate_array",
+-                &self
+-                    .certificate_array
+-                    .iter()
+-                    .map(|item| Withheld(item))
+-                    .collect::<Vec<_>>(),
+-            )
++            .field("certificate_array", &WithheldList(&self.certificate_array))
+             .finish()
+     }
+ }
+diff --git a/crates/ironrdp-pdu/src/rdp/server_license/server_license_request/mod.rs b/crates/ironrdp-pdu/src/rdp/server_license/server_license_request/mod.rs
+index ff1a638..7b8bdbc 100644
+--- a/crates/ironrdp-pdu/src/rdp/server_license/server_license_request/mod.rs
++++ b/crates/ironrdp-pdu/src/rdp/server_license/server_license_request/mod.rs
+@@ -1,9 +1,10 @@
+-use core::fmt;
+ pub mod cert;
+ 
+ #[cfg(test)]
+ mod tests;
+ 
++use core::fmt;
++
+ use cert::{CertificateType, ProprietaryCertificate, X509CertificateChain};
+ use ironrdp_core::{
+     Decode, DecodeResult, Encode, EncodeResult, ReadCursor, WriteCursor, cast_length, ensure_fixed_part_size,
+@@ -12,9 +13,8 @@ use ironrdp_core::{
+ 
+ use super::{
+     BLOB_LENGTH_SIZE, BLOB_TYPE_SIZE, BlobHeader, BlobType, KEY_EXCHANGE_ALGORITHM_RSA, LicenseHeader, PreambleType,
+-    RANDOM_NUMBER_SIZE, ServerLicenseError, UTF8_NULL_TERMINATOR_SIZE, UTF16_NULL_TERMINATOR_SIZE,
++    RANDOM_NUMBER_SIZE, ServerLicenseError, UTF8_NULL_TERMINATOR_SIZE, UTF16_NULL_TERMINATOR_SIZE, Withheld,
+ };
+-use crate::rdp::server_license::Withheld;
+ use crate::utils;
+ 
+ const CERT_VERSION_FIELD_SIZE: usize = 4;
+@@ -36,6 +36,7 @@ const RSA_EXCHANGE_ALGORITHM: u32 = 1;
+ #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
+ pub struct ServerLicenseRequest {
+     pub license_header: LicenseHeader,
++    /// INVARIANT: `Debug` output withholds this field.
+     pub server_random: Vec<u8>,
+     pub product_info: ProductInfo,
+     pub server_certificate: Option<ServerCertificate>,
+diff --git a/crates/ironrdp-pdu/src/rdp/server_license/server_platform_challenge/mod.rs b/crates/ironrdp-pdu/src/rdp/server_license/server_platform_challenge/mod.rs
+index 6690968..49c33c0 100644
+--- a/crates/ironrdp-pdu/src/rdp/server_license/server_platform_challenge/mod.rs
++++ b/crates/ironrdp-pdu/src/rdp/server_license/server_platform_challenge/mod.rs
+@@ -1,13 +1,13 @@
+-use core::fmt;
+ #[cfg(test)]
+ mod test;
+ 
++use core::fmt;
++
+ use ironrdp_core::{
+     Decode as _, DecodeResult, Encode as _, EncodeResult, ReadCursor, WriteCursor, ensure_size, invalid_field_err,
+ };
+ 
+-use super::{BLOB_LENGTH_SIZE, BLOB_TYPE_SIZE, BlobHeader, BlobType, LicenseHeader, MAC_SIZE, PreambleType};
+-use crate::rdp::server_license::Withheld;
++use super::{BLOB_LENGTH_SIZE, BLOB_TYPE_SIZE, BlobHeader, BlobType, LicenseHeader, MAC_SIZE, PreambleType, Withheld};
+ 
+ const CONNECT_FLAGS_FIELD_SIZE: usize = 4;
+ 
+@@ -18,7 +18,9 @@ const CONNECT_FLAGS_FIELD_SIZE: usize = 4;
+ #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
+ pub struct ServerPlatformChallenge {
+     pub license_header: LicenseHeader,
++    /// INVARIANT: `Debug` output withholds this field.
+     pub encrypted_platform_challenge: Vec<u8>,
++    /// INVARIANT: `Debug` output withholds this field.
+     pub mac_data: Vec<u8>,
+ }
+ 
+diff --git a/crates/ironrdp-pdu/src/rdp/server_license/server_upgrade_license/mod.rs b/crates/ironrdp-pdu/src/rdp/server_license/server_upgrade_license/mod.rs
+index c56b64f..36ebf34 100644
+--- a/crates/ironrdp-pdu/src/rdp/server_license/server_upgrade_license/mod.rs
++++ b/crates/ironrdp-pdu/src/rdp/server_license/server_upgrade_license/mod.rs
+@@ -1,7 +1,8 @@
+-use core::fmt;
+ #[cfg(test)]
+ mod tests;
+ 
++use core::fmt;
++
+ use ironrdp_core::{
+     Decode, DecodeResult, Encode, EncodeResult, ReadCursor, WriteCursor, cast_length, ensure_fixed_part_size,
+     ensure_size, invalid_field_err,
+@@ -9,10 +10,9 @@ use ironrdp_core::{
+ 
+ use super::{
+     BLOB_LENGTH_SIZE, BLOB_TYPE_SIZE, BlobHeader, BlobType, LicenseEncryptionData, LicenseHeader, MAC_SIZE,
+-    PreambleType, ServerLicenseError, UTF8_NULL_TERMINATOR_SIZE, UTF16_NULL_TERMINATOR_SIZE,
++    PreambleType, ServerLicenseError, UTF8_NULL_TERMINATOR_SIZE, UTF16_NULL_TERMINATOR_SIZE, Withheld,
+ };
+ use crate::crypto::rc4::Rc4;
+-use crate::rdp::server_license::Withheld;
+ use crate::utils;
+ use crate::utils::CharacterSet;
+ 
+@@ -25,7 +25,9 @@ const LICENSE_INFO_STATIC_FIELDS_SIZE: usize = 20;
+ #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
+ pub struct ServerUpgradeLicense {
+     pub license_header: LicenseHeader,
++    /// INVARIANT: `Debug` output withholds this field.
+     pub encrypted_license_info: Vec<u8>,
++    /// INVARIANT: `Debug` output withholds this field.
+     pub mac_data: Vec<u8>,
+ }
+ 
+@@ -105,6 +107,7 @@ pub struct LicenseInformation {
+     pub scope: String,
+     pub company_name: String,
+     pub product_id: String,
++    /// INVARIANT: `Debug` output withholds this field.
+     pub license_info: Vec<u8>,
+ }
+ 
+diff --git a/crates/ironrdp-pdu/src/rdp/server_license/tests.rs b/crates/ironrdp-pdu/src/rdp/server_license/tests.rs
+index f476c4b..38fa658 100644
+--- a/crates/ironrdp-pdu/src/rdp/server_license/tests.rs
++++ b/crates/ironrdp-pdu/src/rdp/server_license/tests.rs
+@@ -1,5 +1,6 @@
+ use std::sync::LazyLock;
+ 
++use expect_test::expect;
+ use ironrdp_core::{decode, encode_vec};
+ 
+ use super::*;
+@@ -158,9 +159,13 @@ fn read_license_header_handles_valid_client_correctly() {
+     );
+ }
+ 
++// oracle: mutant a licensing type's Debug output printing withheld bytes or the user or machine name, or dropping a field that tells an exchange apart: a header, the product, the scope or the public exponent.
+ #[test]
+ fn debug_output_withholds_keying_material_and_licenses() {
+-    // 0xab is 171 in the decimal list a derived Debug would print.
++    use client_platform_challenge_response::{ClientType, LicenseDetailLevel};
++
++    // Each withheld field gets a length of its own, so the snapshots tell them apart; a field printed in full would
++    // show up as a list of 171s.
+     let bytes = |n: usize| vec![0xab; n];
+     let header = |preamble_message_type| LicenseHeader {
+         security_header: BasicSecurityHeader {
+@@ -171,68 +176,270 @@ fn debug_output_withholds_keying_material_and_licenses() {
+         preamble_version: PreambleVersion::V3,
+         preamble_message_size: 0,
+     };
+-    let printed = [
+-        format!(
+-            "{:?}",
+-            LicenseEncryptionData {
+-                premaster_secret: bytes(48),
+-                mac_salt_key: bytes(16),
+-                license_key: bytes(16),
+-            }
+-        ),
+-        format!(
+-            "{:?}",
+-            ClientNewLicenseRequest {
+-                license_header: header(PreambleType::NewLicenseRequest),
+-                client_random: bytes(32),
+-                encrypted_premaster_secret: bytes(64),
+-                client_username: "someone".to_owned(),
+-                client_machine_name: "WORKSTATION9".to_owned(),
+-            }
+-        ),
+-        format!(
+-            "{:?}",
+-            ServerUpgradeLicense {
+-                license_header: header(PreambleType::UpgradeLicense),
+-                encrypted_license_info: bytes(1000),
+-                mac_data: bytes(16),
+-            }
+-        ),
+-        format!(
+-            "{:?}",
+-            ServerLicenseRequest {
+-                license_header: header(PreambleType::LicenseRequest),
+-                server_random: bytes(32),
+-                product_info: ProductInfo {
+-                    version: 0x0006_0000,
+-                    company_name: "Microsoft Corporation".to_owned(),
+-                    product_id: "A02".to_owned(),
++
++    expect![["
++        LicenseEncryptionData {
++            premaster_secret: <48 bytes withheld>,
++            mac_salt_key: <16 bytes withheld>,
++            license_key: <16 bytes withheld>,
++        }
++    "]]
++    .assert_debug_eq(&LicenseEncryptionData {
++        premaster_secret: bytes(48),
++        mac_salt_key: bytes(16),
++        license_key: bytes(16),
++    });
++
++    expect![["
++        ClientNewLicenseRequest {
++            license_header: LicenseHeader {
++                security_header: BasicSecurityHeader {
++                    flags: BasicSecurityHeaderFlags(
++                        LICENSE_PKT,
++                    ),
+                 },
+-                server_certificate: None,
+-                scope_list: vec![Scope("microsoft.com".to_owned())],
+-            }
+-        ),
+-    ];
+-    for text in &printed {
+-        assert!(!text.contains("171"), "{text}");
+-        assert!(!text.contains("someone") && !text.contains("WORKSTATION9"), "{text}");
+-        assert!(text.contains("bytes withheld>"), "{text}");
+-    }
+-    assert!(
+-        printed[0].contains("premaster_secret: <48 bytes withheld>"),
+-        "{}",
+-        printed[0]
+-    );
+-    assert!(
+-        printed[1].contains("client_username: <7 characters withheld>"),
+-        "{}",
+-        printed[1]
+-    );
+-    // What tells the exchange apart stays: the header and the product.
+-    assert!(
+-        printed[2].contains("preamble_message_type: UpgradeLicense"),
+-        "{}",
+-        printed[2]
+-    );
+-    assert!(printed[3].contains("product_id"), "{}", printed[3]);
++                preamble_message_type: NewLicenseRequest,
++                preamble_flags: PreambleFlags(
++                    0x0,
++                ),
++                preamble_version: V3,
++                preamble_message_size: 0,
++            },
++            client_random: <32 bytes withheld>,
++            encrypted_premaster_secret: <64 bytes withheld>,
++            client_username: <7 bytes withheld>,
++            client_machine_name: <12 bytes withheld>,
++        }
++    "]]
++    .assert_debug_eq(&ClientNewLicenseRequest {
++        license_header: header(PreambleType::NewLicenseRequest),
++        client_random: bytes(32),
++        encrypted_premaster_secret: bytes(64),
++        client_username: "someone".to_owned(),
++        client_machine_name: "WORKSTATION9".to_owned(),
++    });
++
++    expect![["
++        ClientLicenseInfo {
++            license_header: LicenseHeader {
++                security_header: BasicSecurityHeader {
++                    flags: BasicSecurityHeaderFlags(
++                        LICENSE_PKT,
++                    ),
++                },
++                preamble_message_type: LicenseInfo,
++                preamble_flags: PreambleFlags(
++                    0x0,
++                ),
++                preamble_version: V3,
++                preamble_message_size: 0,
++            },
++            client_random: <32 bytes withheld>,
++            encrypted_premaster_secret: <64 bytes withheld>,
++            license_info: <1000 bytes withheld>,
++            encrypted_hwid: <20 bytes withheld>,
++            mac_data: <16 bytes withheld>,
++        }
++    "]]
++    .assert_debug_eq(&ClientLicenseInfo {
++        license_header: header(PreambleType::LicenseInfo),
++        client_random: bytes(32),
++        encrypted_premaster_secret: bytes(64),
++        license_info: bytes(1000),
++        encrypted_hwid: bytes(20),
++        mac_data: bytes(16),
++    });
++
++    expect![["
++        ClientPlatformChallengeResponse {
++            license_header: LicenseHeader {
++                security_header: BasicSecurityHeader {
++                    flags: BasicSecurityHeaderFlags(
++                        LICENSE_PKT,
++                    ),
++                },
++                preamble_message_type: PlatformChallengeResponse,
++                preamble_flags: PreambleFlags(
++                    0x0,
++                ),
++                preamble_version: V3,
++                preamble_message_size: 0,
++            },
++            encrypted_challenge_response_data: <18 bytes withheld>,
++            encrypted_hwid: <20 bytes withheld>,
++            mac_data: <16 bytes withheld>,
++        }
++    "]]
++    .assert_debug_eq(&ClientPlatformChallengeResponse {
++        license_header: header(PreambleType::PlatformChallengeResponse),
++        encrypted_challenge_response_data: bytes(18),
++        encrypted_hwid: bytes(20),
++        mac_data: bytes(16),
++    });
++
++    expect![["
++        PlatformChallengeResponseData {
++            client_type: Other,
++            license_detail_level: Detail,
++            challenge: <10 bytes withheld>,
++        }
++    "]]
++    .assert_debug_eq(&PlatformChallengeResponseData {
++        client_type: ClientType::Other,
++        license_detail_level: LicenseDetailLevel::Detail,
++        challenge: bytes(10),
++    });
++
++    expect![["
++        ClientHardwareIdentification {
++            platform_id: 67108864,
++            data: <16 bytes withheld>,
++        }
++    "]]
++    .assert_debug_eq(&ClientHardwareIdentification {
++        platform_id: 0x0400_0000,
++        data: bytes(16),
++    });
++
++    expect![["
++        ServerPlatformChallenge {
++            license_header: LicenseHeader {
++                security_header: BasicSecurityHeader {
++                    flags: BasicSecurityHeaderFlags(
++                        LICENSE_PKT,
++                    ),
++                },
++                preamble_message_type: PlatformChallenge,
++                preamble_flags: PreambleFlags(
++                    0x0,
++                ),
++                preamble_version: V3,
++                preamble_message_size: 0,
++            },
++            encrypted_platform_challenge: <10 bytes withheld>,
++            mac_data: <16 bytes withheld>,
++        }
++    "]]
++    .assert_debug_eq(&ServerPlatformChallenge {
++        license_header: header(PreambleType::PlatformChallenge),
++        encrypted_platform_challenge: bytes(10),
++        mac_data: bytes(16),
++    });
++
++    expect![["
++        ServerUpgradeLicense {
++            license_header: LicenseHeader {
++                security_header: BasicSecurityHeader {
++                    flags: BasicSecurityHeaderFlags(
++                        LICENSE_PKT,
++                    ),
++                },
++                preamble_message_type: UpgradeLicense,
++                preamble_flags: PreambleFlags(
++                    0x0,
++                ),
++                preamble_version: V3,
++                preamble_message_size: 0,
++            },
++            encrypted_license_info: <1000 bytes withheld>,
++            mac_data: <16 bytes withheld>,
++        }
++    "]]
++    .assert_debug_eq(&ServerUpgradeLicense {
++        license_header: header(PreambleType::UpgradeLicense),
++        encrypted_license_info: bytes(1000),
++        mac_data: bytes(16),
++    });
++
++    expect![[r#"
++        LicenseInformation {
++            version: 393216,
++            scope: "microsoft.com",
++            company_name: "Microsoft Corporation",
++            product_id: "A02",
++            license_info: <1000 bytes withheld>,
++        }
++    "#]]
++    .assert_debug_eq(&LicenseInformation {
++        version: 0x0006_0000,
++        scope: "microsoft.com".to_owned(),
++        company_name: "Microsoft Corporation".to_owned(),
++        product_id: "A02".to_owned(),
++        license_info: bytes(1000),
++    });
++
++    expect![[r#"
++        ServerLicenseRequest {
++            license_header: LicenseHeader {
++                security_header: BasicSecurityHeader {
++                    flags: BasicSecurityHeaderFlags(
++                        LICENSE_PKT,
++                    ),
++                },
++                preamble_message_type: LicenseRequest,
++                preamble_flags: PreambleFlags(
++                    0x0,
++                ),
++                preamble_version: V3,
++                preamble_message_size: 0,
++            },
++            server_random: <32 bytes withheld>,
++            product_info: ProductInfo {
++                version: 393216,
++                company_name: "Microsoft Corporation",
++                product_id: "A02",
++            },
++            server_certificate: Some(
++                ServerCertificate {
++                    issued_permanently: true,
++                    certificate: Proprietary(
++                        ProprietaryCertificate {
++                            public_key: RsaPublicKey {
++                                public_exponent: 65537,
++                                modulus: <64 bytes withheld>,
++                            },
++                            signature: <72 bytes withheld>,
++                        },
++                    ),
++                },
++            ),
++            scope_list: [
++                Scope(
++                    "microsoft.com",
++                ),
++            ],
++        }
++    "#]]
++    .assert_debug_eq(&ServerLicenseRequest {
++        license_header: header(PreambleType::LicenseRequest),
++        server_random: bytes(32),
++        product_info: ProductInfo {
++            version: 0x0006_0000,
++            company_name: "Microsoft Corporation".to_owned(),
++            product_id: "A02".to_owned(),
++        },
++        server_certificate: Some(ServerCertificate {
++            issued_permanently: true,
++            certificate: cert::CertificateType::Proprietary(cert::ProprietaryCertificate {
++                public_key: cert::RsaPublicKey {
++                    public_exponent: 0x0001_0001,
++                    modulus: bytes(64),
++                },
++                signature: bytes(72),
++            }),
++        }),
++        scope_list: vec![Scope("microsoft.com".to_owned())],
++    });
++
++    expect![["
++        X509CertificateChain {
++            certificate_array: [
++                <500 bytes withheld>,
++                <400 bytes withheld>,
++            ],
++        }
++    "]]
++    .assert_debug_eq(&cert::X509CertificateChain {
++        certificate_array: vec![bytes(500), bytes(400)],
++    });
+ }
+-- 
+2.54.0 (Apple Git-157)
+

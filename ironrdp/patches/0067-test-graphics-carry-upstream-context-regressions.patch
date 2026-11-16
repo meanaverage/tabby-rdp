@@ -1,0 +1,277 @@
+From 10ae7726fa1afe8dfeb29d580022a270ac6af870 Mon Sep 17 00:00:00 2001
+From: meanaverage <18336095+meanaverage@users.noreply.github.com>
+Date: Mon, 16 Nov 2026 12:33:55 -0800
+Subject: [PATCH] test(graphics): carry final upstream progressive context
+ regressions
+
+Import the final cross-context REGION and UPGRADE tests from Devolutions/IronRDP#2117 (00820f6e4765b09721877264e461a2feeb32ac48). Patch 59 already implements the per-surface state lifetime; adapt only the test lookup to its retained context wrapper so downstream memory accounting remains intact.
+---
+ crates/ironrdp-egfx/src/client.rs          | 114 ++++++++++++++++++---
+ crates/ironrdp-graphics/src/progressive.rs |  90 ++++++++++++++++
+ 2 files changed, 191 insertions(+), 13 deletions(-)
+
+diff --git a/crates/ironrdp-egfx/src/client.rs b/crates/ironrdp-egfx/src/client.rs
+index 6057291..9f987d3 100644
+--- a/crates/ironrdp-egfx/src/client.rs
++++ b/crates/ironrdp-egfx/src/client.rs
+@@ -2460,9 +2460,12 @@ mod tests {
+         encode_progressive_stream(&blocks).unwrap()
+     }
+ 
+-    fn progressive_tile_stream(tile_x: u16, tile_y: u16, rect_width: u16, rect_height: u16) -> Vec<u8> {
++    fn progressive_tile_stream(
++        tile_x: u16,
++        tile_y: u16,
++        region_rect: ironrdp_pdu::codecs::rfx::RfxRectangle,
++    ) -> Vec<u8> {
+         use ironrdp_graphics::progressive::{COEFFICIENTS_PER_COMPONENT, encode_first_pass};
+-        use ironrdp_pdu::codecs::rfx::RfxRectangle;
+         use ironrdp_pdu::codecs::rfx::progressive::{
+             ComponentCodecQuant, ProgressiveBlock, ProgressiveContextPdu, ProgressiveFrameBeginPdu,
+             ProgressiveFrameEndPdu, ProgressiveRegion, ProgressiveSyncPdu, ProgressiveTile, TileSimple,
+@@ -2495,12 +2498,7 @@ mod tests {
+             }),
+             ProgressiveBlock::Region(ProgressiveRegion {
+                 tile_size: 0x40,
+-                rects: vec![RfxRectangle {
+-                    x: tile_x.saturating_mul(64),
+-                    y: tile_y.saturating_mul(64),
+-                    width: rect_width,
+-                    height: rect_height,
+-                }],
++                rects: vec![region_rect],
+                 quant_vals: vec![base_quant],
+                 quant_prog_vals: vec![],
+                 flags: 0,
+@@ -2581,7 +2579,7 @@ mod tests {
+                 frame_id: 2,
+             }))
+             .unwrap();
+-        wire_progressive(&mut client, progressive_tile_stream(1, 1, 36, 36)).unwrap();
++        wire_progressive(&mut client, progressive_tile_stream(1, 1, rect(64, 64, 36, 36))).unwrap();
+         client
+             .handle_pdu(GfxPdu::EndFrame(crate::pdu::EndFramePdu { frame_id: 2 }))
+             .unwrap();
+@@ -2765,6 +2763,96 @@ mod tests {
+         assert!(client.drain_output().is_empty());
+     }
+ 
++    /// A REGION may be covered by a tile sent earlier in the same RDPGFX frame under
++    /// another codec context. Skipping it left stale 64-pixel columns of an animation
++    /// on screen until the next full repaint.
++    #[test]
++    fn region_reuses_tile_sent_under_another_codec_context() {
++        use ironrdp_pdu::codecs::rfx::progressive::{
++            ProgressiveBlock, ProgressiveFrameBeginPdu, ProgressiveFrameEndPdu, ProgressiveRegion,
++            encode_progressive_stream,
++        };
++
++        let first = progressive_tile_stream(0, 0, rect(8, 12, 16, 20));
++        let shared = encode_progressive_stream(&[
++            ProgressiveBlock::FrameBegin(ProgressiveFrameBeginPdu {
++                frame_index: 1,
++                region_count: 1,
++            }),
++            ProgressiveBlock::Region(ProgressiveRegion {
++                tile_size: 0x40,
++                rects: vec![rect(32, 40, 8, 10)],
++                quant_vals: vec![],
++                quant_prog_vals: vec![],
++                flags: 0,
++                tiles: vec![],
++            }),
++            ProgressiveBlock::FrameEnd(ProgressiveFrameEndPdu),
++        ])
++        .unwrap();
++
++        let decode_frame = |second_codec_context_id: u32| {
++            let mut client = progressive_client();
++            start_frame(&mut client, 1);
++            client
++                .handle_pdu(GfxPdu::MapSurfaceToOutput(crate::pdu::MapSurfaceToOutputPdu {
++                    surface_id: 1,
++                    output_origin_x: 0,
++                    output_origin_y: 0,
++                }))
++                .unwrap();
++            end_frame(&mut client, 1);
++            let _ = client.drain_output();
++
++            start_frame(&mut client, 2);
++            wire_progressive(&mut client, first.clone()).unwrap();
++            client
++                .handle_pdu(GfxPdu::WireToSurface2(WireToSurface2Pdu {
++                    surface_id: 1,
++                    codec_id: crate::pdu::Codec2Type::RemoteFxProgressive,
++                    codec_context_id: second_codec_context_id,
++                    pixel_format: PixelFormat::XRgb,
++                    bitmap_data: shared.clone(),
++                }))
++                .unwrap();
++            end_frame(&mut client, 2);
++
++            client
++                .drain_output()
++                .into_iter()
++                .map(|update| (update.region, update.data))
++                .collect::<Vec<_>>()
++        };
++
++        let other_context = decode_frame(8);
++        let regions: Vec<_> = other_context.iter().map(|(region, _)| region.clone()).collect();
++        assert_eq!(
++            regions,
++            vec![
++                ExclusiveRectangle {
++                    left: 8,
++                    top: 12,
++                    right: 24,
++                    bottom: 32,
++                },
++                ExclusiveRectangle {
++                    left: 32,
++                    top: 40,
++                    right: 40,
++                    bottom: 50,
++                },
++            ],
++            "the second context's REGION must paint from the tile sent earlier in the frame"
++        );
++        assert!(other_context[1].1.iter().any(|&value| value != 0));
++        assert_eq!(
++            other_context,
++            decode_frame(7),
++            "a REGION must paint the same pixels whichever codec context carries it"
++        );
++    }
++
++
+     fn assert_progressive_context_is_deleted(clear: impl FnOnce(&mut GraphicsPipelineClient)) {
+         let mut client = progressive_client();
+         wire_progressive(&mut client, progressive_context_stream(true)).unwrap();
+@@ -2799,7 +2887,7 @@ mod tests {
+     }
+ 
+     #[test]
+-    fn progressive_context_is_deleted_with_encoding_context() {
++    fn progressive_tiles_survive_encoding_context_deletion() {
+         let mut client = progressive_client();
+         wire_progressive(&mut client, progressive_context_stream(true)).unwrap();
+         client
+@@ -2809,9 +2897,9 @@ mod tests {
+             }))
+             .unwrap();
+ 
+-        // The context's tiles are gone, but the surface survives and keeps the band layout it
+-        // was given, so a payload reusing the id decodes from scratch. Windows deletes a codec
+-        // context as it opens the next one and never repeats SYNC + CONTEXT.
++        // The surface keeps its tiles and the band layout it was given, so a payload reusing
++        // the id still decodes. Windows deletes a codec context as it opens the next one and
++        // never repeats SYNC + CONTEXT.
+         assert!(wire_progressive(&mut client, progressive_context_stream(false)).is_ok());
+     }
+ 
+diff --git a/crates/ironrdp-graphics/src/progressive.rs b/crates/ironrdp-graphics/src/progressive.rs
+index 5a9de26..586b782 100644
+--- a/crates/ironrdp-graphics/src/progressive.rs
++++ b/crates/ironrdp-graphics/src/progressive.rs
+@@ -3999,6 +3999,96 @@ mod tests {
+         }
+     }
+ 
++    #[test]
++    fn upgrade_under_a_new_codec_context_refines_the_surface_tile() {
++        let base_quant = ComponentCodecQuant {
++            ll3: 6,
++            hl3: 6,
++            lh3: 6,
++            hh3: 6,
++            hl2: 6,
++            lh2: 6,
++            hh2: 6,
++            hl1: 6,
++            lh1: 6,
++            hh1: 6,
++        };
++        let mut progressive_quant = ComponentCodecQuant::LOSSLESS;
++        progressive_quant.ll3 = 1;
++
++        let mut coefficients = [0; COEFFICIENTS_PER_COMPONENT];
++        coefficients[4032] = 25;
++        let first_data = {
++            let mut encoded = vec![0; 16 * 1024];
++            let len = crate::rlgr::encode(EntropyAlgorithm::Rlgr1, &coefficients, &mut encoded)
++                .expect("first-pass RLGR encoding should succeed");
++            encoded.truncate(len);
++            encoded
++        };
++        let raw_data = [0xFF; 8];
++        let refine = |upgrade_codec_context_id: u32| {
++            let mut decoder = ProgressiveDecoder::new();
++            decoder
++                .decode_bitmap(
++                    1,
++                    7,
++                    64,
++                    64,
++                    &first_tile_stream(0, &first_data, base_quant, progressive_quant, true),
++                )
++                .expect("first-pass tile should decode");
++            let first_reference = **decoder
++                .references
++                .get(&(1, 0, 0))
++                .expect("first-pass tile should retain a reference");
++
++            // Windows opens a new codec context and deletes the old one while the
++            // tile is still being refined.
++            if upgrade_codec_context_id != 7 {
++                decoder.delete_context(1, 7);
++            }
++            let tiles = decoder
++                .decode_bitmap(
++                    1,
++                    upgrade_codec_context_id,
++                    64,
++                    64,
++                    &upgrade_tile_stream(
++                        &raw_data,
++                        base_quant,
++                        progressive_quant,
++                        ComponentCodecQuant::LOSSLESS,
++                        false,
++                    ),
++                )
++                .expect("upgrade tile should decode");
++            let tile_state = decoder
++                .contexts
++                .get(&(1, 0))
++                .and_then(|context| context.surface.get(0, 0))
++                .expect("upgraded tile state should be retained");
++            (
++                first_reference,
++                tiles.into_iter().map(|tile| tile.pixels).collect::<Vec<_>>(),
++                tile_state.coefficients,
++                tile_state.pass,
++            )
++        };
++
++        let (first_reference, pixels, coefficients, pass) = refine(8);
++        assert_eq!(pixels.len(), 1, "the upgrade must repaint the tile");
++        assert_eq!(
++            pass, 2,
++            "the upgrade must refine the tile decoded under the previous codec context"
++        );
++        assert_ne!(coefficients[0][4032], first_reference[0][4032]);
++
++        let (_, same_context_pixels, same_context_coefficients, _) = refine(7);
++        assert_eq!(coefficients, same_context_coefficients);
++        assert_eq!(pixels, same_context_pixels);
++    }
++
++
+     #[test]
+     fn difference_tile_reference_survives_codec_context_deletion() {
+         let original_components = [64, -16, 24];
+-- 
+2.54.0 (Apple Git-157)
+

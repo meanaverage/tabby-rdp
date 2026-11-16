@@ -1,21 +1,27 @@
 // Real Tabby lifecycle against a dedicated RDP test server. Also accepts the local FreeRDP sample server.
 // No provisioning, VM startup, or performance claim. Credentials use the runner's isolated in-memory store.
+import { spawn } from 'node:child_process'
+import * as fs from 'node:fs'
+import * as path from 'node:path'
 import { suite, type CanvasInfo } from '../lib/harness.js'
 import { parseAddress } from '../../src/desktopForm.js'
 
 await suite('freerdp', async t => {
+    const client = 'freerdp'
     const address = parseAddress(t.env.direct.address)
     if (!address || !t.env.direct.user || !t.env.direct.password) {
         t.skip('FreeRDP desktop lifecycle', 'set TRD_TEST_DIRECT, TRD_TEST_DIRECT_USER and TRD_TEST_DIRECT_PASSWORD for a dedicated test server')
         return
     }
+    // Clipboard ownership and Automatic header behavior require a genuinely focused window.
+    await t.ev(`const w = require('@electron/remote').getCurrentWindow(); w.show(); w.focus()`); await t.sleep(500)
     await t.settings({ client: 'ironrdp', resize: 'off', sharpness: 'standard', h264: false, microphone: false, sound: false })
     await t.ev(`
         const before = new Set(H.panes())
         await H.inZone(() => RD.injector.get(require('tabby-core').ProfilesService).openNewTabForProfile({
             id: 'rdp:freerdp-test', type: 'rdp', name: 'FreeRDP test', options: {
                 host: ${JSON.stringify(address.host)}, port: ${address.port}, kind: ${JSON.stringify(t.env.direct.kind)},
-                username: ${JSON.stringify(t.env.direct.user)}, client: 'freerdp', glyphCache: false, bitmapCache: false, relaxOrderChecks: false,
+                username: ${JSON.stringify(t.env.direct.user)}, client: ${JSON.stringify(client)}, glyphCache: false, bitmapCache: false, relaxOrderChecks: false,
                 clipboard: 'off', via: '', gateway: '', account: null
             }
         }))
@@ -65,7 +71,9 @@ await suite('freerdp', async t => {
     await t.dump('H.nativePane', 'freerdp-connected')
     await t.ev(`
         H.nativeProcess = H.session(H.nativePane).ui.native
-        H.nativePid = H.nativeProcess.child.pid
+        H.nativeChild = H.nativeProcess.child
+        H.nativeClosed = false
+        H.nativeChild.once('close', () => { H.nativeClosed = true })
         H.nativeKeys = 0
         const send = H.nativeProcess.send.bind(H.nativeProcess)
         H.nativeProcess.send = (type, data) => { if (type === 'K') H.nativeKeys++; send(type, data) }
@@ -91,7 +99,7 @@ await suite('freerdp', async t => {
     t.check('live resize draws pixels at the smaller pane resolution', !!await t.waitFor(matchesPane(640, 480), 15), await t.ev('return H.canvas(H.nativePane)'))
     const small = await t.ev<CanvasInfo>('return H.canvas(H.nativePane)')
     t.check('display-control resize changes the remote dimensions without reconnecting', small.w < large.w &&
-        await t.ev('return H.nativeProcess.child.pid === H.nativePid'), { large, small })
+        await t.ev('return H.nativeProcess.child === H.nativeChild'), { large, small })
     await t.dump('H.nativePane', 'freerdp-resized')
     // Hold the renderer pipe while a resize produces several tiles. The input reader must bound/coalesce a
     // burst, retaining key ordering and applying backpressure rather than ending a live desktop normally.
@@ -109,8 +117,8 @@ await suite('freerdp', async t => {
         } finally { H.nativeProcess.child.stdout.resume() }
     `)
     await t.sleep(1500)
-    t.check('renderer backpressure and an input burst retain the native session', await t.ev(`return H.session(H.nativePane)?.state === 'connected' && H.session(H.nativePane).ui.native.child.pid === H.nativePid`),
-        await t.ev(`return { state: H.session(H.nativePane)?.state, pid: H.session(H.nativePane)?.ui?.native?.child?.pid, expectedPid: H.nativePid, log: H.session(H.nativePane)?.log.slice(-12) }`))
+    t.check('renderer backpressure and an input burst retain the native session', await t.ev(`return H.session(H.nativePane)?.state === 'connected' && H.session(H.nativePane).ui.native.child === H.nativeChild`),
+        await t.ev(`return { state: H.session(H.nativePane)?.state, sameChild: H.session(H.nativePane)?.ui?.native?.child === H.nativeChild, log: H.session(H.nativePane)?.log.slice(-12) }`))
     await t.ev(`H.session(H.nativePane).ui.resize(640,480,100)`)
     t.check('display/input recover after the pipe drains', !!await t.waitFor(`const c = H.canvas(H.nativePane); return c?.w === 640 && c?.h === 480 && c?.colors > 20`, 15))
     await t.settings({ resize: 'off' })
@@ -124,7 +132,7 @@ await suite('freerdp', async t => {
     t.check('view only blocks native keyboard input', await t.ev('return H.nativeKeys === 0'))
     await t.ev('H.inZone(() => RD.desktop.setViewOnly(H.nativePane, false))')
     await t.ev('H.inZone(() => RD.desktop.disconnect(H.nativePane))')
-    t.check('disconnect reaps the native process', !!await t.waitFor(`try { process.kill(H.nativePid, 0); return false } catch { return true }`, 5))
+    t.check('disconnect reaps the native process', !!await t.waitFor(`return H.nativeClosed`, 5))
     t.check('disconnect removes the native UI', await t.ev(`return !H.nativePane.element.nativeElement.querySelector('.trd-freerdp')`))
     await t.ev('H.nativePane.profile.options.glyphCache = true; H.inZone(() => RD.desktop.showDesktop(H.nativePane))')
     t.check('FreeRDP reconnects with glyph caching and strict drawing-order checks', await settle())
@@ -144,7 +152,7 @@ await suite('freerdp', async t => {
     await t.ev('H.inZone(() => RD.desktop.disconnect(H.nativePane))')
     await t.ev('H.nativePane.profile.options.relaxOrderChecks = true; H.inZone(() => RD.desktop.showDesktop(H.nativePane))')
     t.check('FreeRDP reconnects with relaxed drawing-order checks and remembered trust decisions', await settle())
-    t.check('reconnect has a new process and fresh pixels', !!await t.waitFor(`return H.session(H.nativePane)?.ui?.native?.child?.pid !== H.nativePid && H.canvas(H.nativePane)?.colors > 2`, 10))
+    t.check('reconnect has a new process and fresh pixels', !!await t.waitFor(`return H.session(H.nativePane)?.ui?.native?.child !== H.nativeChild && H.canvas(H.nativePane)?.colors > 2`, 10))
     await t.dump('H.nativePane', 'freerdp-reconnected')
     if (t.env.direct.kind === 'windows') {
         await t.ev('H.inZone(() => RD.desktop.disconnect(H.nativePane))')
@@ -153,14 +161,26 @@ await suite('freerdp', async t => {
         t.check('its clipboard is set up for text both ways', !!await t.waitFor(`return H.session(H.nativePane).log.some(line => line.startsWith('clipboard: both ways'))`, 5))
         await t.sleep(3000)
         await t.clickDesktop('H.nativePane')
+        await t.ev(`const w = require('@electron/remote').getCurrentWindow(); w.show(); w.focus(); H.canvasElement(H.nativePane).focus()`)
         await t.escape()
-        await t.tap('Meta')
+        // Set up Notepad through raw input so window activation and clipboard ownership are not part of
+        // launching the fixture. The checks below exercise the UI keyboard and clipboard paths themselves.
+        await t.ev(`
+            H.fixtureKey = (scan, up = false, unicode = 0) => {
+                const b = Buffer.alloc(12); b.writeUInt32BE(up ? 0x8000 : 0); b.writeUInt32BE(scan, 4); b.writeUInt32BE(unicode, 8)
+                H.session(H.nativePane).ui.native.send('K', b)
+            }
+            H.fixtureKey(0x15b); H.fixtureKey(0x13); H.fixtureKey(0x13, true); H.fixtureKey(0x15b, true)
+        `)
+        await t.sleep(1200)
+        await t.ev(`
+            H.fixtureKey(0x1d); H.fixtureKey(0x1e); H.fixtureKey(0x1e, true); H.fixtureKey(0x1d, true)
+            for (const ch of 'notepad') { H.fixtureKey(0, false, ch.charCodeAt(0)); H.fixtureKey(0, true, ch.charCodeAt(0)) }
+        `)
+        await t.sleep(400)
+        await t.ev('H.fixtureKey(0x1c); H.fixtureKey(0x1c, true)')
         await t.sleep(3000)
-        await t.type('notepad')
-        await t.sleep(2000)
-        await t.enter()
-        await t.sleep(4000)
-        await t.clickDesktop('H.nativePane')  // Notepad opens over the middle of the screen: give it the keyboard
+        await t.ev(`const w = require('@electron/remote').getCurrentWindow(); w.show(); w.focus(); H.canvasElement(H.nativePane).focus()`)
         await t.press('n', ['Control'])
         await t.sleep(1500)
         const copyBack = async (expected: string) => {
@@ -175,6 +195,7 @@ await suite('freerdp', async t => {
             }
             return got
         }
+        await t.dump('H.nativePane', 'freerdp-notepad')
         // Windows → here: typed in Notepad, copied there.
         const marker = `fclip${Date.now() % 100000}`
         await t.type(marker)
@@ -209,6 +230,60 @@ await suite('freerdp', async t => {
         await t.press('a', ['Control'])
         await t.key('Delete', 'Delete', 46)
         await t.press('w', ['Control'])
+        // Exercise the shared FileTransfer UI/storage layer, in addition to the standalone protocol fixture.
+        const here = await t.tempDir('trd-freerdp-files-')
+        const folder = 'tabby-ui-files-' + Date.now()
+        const remote = `$p=Join-Path $env:TEMP '${folder}';`
+        const command = async (script: string) => {
+            await t.clipboard('powershell -NoProfile'); await t.sleep(500)
+            await t.ev(`
+                const n = H.session(H.nativePane).ui.native
+                const send = (scan, up = false) => { const b = Buffer.alloc(12); b.writeUInt32BE(up ? 0x8000 : 0); b.writeUInt32BE(scan, 4); n.send('K', b) }
+                send(0x15b); send(0x13); send(0x13, true); send(0x15b, true)
+            `)
+            await t.sleep(600); await t.press('v', ['Control']); await t.sleep(400); await t.enter(); await t.sleep(2000)
+            await t.clipboard(script + ';exit'); await t.sleep(500)
+            await t.press('v', ['Control']); await t.sleep(400); await t.enter(); await t.sleep(2000)
+        }
+        await command(remote + `New-Item -ItemType Directory -Force -Path "$p\\nested"|Out-Null;[IO.File]::WriteAllText("$p\\nested\\remote.txt",'remote file marker');Set-Clipboard -Path $p`)
+        const offered = await t.waitFor(`return H.session(H.nativePane).files.offered.some(f => f.name === 'remote.txt')`, 10)
+        t.check('remote file clipboard offers Save to Downloads', offered && /copied on the remote/.test(await t.ev<string>('return H.toast(H.nativePane)')))
+        if (offered) {
+            const saved = await t.ev<string[]>(`return await H.session(H.nativePane).files.saveAll(${JSON.stringify(here)})`)
+            const file = saved.find(p => p.endsWith('remote.txt'))
+            t.check('Save to Downloads keeps nested paths and exact contents', !!file && (await t.readFile(file)) === 'remote file marker', saved.map(p => path.basename(p)))
+        }
+        await command(remote + 'Start-Process explorer.exe $p')
+        await t.ev(`
+            const dt = new DataTransfer(); dt.items.add(new File(['dropped file marker'], 'dropped.txt'))
+            H.overlay(H.nativePane).dispatchEvent(new DragEvent('drop', { dataTransfer: dt, bubbles: true, cancelable: true }))
+        `)
+        t.check('dropped file offers a paste notification', !!await t.waitFor(`return /ready: paste/.test(H.toast(H.nativePane))`, 5))
+        await t.press('v', ['Control'])
+        t.check('dropped file pastes through the FreeRDP provider', !!await t.waitFor(`return /Copied 1 file/.test(H.toast(H.nativePane))`, 10), await t.ev('return H.toast(H.nativePane)'))
+        await command(remote + `Set-Clipboard -Value ('DROP:'+ [IO.File]::ReadAllText("$p\\dropped.txt"))`)
+        t.check('dropped file has exact contents on Windows', (await t.clipboard()) === 'DROP:dropped file marker')
+        if (t.platform === process.platform && ['darwin', 'win32'].includes(process.platform)) {
+            const local = path.join(here, 'copied-folder')
+            fs.mkdirSync(local); fs.writeFileSync(path.join(local, 'inner.txt'), 'copied folder marker')
+            await command(remote + 'Start-Process explorer.exe $p')
+            const mac = process.platform === 'darwin'
+            const script = `Add-Type -AssemblyName System.Windows.Forms; $files=New-Object System.Collections.Specialized.StringCollection; [void]$files.Add('${local.replace(/'/g, "''")}'); [Windows.Forms.Clipboard]::SetFileDropList($files)`
+            const writer = mac
+                ? spawn('osascript', ['-l', 'JavaScript', '-e', `ObjC.import('AppKit'); var pb = $.NSPasteboard.generalPasteboard; pb.clearContents; pb.writeObjects($([$.NSURL.fileURLWithPath(${JSON.stringify(local)})])); delay(60); ''`], { stdio: 'ignore' })
+                : spawn('powershell.exe', ['-NoProfile', '-STA', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], { stdio: 'ignore', windowsHide: true })
+            t.onCleanup(() => writer.kill())
+            if (!mac) await new Promise<void>((resolve, reject) => {
+                writer.once('error', reject); writer.once('exit', code => code === 0 ? resolve() : reject(new Error('Could not set the Windows file clipboard')))
+            })
+            await t.sleep(700)
+            await t.press('v', [mac ? 'Meta' : 'Control'])
+            t.check(`${mac ? 'Finder' : 'Windows'} folder clipboard pastes with ${mac ? 'Command' : 'Ctrl'}-V`, !!await t.waitFor(`return /Copied 1 file/.test(H.toast(H.nativePane))`, 10), await t.ev('return H.toast(H.nativePane)'))
+            writer.kill()
+            await command(remote + `Set-Clipboard -Value ('FOLDER:'+ [IO.File]::ReadAllText("$p\\copied-folder\\inner.txt"))`)
+            t.check('copied folder arrives with its file intact', (await t.clipboard()) === 'FOLDER:copied folder marker')
+        }
+        await command(remote + "Remove-Item -LiteralPath $p -Recurse -Force;Set-Clipboard -Value ''")
         await t.ev(`H.nativePane.profile.options.clipboard = 'off'`)
     }
     await t.ev(`
@@ -224,14 +299,14 @@ await suite('freerdp', async t => {
     // bounce forever between a smaller connecting pane and the larger connected pane, with either backend.
     await t.ev(`H.nativePane.element.nativeElement.style.cssText = ${JSON.stringify(paneStyle)}`)
     await t.settings({ resize: 'reconnect', headerAutoHide: 'automatic' })
-    for (const client of ['ironrdp', 'freerdp']) {
+    for (const selected of ['ironrdp', client]) {
         await t.ev(`
             H.inZone(() => RD.desktop.disconnect(H.nativePane))
-            H.nativePane.profile.options.client = '${client}'
+            H.nativePane.profile.options.client = '${selected}'
             H.nativePane.profile.options.relaxOrderChecks = false
             H.inZone(() => RD.desktop.showDesktop(H.nativePane))
         `)
-        t.check(client + ' connects with Automatic header and reconnect resize', await settle())
+        t.check(selected + ' connects with Automatic header and reconnect resize', await settle())
         await t.sleep(3000)
         const settled = await t.ev<{ connected: boolean, hidden: boolean, matches: boolean }>(`
             H.autoHeaderSession = H.session(H.nativePane)
@@ -240,7 +315,7 @@ await suite('freerdp', async t => {
                 matches: !!c && Math.abs(c.w-c.paneW) <= 2 && Math.abs(c.h-c.paneH) <= 2 }
         `)
         await t.sleep(2500)
-        t.check(client + ' Automatic header settles without a reconnect loop', settled.connected && settled.hidden && settled.matches &&
+        t.check(selected + ' Automatic header settles without a reconnect loop', settled.connected && settled.hidden && settled.matches &&
             await t.ev(`return H.session(H.nativePane) === H.autoHeaderSession && H.autoHeaderSession.state === 'connected'`), settled)
     }
     await t.settings({ headerAutoHide: 'never', resize: 'off' })

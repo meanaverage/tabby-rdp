@@ -6,8 +6,8 @@
 
 - **Tabby 1.0.236 or newer**, on macOS, Windows or Linux. On a fresh Windows, Tabby
   itself needs the [Microsoft Visual C++ Redistributable](https://learn.microsoft.com/cpp/windows/latest-supported-vc-redist)
-  for SSH. The experimental **FreeRDP client also requires this runtime**, for the client architecture
-  (ARM64 or x64), including for direct RDP connections. It is a prerequisite and is not bundled by the plugin.
+  for SSH. This is a Tabby prerequisite and is not bundled by the plugin. The FreeRDP WebAssembly core
+  adds no native DLL prerequisite.
 - **Automatic headless GNOME setup:** GNOME Shell and GNOME Remote Desktop 46 or newer (Ubuntu 24.04, for example), a systemd user
   session, and SSH access with a key or agent. `desk` also needs `python3` and GNOME Terminal. No root, no display, no
   login screen.
@@ -49,13 +49,11 @@ These focused checks do not establish clipboard, shared-folder, audio or microph
 
 ## FreeRDP client preview
 
-Native helpers are bundled for macOS ARM64 and Windows/Linux ARM64 and x64. The native protocol/security checks
-pass on all five targets. Packed-plugin lifecycle tests against Windows Server 2025 pass in the existing Windows 11
-ARM64 and Ubuntu 24.04 ARM64 client VMs: pixels, input routing, live resize in both directions, fixed-resolution
-fitting, view only, cleanup, reconnect, switching to IronRDP, input-burst recovery and stable Automatic headers with reconnect resizing.
-macOS ARM64 has earlier lifecycle coverage and current native protocol/security checks. Live x64 RDP qualification,
-domain-policy qualification and performance comparisons remain pending.
-See [capabilities and build coverage](../native/README.md).
+FreeRDP 3.33.1 is bundled as WebAssembly for macOS, Windows and Linux. It uses an Electron utility process and needs
+no platform-specific FreeRDP package. Hosted checks exercise the packaged runtime on Windows x64, Linux x64 and
+macOS; live Windows Server 2022 tests cover macOS ARM64 and Windows Server 2025 x64 clients, including text/file
+clipboard transfers and cache-setting reconnects. Live Linux file-transfer qualification remains pending.
+Windows SSPI and Kerberos are not provided by this build. See [capabilities and test coverage](../native/README.md).
 
 ## Limitations
 
