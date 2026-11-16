@@ -1,3 +1,6 @@
+# Source archives must use their own version, not a tag in the enclosing Tabby repository.
+set(USE_VERSION_FROM_GIT_TAG OFF CACHE BOOL "" FORCE)
+set(USE_GIT_FOR_REVISION OFF CACHE BOOL "" FORCE)
 # Keep the distributed helper's dependency set explicit. Optional codecs are a separate build/license review.
 if(EMSCRIPTEN)
     set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
