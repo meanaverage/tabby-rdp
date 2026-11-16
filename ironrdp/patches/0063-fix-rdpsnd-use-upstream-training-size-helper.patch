@@ -1,0 +1,103 @@
+From 578717f89062358b05b2f5b4f06fa74dc4122de8 Mon Sep 17 00:00:00 2001
+From: meanaverage <18336095+meanaverage@users.noreply.github.com>
+Date: Mon, 16 Nov 2026 12:26:45 -0800
+Subject: [PATCH] fix(rdpsnd): use upstream training size helper
+
+Align patch 4 with merged Devolutions/IronRDP#2294 (f86e3c49f349127b7e7f3c737ca10de49cc20f8d), which superseded #2019. Compute the size once without cloning the audio training payload; include Windows and FreeRDP server wire fixtures.
+---
+ crates/ironrdp-rdpsnd/src/client.rs           |  7 +-----
+ crates/ironrdp-rdpsnd/src/pdu/mod.rs          | 18 ++++++++++-----
+ .../tests/rdpsnd/client.rs                    | 23 +++++++++++++++++++
+ 3 files changed, 36 insertions(+), 12 deletions(-)
+
+diff --git a/crates/ironrdp-rdpsnd/src/client.rs b/crates/ironrdp-rdpsnd/src/client.rs
+index e1225cd..3420156 100644
+--- a/crates/ironrdp-rdpsnd/src/client.rs
++++ b/crates/ironrdp-rdpsnd/src/client.rs
+@@ -169,12 +169,7 @@ impl Rdpsnd {
+         // MS-RDPEA 2.2.3.2: wPackSize echoes the Training PDU's wPackSize, which counts the whole PDU
+         // (header included), or is 0 when it carries no data. Servers may check it (GNOME Remote Desktop
+         // ignores a mismatching confirm and never starts playback).
+-        let pack_size = if pdu.data.is_empty() {
+-            0
+-        } else {
+-            pdu::ServerAudioOutputPdu::Training(pdu.clone()).size()
+-        };
+-        let pack_size: EncodeResult<_> = cast_length!("wPackSize", pack_size);
++        let pack_size: EncodeResult<_> = cast_length!("wPackSize", pdu.pack_size());
+         let pack_size = pack_size.map_err(|e| encode_err!(e))?;
+         let pdu = pdu::TrainingConfirmPdu {
+             timestamp: pdu.timestamp,
+diff --git a/crates/ironrdp-rdpsnd/src/pdu/mod.rs b/crates/ironrdp-rdpsnd/src/pdu/mod.rs
+index fb3dd2d..221489f 100644
+--- a/crates/ironrdp-rdpsnd/src/pdu/mod.rs
++++ b/crates/ironrdp-rdpsnd/src/pdu/mod.rs
+@@ -627,6 +627,17 @@ impl TrainingPdu {
+     const FIXED_PART_SIZE: usize =
+         2 /* wTimeStamp */
+         + 2 /* wPackSize */;
++
++    /// The PDU's wPackSize: the size of the whole PDU, RDPSND header included,
++    /// when it carries data, and 0 when it doesn't ([MS-RDPEA] 2.2.3.1). The
++    /// client's Training Confirm echoes it ([MS-RDPEA] 2.2.3.2).
++    pub fn pack_size(&self) -> usize {
++        if self.data.is_empty() {
++            0
++        } else {
++            self.size() + ServerAudioOutputPdu::FIXED_PART_SIZE
++        }
++    }
+ }
+ 
+ impl Encode for TrainingPdu {
+@@ -634,12 +645,7 @@ impl Encode for TrainingPdu {
+         ensure_size!(in: dst, size: self.size());
+ 
+         dst.write_u16(self.timestamp);
+-        let len = if self.data.is_empty() {
+-            0
+-        } else {
+-            self.size() + ServerAudioOutputPdu::FIXED_PART_SIZE
+-        };
+-        dst.write_u16(cast_length!("TrainingPdu::wPackSize", len, in: dst)?);
++        dst.write_u16(cast_length!("TrainingPdu::wPackSize", self.pack_size(), in: dst)?);
+         dst.write_slice(&self.data);
+ 
+         Ok(())
+diff --git a/crates/ironrdp-testsuite-core/tests/rdpsnd/client.rs b/crates/ironrdp-testsuite-core/tests/rdpsnd/client.rs
+index 430ef0a..8610b67 100644
+--- a/crates/ironrdp-testsuite-core/tests/rdpsnd/client.rs
++++ b/crates/ironrdp-testsuite-core/tests/rdpsnd/client.rs
+@@ -441,6 +441,29 @@ fn ready_training_sends_confirm() {
+     assert_eq!(responses.len(), 1);
+ }
+ 
++/// The Training Confirm echoes the server's wPackSize ([MS-RDPEA] 2.2.3.2),
++/// the size of the whole Training PDU. GNOME Remote Desktop rejects a confirm
++/// with any other value and then plays nothing.
++// oracle: spec MS-RDPEA §4.1.3 annotated Training PDU (BodySize 0x3fc, wPackSize 0x400) and §2.2.3.2
++// oracle: reference FreeRDP rdpsnd_server_training writes wPackSize bytes of data; GNOME RD TRAINING_PACKSIZE 1024
++#[rstest]
++#[case::windows(1016)] // 8 bytes of header and fields, then 1016 of data
++#[case::freerdp_server(1024)] // 1024 bytes of data after the fields
++fn training_confirm_echoes_the_server_pack_size(#[case] data_len: u16) {
++    let mut training = vec![0x06, 0x00]; // SNDC_TRAINING, bPad
++    training.extend_from_slice(&(4 + data_len).to_le_bytes()); // BodySize
++    training.extend_from_slice(&0x1234u16.to_le_bytes()); // wTimeStamp
++    training.extend_from_slice(&1024u16.to_le_bytes()); // wPackSize
++    training.extend(core::iter::repeat_n(0, usize::from(data_len)));
++
++    let mut client = client_in_waiting();
++    let confirm = decode_single_response(&client.process(&training).unwrap());
++    let pdu::ClientAudioOutputPdu::TrainingConfirm(confirm) = confirm else {
++        panic!("expected a Training Confirm, got {confirm:?}");
++    };
++    assert_eq!((confirm.timestamp, confirm.pack_size), (0x1234, 1024));
++}
++
+ // Ready -> AudioFormat -> QualityMode -> Training -> Wave2
+ //
+ // Verifies that receiving a new AudioFormat PDU in Ready state restarts
+-- 
+2.54.0 (Apple Git-157)
+

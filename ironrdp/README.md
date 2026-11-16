@@ -122,11 +122,33 @@ boundaries and recovery of budget after work completes.
 
 Each patch carries its own tests where IronRDP has a place for them (`ironrdp-testsuite-core`, the patched crate, the
 web packages' vitest suites), and CI runs them: the web component's on every change (`ci.yml`), the Rust crates' and
-the RDP package's when the series changes and before a release (`ironrdp.yml`). Left out there, each by its exact name:
-one of IronRDP's own tests (`rdpdr::filesystem_drive_announce_encodes_unicode_data_and_valid_dos_name`), which expects
-drive names in UTF-16, which patch 15 changes to ANSI on purpose; and the 19 of IronRDP's
-`ironrdp-web` clipboard tests that call into JavaScript, which only a browser has. The module's other clipboard tests
-run, and so does any a patch adds, so a patch's test that needs a browser fails there until it is added to that list.
+the RDP package's when the series changes and before a release (`ironrdp.yml`). The 19 existing
+`ironrdp-web` clipboard tests that call JavaScript are excluded by exact name on native Rust targets; their
+browser imports cannot run there. All native-compatible tests run, including upstream's corrected drive-name
+wire tests and the backported audio, DVC and licensing regressions.
+
+## Upstream review backports for 0.6.x
+
+The base remains `9b151c4c2e47c6014e1e8e55909d4180aa8bdb99`. Follow-up patches retain the existing
+resource limits, microphone, shared-drive and focused-clipboard extensions while incorporating final upstream
+review changes. The newer IronRDP base is reserved for 0.7.0.
+
+| Local patch | Final upstream source | Integration |
+|---|---|---|
+| 1 → 62 | [#2341](https://github.com/Devolutions/IronRDP/pull/2341), `a7ab89bd842b` | Bounded history for actual declines/client closes; transport checks, reuse and Soft-Sync regression cases. This older base does not support tunneled Create/Close PDUs. |
+| 3 | [#2018](https://github.com/Devolutions/IronRDP/pull/2018), `e258f6a06b1f` | Already matches; later lifecycle tests are included in patch 65. |
+| 4 → 63 | [#2294](https://github.com/Devolutions/IronRDP/pull/2294), `f86e3c49f349` | Shared training-size helper and independent Windows/FreeRDP wire fixtures; supersedes closed #2019. |
+| 6 → 64 | [#2020](https://github.com/Devolutions/IronRDP/pull/2020), `7fc8a6fca37b` | Final audio backend and native negotiation tests; retains downstream drive/microphone channel setup. Browser-only wasm-bindgen tests are not imported into this older dependency tree. |
+| 12 → 65 | [#2345](https://github.com/Devolutions/IronRDP/pull/2345), `ddcffc42c06d` | Runtime lifecycle behavior already matches; carry final session-ended/destroyed-before-ready tests and retain patch 13's focused-session isolation. |
+| 15 → 60 | [#2342](https://github.com/Devolutions/IronRDP/pull/2342), `4cd9d45060df` | Final ASCII drive-name sanitization and wire tests, replacing the obsolete UTF-16 test exclusion. |
+| 28 | [#2343](https://github.com/Devolutions/IronRDP/pull/2343), `37ce7d1b6957` | Selection behavior and tests already match; differences are test-oracle comments. |
+| 55 | [#2128](https://github.com/Devolutions/IronRDP/pull/2128), `905c28b3a4e6` | Reviewed connection-time auto-detection behavior is already present. |
+| 56 → 61 | [#2344](https://github.com/Devolutions/IronRDP/pull/2344), `5c4dcfa7b116` | Byte-length redaction, allocation-free certificate formatting, Debug snapshots and outgoing request diagnostics. |
+
+As of 2026-11-16, [#2006](https://github.com/Devolutions/IronRDP/pull/2006) (canvas sizing),
+[#2026](https://github.com/Devolutions/IronRDP/pull/2026) (keyboard API) and
+[#2346](https://github.com/Devolutions/IronRDP/pull/2346) (clipboard limits) remain open. Their local patches remain
+necessary and are not represented as merged upstream fixes.
 
 ## Working on them
 

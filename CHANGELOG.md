@@ -2,6 +2,12 @@
 
 ## 0.6.3 (unreleased)
 
+**Fixed**
+- Bring the retained IronRDP patch series into line with final upstream drive-name, dynamic-channel, audio-training, clipboard-lifecycle and licensing-diagnostic corrections without changing the 0.6.x IronRDP base.
+
+**Changed**
+- Include the pending dependency updates: Angular 22.2.4, Playwright 1.65.0 and WebSocket transport library `ws` 8.22.1.
+
 **Added**
 - File and folder clipboard transfers with FreeRDP: paste copied files into the remote desktop, drop files onto it, and save files copied remotely through the existing download notification. Transfers respect clipboard direction and view-only settings.
 - Ship FreeRDP as a portable WebAssembly client in the plugin package. Existing FreeRDP choices use it on reconnect; IronRDP remains the default. Separate native FreeRDP packages are no longer required.

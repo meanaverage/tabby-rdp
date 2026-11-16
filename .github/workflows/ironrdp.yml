@@ -109,10 +109,8 @@ jobs:
           crates=$({ echo ironrdp-testsuite-core; sed -n 's#^diff --git a/crates/\([^/]*\)/.*#\1#p' "$GITHUB_WORKSPACE"/ironrdp/patches/*.patch; } | sort -u | grep -vx ironrdp-web)
           echo "Testing ironrdp-web and:" $crates
           failed=0
-          # Skipped, by its exact name: IronRDP's own test of drive announcements expects the drive name in UTF-16,
-          # and patch 15 sends it in ANSI on purpose (Windows reads it so).
-          cargo test --locked --no-fail-fast --lib --tests $(printf -- '-p %s ' $crates) \
-            -- --exact --skip rdpdr::filesystem_drive_announce_encodes_unicode_data_and_valid_dos_name || failed=1
+          # Patch 60 carries upstream's corrected 8-bit drive-name wire tests; no RDPDR exclusions.
+          cargo test --locked --no-fail-fast --lib --tests $(printf -- '-p %s ' $crates) || failed=1
           # Skipped, each by its exact name: ironrdp-web's clipboard tests that call into JavaScript, which only a
           # browser has (here they panic: "cannot call wasm-bindgen imported functions on non-wasm targets"). The
           # module's other tests run; a new one that needs a browser fails here until it is added to this list.
