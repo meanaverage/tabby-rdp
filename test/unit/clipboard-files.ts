@@ -336,13 +336,16 @@ test('Save to Downloads stops between files once nothing comes from the remote a
     }
 })
 
-test('expired file reads fail their protocol stream so providers can reuse it', () => {
+test('expired file reads discard adapter bookkeeping without replying to a reused stream', () => {
     const c = transfer(BOTH)
     try {
+        const discarded: number[] = []
+        c.provider.discardFileContentsRequest = (stream: number) => discarded.push(stream)
         c.files.reading = [{ streamId: 77, number: 123, since: 0, bytes: 4 }]
         c.files.served.set(123, { streamId: 77 })
         c.files.expire()
-        assert.deepEqual(c.handedOut, [{ streamId: 77, isError: true, text: '' }])
+        assert.deepEqual(c.handedOut, [])
+        assert.deepEqual(discarded, [77])
         assert.equal(c.files.reading.length, 0)
         assert.equal(c.files.served.size, 0)
     } finally { c.files.dispose() }

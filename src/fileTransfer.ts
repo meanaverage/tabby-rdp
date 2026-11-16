@@ -540,6 +540,9 @@ export class FileTransfer {
     constructor (rdp: any, private overlay: HTMLElement, private log: (msg: string) => void, private ways: () => ClipboardWays, private flow?: ServerFlow,
         private viewOnly: () => boolean = () => false) {
         this.provider = new rdp.RdpFileTransferProvider({ storageBackend: new DiskStorage() })
+        // The FreeRDP adapter checks duplicate wire stream IDs before handing a request here.
+        // Expire old reads first so its bookkeeping cannot refuse a reused stream forever.
+        this.provider.beforeFileContentsRequest = () => this.expire()
         // The remote can ask again, later, for files offered from here: their contents go only while this computer's
         // clipboard goes there. The provider's extensions call the method on it, so this one takes its place.
         this.serve = this.provider.handleFileContentsRequest.bind(this.provider)
@@ -817,8 +820,9 @@ export class FileTransfer {
                 if (r.number !== null) {
                     this.served.delete(r.number)
                 }
-                // Settle the protocol request too: providers may retain its stream until answered.
-                this.submit?.(r.streamId, true, new Uint8Array())
+                // Drop adapter bookkeeping without sending a late error that could be mistaken
+                // for a reply to the server's new request on this stream.
+                this.provider.discardFileContentsRequest?.(r.streamId)
             }
             return live
         })

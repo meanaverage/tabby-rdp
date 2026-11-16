@@ -44,7 +44,12 @@ test('draft notes require an exact nonempty changelog and do not promise staged 
 
 test('publishing workflow keeps every staging gate, explicit tags and draft availability boundary', () => {
     const workflow = readFileSync(new URL('../../.github/workflows/publish.yml', import.meta.url), 'utf8')
-    assert.match(workflow, /needs: \[ironrdp, package, helpers\]/)
+    assert.match(workflow, /needs: \[ironrdp, freerdp, package, helpers\]/)
+    assert.match(workflow, /uses: \.\/\.github\/workflows\/freerdp\.yml/)
+    const freerdp = readFileSync(new URL('../../.github/workflows/freerdp.yml', import.meta.url), 'utf8')
+    assert.match(freerdp, /workflow_call:/)
+    assert.match(freerdp, /git diff --exit-code -- wasm\/freerdp/)
+    assert.match(freerdp, /git ls-files --others --exclude-standard -- wasm\/freerdp/)
     assert.match(workflow, /id-token: write/)
     assert.match(workflow, /sha256sum --strict -c -/)
     assert.match(workflow, /check-vendor\.mjs package/)

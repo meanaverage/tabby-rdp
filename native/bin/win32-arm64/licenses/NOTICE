@@ -1,3 +1,0 @@
-This helper uses FreeRDP and WinPR 3.33.1 (Apache-2.0), https://www.freerdp.com/, and OpenSSL 3 (Apache-2.0), https://www.openssl.org/.
-WinPR's built-in Unicode conversion code carries the accompanying Unicode-NOTICE.
-Original license and notice texts accompany this file. The Tabby helper itself is MIT licensed.

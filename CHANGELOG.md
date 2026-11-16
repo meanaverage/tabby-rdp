@@ -7,6 +7,7 @@
 
 **Changed**
 - Carry the view-only clipboard fix from #155 into the portable-client branch, including uploads that finish reading after view only starts.
+- Remove obsolete committed native FreeRDP binaries; native comparison builds remain available from CI and the build scripts.
 - Bound WebAssembly socket uploads and stop workers when their owner or input disappears. Match file clipboard acknowledgements to their offers and fail unavailable channels promptly.
 - Require an independent FreeRDP WASM rebuild and protocol checks before release staging. Preserve server audio volume before playback and apply separate logarithmic channel gains in IronRDP.
 - Include the pending dependency updates: Angular 22.2.4, Playwright 1.65.0 and WebSocket transport library `ws` 8.22.1.

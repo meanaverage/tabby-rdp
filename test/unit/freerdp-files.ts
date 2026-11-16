@@ -164,3 +164,17 @@ test('replacing an upload fails abandoned requests and permits reusing their str
     provider.sendSubmitFileContents(12, false, Buffer.from('new'))
     assert.deepEqual(sent.at(-1)!.data, Buffer.concat([numbers(2, 12, 0), Buffer.from('new')]))
 })
+
+test('expired requests are discarded before duplicate stream validation', async t => {
+    const { provider, sent } = await fixture(t)
+    let requests = 0
+    provider.handleFileContentsRequest = () => requests++
+    provider.sendInitiateFileCopy(entries)
+    const request = numbers(1, 14, 0, 2, 0, 0, 5)
+    provider.receive('q', request)
+    provider.beforeFileContentsRequest = () => provider.discardFileContentsRequest(14)
+    const before = sent.length
+    provider.receive('q', request)
+    assert.equal(requests, 2)
+    assert.equal(sent.length, before, 'no stale failure is sent on the reused stream')
+})

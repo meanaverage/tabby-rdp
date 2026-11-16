@@ -38,7 +38,7 @@ with the earlier native integration. Synthetic tests cannot qualify a particular
 
 ## Native comparison build
 
-Native builds are retained for development and benchmarks, not published as dependencies. Build on each intended OS and CPU architecture. Requires Node 18+, CMake, a C compiler and an OpenSSL 3 development
+Native builds are generated on demand for development and benchmarks, and retained as CI artifacts. They are not committed or published as dependencies. Build on each intended OS and CPU architecture. Requires Node 18+, CMake, a C compiler and an OpenSSL 3 development
 installation with its license text. macOS also needs Xcode command-line tools; Linux needs `patchelf`; Windows
 needs Visual Studio C++ build tools (including `dumpbin`), Perl and Ninja for the target architecture.
 

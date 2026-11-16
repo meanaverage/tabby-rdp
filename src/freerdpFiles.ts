@@ -76,6 +76,9 @@ export function freeRDPFileProvider (
         private remoteGeneration = 0
         private requests = new Map<number, number>()
         private downloads = new Map<number, number>()
+        beforeFileContentsRequest?: () => void
+
+        discardFileContentsRequest (stream: number): void { this.requests.delete(stream) }
 
         downloadFile (file: FileInfo, index: number): any {
             if (this.availableFiles[index] !== file) { throw new Error('The remote clipboard changed before this file could be saved') }
@@ -135,6 +138,7 @@ export function freeRDPFileProvider (
             } else if (type === 'a' && data.length === 5) {
                 if (data.readUInt32BE(0) === this.localGeneration) { this.handleFormatListResponse(data[4] === 1) }
             } else if (type === 'q' && data.length === 28) {
+                this.beforeFileContentsRequest?.()
                 const generation = data.readUInt32BE(0), stream = data.readUInt32BE(4)
                 const position = data.readUInt32BE(16) + data.readUInt32BE(20) * 0x100000000
                 if (generation !== this.localGeneration || !ways().toRemote || !Number.isSafeInteger(position) || this.requests.has(stream) || this.requests.size >= 1024) {
