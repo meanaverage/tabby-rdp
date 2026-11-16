@@ -1,20 +1,20 @@
 {
   "source": {
-    "version": "3.33.0",
-    "url": "https://codeload.github.com/FreeRDP/FreeRDP/tar.gz/refs/tags/3.33.0",
-    "sha256": "3b5e7733e667ad66f54e0db51d952268c9d08b2e71a4fade44c716ab29dd5657"
+    "version": "3.33.1",
+    "url": "https://codeload.github.com/FreeRDP/FreeRDP/tar.gz/refs/tags/3.33.1",
+    "sha256": "6b6da1e7217f924b033da6896e70eb4c4a447c3900d03c0d10179062f0a7d495"
   },
   "opensslSource": null,
-  "version": "tabby-freerdp IPC 6; FreeRDP 3.33.0",
+  "version": "tabby-freerdp IPC 7; FreeRDP 3.33.1",
   "platform": "darwin",
   "arch": "arm64",
   "buildSources": {
-    "native/main.c": "cb9a1ccc88036509b7ec75c44da07bb5bc4d781a8a210ebb6f431b1560b71c90",
-    "native/options.cmake": "704c5e9527bc546d07edf16472de87e87c4785e8c41a0939c2298ad32f121074",
-    "native/CMakeLists.txt": "659585c5dc95ef68bb755290be39fa1c517097728e784bb30ec74c616f6708aa",
+    "native/main.c": "9a2160520f9046ddc1a3c59b03d5d977629254b648ceb5fb0d3ce24f09943caf",
+    "native/options.cmake": "6879d34b4d55166395f31e688ff82fd217ec38942a3007d60c7ac25b90301ab9",
+    "native/CMakeLists.txt": "b3273da04795ad3e139d7b06040eb942c4b037a7de839c34f6715027f0e15021",
     "scripts/build-freerdp.mjs": "bee69bc743102493457586fa49b5539fb02c9e1d7b52ef2b6306146a32a65118",
     "native/openssl-source.json": "50082e3fc1b171c9d708fd0437ecb291960e9567b3c9d6648f495f3fb2a3a009",
-    "scripts/build-freerdp-ci.mjs": "11d38612fafb3bf49ae59ba8f2a94087715274a1eecea624de029ca5e61d8fd1"
+    "scripts/build-freerdp-ci.mjs": "5b555e711d93b2380cc2da8ae7123f68e4080fedf26a0577d09159e2d70b6a97"
   },
   "files": [
     {
@@ -27,11 +27,11 @@
     },
     {
       "path": "libfreerdp-client3.3.dylib",
-      "sha256": "c0d8a81833b23c365790d5caf46d011c814924b4e355ff3d0ec4cdcb96e93acf"
+      "sha256": "ed1a8f88d0687ec6bc798ca2c395399315345ce1df3395a83efde5f40cf55763"
     },
     {
       "path": "libfreerdp3.3.dylib",
-      "sha256": "eb04382fc227d7d4de627689ce1c98a3740806aee5d8f0b9c43c5b489b8187c3"
+      "sha256": "fa57427c784c27a3303dcbbf177e936025006f0ca4021abff12e02f3772cbe51"
     },
     {
       "path": "libssl.3.dylib",
@@ -39,7 +39,7 @@
     },
     {
       "path": "libwinpr3.3.dylib",
-      "sha256": "5c50e6e6bbcb7fb4c3f9aa7508c9d5f4f2e4788580468a5b467115e2aa3c21b0"
+      "sha256": "5d800c98a4c851a1a5e71623433666c4b5da7dcc58ed2ab0d344e31b4c9517bc"
     },
     {
       "path": "licenses/FreeRDP-LICENSE",
@@ -51,7 +51,7 @@
     },
     {
       "path": "licenses/NOTICE",
-      "sha256": "239e10becb74f627706a9a0e162d867ff211a4f736536104370963114bc7e242"
+      "sha256": "1249783a82c780f324b6366ce69d3024ab51d040d582ae0b6b361547e6fa0047"
     },
     {
       "path": "licenses/OpenSSL-LICENSE",
@@ -63,7 +63,7 @@
     },
     {
       "path": "tabby-freerdp",
-      "sha256": "ce394ee51196c4892133094caef15a74787a7f8c497706c2fb2806f154655847"
+      "sha256": "508fb979e6156a9bccf0f1acdee07d1d05cd726273abd69617179e7ef63e27be"
     }
   ]
 }

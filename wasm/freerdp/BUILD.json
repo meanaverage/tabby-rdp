@@ -1,0 +1,63 @@
+{
+  "freerdp": {
+    "version": "3.33.1",
+    "url": "https://codeload.github.com/FreeRDP/FreeRDP/tar.gz/refs/tags/3.33.1",
+    "sha256": "6b6da1e7217f924b033da6896e70eb4c4a447c3900d03c0d10179062f0a7d495"
+  },
+  "toolchain": {
+    "emscripten": "6.0.12",
+    "emsdkCommit": "35ff8a6d150541276abbc6bae512ca90bcfbe220",
+    "libressl": {
+      "version": "4.3.3",
+      "url": "https://ftp.openbsd.org/pub/OpenBSD/LibreSSL/libressl-4.3.3.tar.gz",
+      "sha256": "ff97c432457f349e6ba3d416ab903bc7468f1436f0f32efe5fff808de292c7b8"
+    },
+    "zlib": {
+      "version": "1.3.2",
+      "url": "https://codeload.github.com/madler/zlib/tar.gz/refs/tags/v1.3.2",
+      "sha256": "b99a0b86c0ba9360ec7e78c4f1e43b1cbdf1e6936c8fa0f6835c0cd694a495a1"
+    }
+  },
+  "buildSources": {
+    "native/main.c": "9a2160520f9046ddc1a3c59b03d5d977629254b648ceb5fb0d3ce24f09943caf",
+    "native/wasm-io.h": "5986bb4f3b7d0e76a4cf0d1886310db374a2ec12eaf96e8f1db815c1b8aa1ff1",
+    "native/options.cmake": "6879d34b4d55166395f31e688ff82fd217ec38942a3007d60c7ac25b90301ab9",
+    "native/CMakeLists.txt": "b3273da04795ad3e139d7b06040eb942c4b037a7de839c34f6715027f0e15021",
+    "native/wasm-source.json": "ffa07ddd5aeb704c7979214aa8bfe78597ee9b659f6029a7680282ea1b2eb78a",
+    "scripts/build-freerdp-wasm.mjs": "5db29c05e5a090f2a4f9c2eef8557932707dd1031ca9b8dcc3211a1544d61a3e"
+  },
+  "files": [
+    {
+      "path": "licenses/Emscripten-LICENSE",
+      "sha256": "620a78084fc7ca97c0b5dea9abf891f3ffcadfdbf305276f099c9c4e12fc1d86"
+    },
+    {
+      "path": "licenses/FreeRDP-LICENSE",
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+    },
+    {
+      "path": "licenses/FreeRDP-NOTICE",
+      "sha256": "c870d52f42a8f93023b99a85fe68d02637d6b04e5f35bbcd7f98759adb4e4d49"
+    },
+    {
+      "path": "licenses/LibreSSL-LICENSE",
+      "sha256": "9853507b8821c3f277aa60bf554eade41441ef06b2df538d247183ad28789b7f"
+    },
+    {
+      "path": "licenses/Unicode-NOTICE",
+      "sha256": "47e27f87477adf7e9a6cab4f5dceadb82f40cc2f211dc7fc6496b98a1bbee859"
+    },
+    {
+      "path": "licenses/zlib-LICENSE",
+      "sha256": "e32ff4e00d9d94930537635291da39e7e612703334bf6fde8c7f1686fe8a45a2"
+    },
+    {
+      "path": "tabby-freerdp.js",
+      "sha256": "3c4475e0972e32f6a88c298ab510a5cbba63d7c9707f71c79bbe9a1b53857670"
+    },
+    {
+      "path": "tabby-freerdp.wasm",
+      "sha256": "62436bbfe345d495f67b2f4ed6f083cc8dda71045086dd751d12bf0a4896aa1b"
+    }
+  ]
+}

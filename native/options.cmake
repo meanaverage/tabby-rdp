@@ -1,5 +1,12 @@
 # Keep the distributed helper's dependency set explicit. Optional codecs are a separate build/license review.
-set(BUILD_SHARED_LIBS ON CACHE BOOL "" FORCE)
+if(EMSCRIPTEN)
+    set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+    set(WITH_LIBRESSL ON CACHE BOOL "" FORCE)
+    set(WITH_TIMEZONE_ICU OFF CACHE BOOL "" FORCE)
+    set(USE_UNWIND OFF CACHE BOOL "" FORCE)
+else()
+    set(BUILD_SHARED_LIBS ON CACHE BOOL "" FORCE)
+endif()
 set(WITH_CLIENT_COMMON ON CACHE BOOL "" FORCE)
 set(WITH_CHANNELS ON CACHE BOOL "" FORCE)
 set(WITH_CLIENT_CHANNELS ON CACHE BOOL "" FORCE)

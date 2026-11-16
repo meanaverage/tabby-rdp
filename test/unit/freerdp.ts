@@ -12,6 +12,9 @@ import { selfSigned } from './support/certificates.js'
 
 const require = createRequire(import.meta.url)
 const { FreeRDPFrames, ipcFrame, numbers, freeRDPStart, decodeNativeFrame, freeRDPRelay, FreeRDPProcess, FreeRDPError, nativeHelperPath, helperEnvironment, freeRDPAuthorities } = require('../../dist/freerdp.js')
+const runtime = process.env.TRD_TEST_FREERDP_RUNTIME === 'wasm' ? 'wasm' : 'native'
+const { hasFreeRDPWasm } = require('../../dist/freerdpWasm.js')
+const available = () => runtime === 'wasm' ? hasFreeRDPWasm() : existsSync(nativeHelperPath())
 const { nativeKey } = require('../../dist/freerdpView.js')
 const { ownRDPClient, rdpClient } = require('../../dist/rdpClient.js')
 const { specOf, sessionKey } = require('../../dist/desktops.js')
@@ -87,6 +90,7 @@ test('client choice defaults to IronRDP; invalid config never runs an arbitrary 
         assert.equal(ownRDPClient(value), undefined)
     }
     assert.equal(rdpClient('freerdp'), 'freerdp')
+    assert.equal(rdpClient('freerdp-wasm'), 'freerdp-wasm')
     const a = specOf({ host: 'pc', client: 'ironrdp' }), b = specOf({ host: 'pc', client: 'freerdp' })
     assert.equal(b.client, 'freerdp')
     assert.equal(sessionKey('rdp', a), sessionKey('rdp', b), 'client changes do not create new credentials/certificate identities')
@@ -151,7 +155,7 @@ test('IPC start carries the clipboard\'s ways, and none leaves the channel out',
 })
 
 test('clipboard text: the server\'s arrives as UTF-8, this computer\'s goes only once connected and within one frame, and a narrowing goes as W', () => {
-    const native = new FreeRDPProcess(), writes: Buffer[] = [], got: string[] = []
+    const native = new FreeRDPProcess(runtime), writes: Buffer[] = [], got: string[] = []
     native.child = { stdin: { writableLength: 0, write: (data: Buffer) => writes.push(data) } }
     assert.equal(native.sendClipboardText('before'), true)
     assert.equal(writes.length, 0, 'nothing goes before the sign-in has finished')
@@ -295,7 +299,7 @@ test('only explicit credential rejection triggers a saved-password retry', () =>
 })
 
 test('native input waits until authentication has finished without delaying security decisions', () => {
-    const native = new FreeRDPProcess(), writes: Buffer[] = []
+    const native = new FreeRDPProcess(runtime), writes: Buffer[] = []
     native.child = { stdin: { writableLength: 0, write: (data: Buffer) => writes.push(data) } }
     for (const type of ['M', 'K', 'R', 'P', 'W', 'N', 'C']) native.send(type, Buffer.from([1]))
     assert.deepEqual(writes.map(data => String.fromCharCode(data[0])), ['N', 'C'])
@@ -306,14 +310,14 @@ test('native input waits until authentication has finished without delaying secu
 
 test('server-directed session endings do not become reconnectable transport failures', async () => {
     for (const reason of [0, 1, 2, 3, 4, 5, 11, 12]) {
-        const native = new FreeRDPProcess()
+        const native = new FreeRDPProcess(runtime)
         native.receive('D', numbers(800, 600), {})
         native.receive('X', numbers(reason ? 0x10000 | reason : 0, reason), {})
         const end = await native.run()
         assert.ok(end.reason())
     }
     for (const code of [0x2000d, 0x10006, 0x10007]) {
-        const native = new FreeRDPProcess()
+        const native = new FreeRDPProcess(runtime)
         native.receive('D', numbers(800, 600), {})
         native.receive('X', numbers(code, 0), {})
         await assert.rejects(native.run(), /FreeRDP connection failed/)
@@ -340,7 +344,7 @@ test('the native relay authenticates before opening any remote stream and closes
     const closed = once(right, 'close'); relay.close(); await closed
 })
 
-const native = existsSync(nativeHelperPath())
+const native = available()
 
 test('a refused SSH/gateway transport preserves its reason for the connection log', async t => {
     const relay = await freeRDPRelay(async () => { throw new Error('SSH forwarding is disabled for this account') })
@@ -375,7 +379,7 @@ for (const mode of ['without-nla', 'certificate-tls', 'certificate-nla', 'truste
             socket.on('data', receive)
         })
         server.listen(0, '127.0.0.1'); await once(server, 'listening')
-        const process = new FreeRDPProcess()
+        const process = new FreeRDPProcess(runtime)
         t.after(() => { process.shutdown(); for (const socket of sockets) socket.destroy(); server.close() })
         let checked = false, withoutNla = 0, observedValid: boolean | undefined
         await assert.rejects(process.connect({
@@ -387,7 +391,7 @@ for (const mode of ['without-nla', 'certificate-tls', 'certificate-nla', 'truste
                 process.send('M', numbers(0x0800, 10, 20)); process.send('K', numbers(0, 0x1e, 0))
                 return socket
             },
-            certificate: (_fp: string, valid: boolean) => { checked = true; observedValid = valid; throw new Error('reject test certificate') },
+            certificate: (_fp: string, valid: boolean, reason: string) => { if (runtime === 'wasm') t.diagnostic('Certificate: ' + reason); checked = true; observedValid = valid; throw new Error('reject test certificate') },
             withoutNla: () => { withoutNla++; if (mode === 'without-nla') throw new Error('reject TLS sign-in') },
             frame: () => { throw new Error('not connected') },
         }), /FreeRDP/)
@@ -464,7 +468,7 @@ for (const version of [0, 2, 3, 4, 5, 6, -1, 'overflow', 'missing'] as const) {
             socket.on('data', receive)
         })
         server.listen(0, '127.0.0.1'); await once(server, 'listening')
-        const client = new FreeRDPProcess()
+        const client = new FreeRDPProcess(runtime)
         t.after(() => { client.shutdown(); for (const socket of sockets) socket.destroy(); server.close() })
         await assert.rejects(client.connect({
             host: 'native.test', username: 'private-test-username', password: 'private-test-password', domain: 'PRIVATE',

@@ -2,7 +2,12 @@
 
 ## 0.6.3 (unreleased)
 
+**Added**
+- File and folder clipboard transfers with FreeRDP: paste copied files into the remote desktop, drop files onto it, and save files copied remotely through the existing download notification. Transfers respect clipboard direction and view-only settings.
+- A selectable **FreeRDP WebAssembly (experimental)** client, alongside native FreeRDP and IronRDP. It uses the same transport routes, certificate prompts, canvas and clipboard controls as native FreeRDP.
+
 **Changed**
+- Update FreeRDP to 3.33.1. The WebAssembly build uses Emscripten 6.0.12 and LibreSSL 4.3.3.
 - Start the next development version from stable 0.6.2.
 
 ## 0.6.2

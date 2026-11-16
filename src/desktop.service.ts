@@ -13,7 +13,9 @@ import { AudioPlayer } from './audio'
 import { IronRDPLoader } from './ironrdp'
 import { RDPClient, ownRDPClient, rdpClient, RDP_CLIENT_LABELS, isRDPElement } from './rdpClient'
 import { FreeRDPProcess, requireFreeRDP, hasFreeRDP } from './freerdp'
+import { freeRDPFileProvider } from './freerdpFiles'
 import { FreeRDPClipboard, freeRDPClipboardLog } from './freerdpClipboard'
+import { hasFreeRDPWasm, requireFreeRDPWasm } from './freerdpWasm'
 import { FreeRDPView } from './freerdpView'
 import { createH264Decoder } from './h264'
 import { CLIPBOARD_LABELS, ClipboardMode, clipboardSetting, ClipboardWays, clipboardWays, narrowest, ownClipboard, setUpClipboard, splitPaste } from './clipboard'
@@ -1217,7 +1219,7 @@ export class RemoteDesktopService {
 
     private effectiveClient (override: unknown, hyperv = false): RDPClient {
         const own = ownRDPClient(override), preferred = own ?? this.settings().client
-        return !own && (hyperv || preferred === 'freerdp' && !hasFreeRDP()) ? 'ironrdp' : preferred
+        return !own && (hyperv || preferred === 'freerdp' && !hasFreeRDP() || preferred === 'freerdp-wasm' && !hasFreeRDPWasm()) ? 'ironrdp' : preferred
     }
 
     /** The profile's next-connection choice, with the currently running client shown separately. */
@@ -3580,9 +3582,9 @@ export class RemoteDesktopService {
             const client = this.effectiveClient(spec.client, !!spec.hyperv)
             if (client !== preferred) { session.log.push('client: using IronRDP because the global FreeRDP default is unavailable for this desktop on this computer') }
             session.client = client
-            if (client === 'freerdp') {
+            if (client !== 'ironrdp') {
                 if (spec.hyperv) { throw new Error('FreeRDP does not support Hyper-V consoles in Tabby yet. Choose IronRDP for this desktop.') }
-                requireFreeRDP()
+                if (client === 'freerdp-wasm') { requireFreeRDPWasm() } else { requireFreeRDP() }
             }
             const gateway = spec.gateway ? parseGateway(spec.gateway) : null
             if (spec.gateway && !gateway) {
@@ -3598,7 +3600,7 @@ export class RemoteDesktopService {
             // Signing in to a Windows account can take a few tries; a GNOME desktop the plugin set up can't fail that way.
             for (let attempt = 0; ; attempt++) {
                 // Resolve availability before opening a credential form; a missing native build asks for no password.
-                const backend = client === 'freerdp' ? Promise.resolve({ client }) : this.loadIronRDP(session)
+                const backend = client !== 'ironrdp' ? Promise.resolve({ client }) : this.loadIronRDP(session)
                 const [asked, rdp]: [Endpoint | null | 'stopped', any] = await Promise.all([endpoint ?? this.endpointFor(pane, target, spec, session, automatic, retryError), backend])
                 if (!alive()) {
                     return
@@ -3642,7 +3644,7 @@ export class RemoteDesktopService {
                     session.proxy.close()
                     session.proxy = null
                 }
-                if (!session.proxy && client !== 'freerdp') {
+                if (!session.proxy && client === 'ironrdp') {
                     const proxy = await startRDCleanPathProxy(
                         // A desktop connected to directly is reached by the proxy's own connection; one behind an SSH host
                         // through a channel of the SSH connection, carried to the proxy.
@@ -4337,7 +4339,7 @@ export class RemoteDesktopService {
         session.plainSignIn = false
         const settings = this.settingsFor(session)
         const size = session.initialSize ?? remoteSizeFor(session.overlay.getBoundingClientRect(), settings)
-        const native = new FreeRDPProcess()
+        const native = new FreeRDPProcess(session.client === 'freerdp-wasm' ? 'wasm' : 'native')
         const ui = new FreeRDPView(native, session.host)
         ui.setReadOnly(session.viewOnly)
         session.ui = ui
@@ -4345,14 +4347,14 @@ export class RemoteDesktopService {
         const stop = () => ui.shutdown()
         signal.addEventListener('abort', stop, { once: true })
         session.onConnectionEnd(stop)
-        session.log.push(`client: ${RDP_CLIENT_LABELS.freerdp}`)
+        session.log.push(`client: ${RDP_CLIENT_LABELS[session.client ?? 'freerdp']}`)
         const relaxOrderChecks = spec.relaxOrderChecks ?? this.settingsFor(session).relaxOrderChecks
         const glyphCache = spec.glyphCache ?? settings.glyphCache
         session.log.push(`FreeRDP glyph caching: ${glyphCache ? 'enabled (experimental)' : 'disabled'}`)
         const bitmapCache = spec.bitmapCache ?? settings.bitmapCache
         session.log.push(`FreeRDP bitmap caching: ${bitmapCache ? 'enabled (experimental)' : 'disabled'}`)
         session.log.push(`FreeRDP drawing order checks: ${relaxOrderChecks ? 'relaxed' : 'strict'}`)
-        session.log.push('FreeRDP preview: pictures and files on the clipboard, audio, microphone and shared folders are unavailable')
+        session.log.push('FreeRDP preview: pictures on the clipboard, audio, microphone and shared folders are unavailable')
         // Text through the clipboard channel, the ways the settings let it go as they are now, for this connection.
         session.clipboard = settings.clipboard
         session.log.push(freeRDPClipboardLog(session.clipboard))
@@ -4368,6 +4370,16 @@ export class RemoteDesktopService {
             },
             narrow: ways => native.narrowClipboard(ways),
         }, () => this.clipboardWaysOf(session), { focused: () => ui.isFocused(), viewOnly: () => ui.isViewOnly() })
+        const fileModule = await importESM(vendor('iron-remote-desktop-rdp.js'))
+        if (!alive()) { clipboard.stop(); native.shutdown(); return { connected: false } }
+        session.files?.dispose()
+        const Provider = freeRDPFileProvider(fileModule.RdpFileTransferProvider,
+            (type, data) => native.send(type, data),
+            () => session.viewOnly ? { toRemote: false, fromRemote: false } : this.clipboardWaysOf(session),
+            () => clipboard.localFiles())
+        session.files = new FileTransfer({ RdpFileTransferProvider: Provider }, session.overlay,
+            message => session.log.push(message), () => session.viewOnly ? { toRemote: false, fromRemote: false } : this.clipboardWaysOf(session))
+        clipboard.filesPending = () => session.files?.provider.isUploadInProgress() ?? false
         ui.clipboardSender = () => clipboard.sendNow()
         const { username, domain } = signInParts(endpoint.credentials.username, endpoint.domain ?? spec.domain ?? '')
         const gateway = spec.gateway ? parseGateway(spec.gateway) : null
@@ -4387,6 +4399,10 @@ export class RemoteDesktopService {
                 bitmapCache,
                 clipboard: clipboardWays(session.clipboard),
                 remoteText: text => clipboard.remote(text),
+                clipboardFiles: (type, data) => {
+                    if (type === 'l') { clipboard.remoteChanged() }
+                    session.files?.provider.receive(type, data)
+                },
                 open: async abort => {
                     const stream = gateway ? await this.throughGatewayStream(target, spec, session, gateway, endpoint, abort) : await target.openTcp(endpoint.host, endpoint.port)
                     if (abort.aborted) { stream.destroy(); throw new Error('Connection cancelled') }
@@ -4404,7 +4420,7 @@ export class RemoteDesktopService {
             onConnected(Date.now())
             clipboard.start()
             session.remoteSize = { ...info, scale: 100 }
-            session.graphics = 'FreeRDP native bitmaps'
+            session.graphics = session.client === 'freerdp-wasm' ? 'FreeRDP WebAssembly bitmaps' : 'FreeRDP native bitmaps'
             ui.setVisibility(session.visible)
             this.applyKeyboardMode(session)
             if (size.scale !== 100 || spec.kind === 'windows') { this.applySize(session, size) }
@@ -4475,7 +4491,7 @@ export class RemoteDesktopService {
         pane: DesktopPane, target: RemoteTarget, spec: DesktopSpec, session: DesktopSession, rdp: any, endpoint: Endpoint,
         signal: AbortSignal, onConnected: (at: number) => void,
     ): Promise<ConnectionOutcome> {
-        if (rdp.client === 'freerdp') {
+        if (rdp.client === 'freerdp' || rdp.client === 'freerdp-wasm') {
             return this.runFreeRDPConnection(pane, target, spec, session, endpoint, signal, onConnected)
         }
         session.log.push('client: IronRDP')

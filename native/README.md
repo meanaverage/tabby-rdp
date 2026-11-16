@@ -17,18 +17,18 @@ Each RDP profile or configured desktop can follow Settings, enable any of these 
 Changes apply on the next FreeRDP connection. IronRDP uses its own graphics capabilities.
 
 An RDP profile tab's ellipsis/right-click menu also has **RDP client**: **Follow default**, **IronRDP**, or
-**FreeRDP (experimental)**. The checkmark shows the saved next-connection choice; **Current session** names the
+**FreeRDP native (experimental)** or **FreeRDP WebAssembly (experimental)**. The checkmark shows the saved next-connection choice; **Current session** names the
 client already running. Changing the choice offers **Reconnect to apply** or **Keep current session**, without
 disconnecting automatically. A saved profile keeps its override; an unsaved quick connection keeps it in that tab.
 
 The initial FreeRDP preview renders inside the Tabby tab and supports keyboard, mouse, Unicode input, view only,
 screenshots, scaling, reconnect and the display-control channel. It uses the plugin's existing direct, SSH and RD
-Gateway transports, credential store and certificate/NLA prompts. Each attempt has its own native process.
+Gateway transports, credential store and certificate/NLA prompts. Each native attempt has its own helper process; each WebAssembly attempt has its own Electron utility process.
 
-The preview shares clipboard **text** the ways the clipboard setting allows (both ways, only from the remote desktop, or
-off, which leaves the clipboard channel out); in view only, no clipboard goes either way. It does **not** yet implement pictures and files on the clipboard, audio
+Both previews share clipboard **text and files/folders** the ways the clipboard setting allows (both ways, only from the remote desktop, or
+off, which leaves the clipboard channel out); in view only, no clipboard goes either way. It does **not** yet implement pictures on the clipboard, audio
 playback/capture, shared folders, or Hyper-V VMConnect.
-The supplied FreeRDP 3.33.0 build uses native bitmap decoding (and the graphics pipeline for GNOME), with optional H.264 codecs
+The supplied FreeRDP 3.33.1 build uses native bitmap decoding (and the graphics pipeline for GNOME), with optional H.264 codecs
 disabled. The macOS/Linux builds omit Kerberos/GSSAPI and use NTLM. Windows can use native SSPI; Kerberos and domain-policy behavior are not qualified. Hyper-V consoles that
 inherit the global client setting continue to use IronRDP. A synced global FreeRDP default also uses IronRDP on a computer without its native helper; an explicit desktop/profile choice still reports the missing build. It has not been benchmarked against IronRDP on Windows Server. Native decoding alone does not establish
 that this implementation will be faster: the cost of transferring pixels to the canvas also matters.
@@ -82,20 +82,52 @@ manual step; see [CONTRIBUTING.md](../CONTRIBUTING.md#releasing).
 Helper packages exist for macOS ARM64, Windows ARM64/x64 and Linux ARM64/x64. FreeRDP helpers for Intel Macs
 are not yet available; IronRDP remains available there.
 
+## WebAssembly build
+
+The selectable WebAssembly client compiles the same windowless Tabby adapter and upstream FreeRDP/WinPR to WASM.
+It does not embed the upstream SDL browser interface. Emscripten pthreads run in an isolated Electron utility process;
+a loopback WebSocket bridge carries the existing authenticated direct, SSH or RD Gateway transport. No remote proxy
+service is required. It shares native FreeRDP's certificate/NLA policy, canvas, input and clipboard controls.
+IronRDP remains the default, and WebAssembly performance has not been benchmarked.
+
+Requires Git, Node, CMake, Ninja and Emscripten, with the toolchain commit/version pinned in `wasm-source.json`:
+
+```sh
+git clone https://github.com/emscripten-core/emsdk.git .qa/emsdk
+git -C .qa/emsdk checkout 35ff8a6d150541276abbc6bae512ca90bcfbe220
+.qa/emsdk/emsdk install 6.0.12
+.qa/emsdk/emsdk activate 6.0.12
+npm run build:freerdp:wasm
+npm run build
+```
+
+Alternatively set `EMSDK` to an installation of that version. The script verifies the FreeRDP, LibreSSL and zlib
+source archives, builds static WASM libraries, and records source/artifact hashes in `wasm/freerdp/BUILD.json`.
+The portable output and licenses are committed and included in the plugin package. It never downloads a compiler
+or builds at connection time. The native helper packages remain independent.
+
 ## Licensing
 
 The Tabby helper is MIT licensed. FreeRDP and WinPR are Apache-2.0; OpenSSL 3 is Apache-2.0. Their full licenses and
 FreeRDP's bundled attribution notice accompany the generated binaries. WinPR's built-in Unicode converter also
 carries its own full `Unicode-NOTICE`. Keep all these notices in each platform's package, whose `package.json` declares
 `MIT AND Apache-2.0`.
+The WebAssembly bundle additionally includes LibreSSL, zlib and Emscripten license/attribution files in
+`wasm/freerdp/licenses`. Keep those files with the WASM and JavaScript artifacts.
 The source/build identity is recorded in `BUILD.json`. New codecs, channels or native dependencies require reviewing
 their own licensing and updating the packaging inventory; changing FreeRDP's top-level license file is insufficient.
 
 ## Verification
 
+FreeRDP 3.33.1 native and WebAssembly pass certificate/NLA rejection checks on macOS ARM64. Both also pass
+synthetic bitmap rendering checks in Tabby, including transparent source pixels. Live server and additional
+platform coverage is recorded with each test package; the older qualification below does not qualify the new builds.
+
+
 ```sh
 npm run typecheck
 npm run test:unit
+TRD_TEST_FREERDP_RUNTIME=wasm node --import tsx --test test/unit/freerdp.ts
 npm test -- --hidden visual-smoke
 # With TRD_TEST_DIRECT, TRD_TEST_DIRECT_USER and TRD_TEST_DIRECT_PASSWORD for a dedicated server:
 npm test -- --hidden freerdp

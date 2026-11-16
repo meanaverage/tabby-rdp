@@ -243,7 +243,7 @@ export class RemoteDesktopContextMenu extends TabContextMenuItemProvider {
                 ...client.active ? [{ label: `Current session: ${RDP_CLIENT_LABELS[client.active]}`, enabled: false }, { type: 'separator' as const }] : [],
                 { type: 'radio', label: `Follow default (${RDP_CLIENT_LABELS[client.default]})`, checked: client.value === null,
                     click: () => this.desktop.setRDPClient(pane, null) },
-                ...(['ironrdp', 'freerdp'] as const).map(value => ({
+                ...(['ironrdp', 'freerdp', 'freerdp-wasm'] as const).map(value => ({
                     type: 'radio' as const, label: RDP_CLIENT_LABELS[value], checked: client.value === value,
                     click: () => this.desktop.setRDPClient(pane, value),
                 })),

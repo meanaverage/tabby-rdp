@@ -1026,6 +1026,11 @@ export class FileTransfer {
 
     /** Remote → Mac: the remote copied files; offer saving them, where the remote's clipboard comes here. */
     private offer (files: RemoteFile[]): void {
+        if (!files.length) {
+            this.offered = []
+            this.toastEl?.remove()
+            this.toastEl = null
+        }
         const count = files.filter(f => !f.isDirectory).length
         if (!this.ways().fromRemote) {
             this.log(`files: the remote copied ${count}; not offered: its clipboard doesn't come here`)

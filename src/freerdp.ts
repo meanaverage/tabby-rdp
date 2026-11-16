@@ -1,15 +1,18 @@
-import { spawn, ChildProcessWithoutNullStreams } from 'child_process'
+import { spawn } from 'child_process'
 import { randomBytes, timingSafeEqual, X509Certificate } from 'crypto'
 import { existsSync } from 'fs'
 import { createServer, Socket } from 'net'
 import { basename, dirname, join } from 'path'
-import { Duplex } from 'stream'
+import { Duplex, Readable, Writable } from 'stream'
 import { rootCertificates } from 'tls'
 import { ByteQueue } from './byteQueue'
 import { certificateAuthorities, certificateDetails, CertificateDetails } from './authorities'
 import { ClipboardWays } from './clipboard'
+import { FreeRDPWasmProcess, requireFreeRDPWasm } from './freerdpWasm'
 
 const MAX_FRAME = 1024 * 1024
+const MAX_FILE_FRAME = 16 * 1024 * 1024 + 12
+const frameLimit = (type: string) => type === 's' ? MAX_FILE_FRAME : ['f', 'o'].includes(type) ? 8 + 10000 * 592 : MAX_FRAME
 const MAX_AUTHORITIES = 16 * 1024 * 1024
 
 export function freeRDPAuthorities (authorities: readonly string[]): Buffer {
@@ -73,7 +76,7 @@ export function helperStopped (code: number | null, signal: string | null, platf
 }
 
 export function ipcFrame (type: string, payload: Buffer = Buffer.alloc(0)): Buffer {
-    if (type.length !== 1 || payload.length > MAX_FRAME) { throw new Error('Invalid FreeRDP IPC message') }
+    if (type.length !== 1 || payload.length > frameLimit(type)) { throw new Error('Invalid FreeRDP IPC message') }
     const header = Buffer.alloc(5)
     header[0] = type.charCodeAt(0)
     header.writeUInt32BE(payload.length, 1)
@@ -89,7 +92,7 @@ export class FreeRDPFrames {
         while (this.queue.length >= 5) {
             const header = this.queue.peek(5)
             const length = header.readUInt32BE(1)
-            if (length > MAX_FRAME) { throw new Error('FreeRDP sent an oversized IPC message') }
+            if (length > frameLimit(String.fromCharCode(header[0]))) { throw new Error('FreeRDP sent an oversized IPC message') }
             if (this.queue.length < length + 5) { return }
             const type = String.fromCharCode(header[0])
             this.queue.take(5)
@@ -104,7 +107,7 @@ export function numbers (...values: number[]): Buffer {
     return out
 }
 
-/** The native helper's IPC 6 start message: six strings followed by nine uint32 fields, the last the clipboard's ways. */
+/** The native helper's IPC 7 start message: six strings followed by nine uint32 fields, the last the clipboard's ways. */
 export function freeRDPStart (options: Pick<FreeRDPOptions, 'host' | 'username' | 'password' | 'domain' | 'width' | 'height' | 'pipeline' | 'autologon' | 'relaxOrderChecks' | 'glyphCache' | 'bitmapCache' | 'clipboard'>,
     relay: { port: number, token: string }): Buffer {
     const strings = [options.host, options.username, options.password, options.domain, '', relay.token]
@@ -206,10 +209,11 @@ interface FreeRDPOptions {
     relaxOrderChecks?: boolean
     glyphCache?: boolean
     bitmapCache?: boolean
-    /** The ways text goes through the clipboard channel; none (the channel left out) when absent. */
+    /** The ways text and files go through the clipboard channel; none (the channel left out) when absent. */
     clipboard?: ClipboardWays
     /** Text the server's clipboard got. */
     remoteText?: (text: string) => void
+    clipboardFiles?: (type: string, data: Buffer) => void
     open: (signal: AbortSignal) => Promise<Duplex>
     certificate: (fingerprint: string, valid: boolean, reason: string, details?: CertificateDetails) => void
     withoutNla: () => void
@@ -234,9 +238,21 @@ const SESSION_END_REASONS: Record<number, string> = {
 }
 
 /** One native process, relay and set of promises per attempt. A native crash cannot take another desktop down. */
+interface FreeRDPChild {
+    stdin: Writable
+    stdout: Readable
+    stderr: Readable
+    exitCode: number | null
+    signalCode: NodeJS.Signals | null
+    kill (signal?: NodeJS.Signals): boolean
+    once (event: string, listener: (...args: any[]) => void): unknown
+}
+
 export class FreeRDPProcess {
+    constructor (readonly runtime: 'native' | 'wasm' = 'native') {}
+
     frameCount = 0
-    private child: ChildProcessWithoutNullStreams | null = null
+    private child: FreeRDPChild | null = null
     private relay: Awaited<ReturnType<typeof freeRDPRelay>> | null = null
     private closed = false
     private connected = false
@@ -253,15 +269,18 @@ export class FreeRDPProcess {
         const started = this.started
         started.catch(() => undefined)
         try {
-            requireFreeRDP()
+            if (this.runtime === 'wasm') { requireFreeRDPWasm() } else { requireFreeRDP() }
             const authorities = freeRDPAuthorities(options.authorities ?? certificateAuthorities() ?? rootCertificates)
             this.relay = await freeRDPRelay(options.open)
             if (this.closed) { this.relay.close(); throw new Error('FreeRDP connection cancelled') }
-            const child = this.child = spawn(nativeHelperPath(), [], { stdio: 'pipe', windowsHide: true, env: helperEnvironment() })
+            const child: FreeRDPChild = this.child = this.runtime === 'wasm'
+                ? await FreeRDPWasmProcess.create(this.relay, helperEnvironment())
+                : spawn(nativeHelperPath(), [], { stdio: 'pipe', windowsHide: true, env: helperEnvironment() })
+            if (this.closed) { child.kill(); throw new Error('FreeRDP connection cancelled') }
             const frames = new FreeRDPFrames()
             const timer = setTimeout(() => this.fail(new Error('FreeRDP connection timed out')), 45000)
             started.then(() => clearTimeout(timer), () => clearTimeout(timer))
-            child.once('error', () => this.fail(new Error('Could not start the FreeRDP helper. Rebuild it for this computer.')))
+            child.once('error', (error: Error) => this.fail(this.runtime === 'wasm' ? error : new Error('Could not start the FreeRDP helper. Rebuild it for this computer.')))
             child.stdin.on('error', () => this.fail(new Error('The FreeRDP helper stopped reading input' + (process.platform === 'win32' ? '. Check that the Microsoft Visual C++ 2015–2022 Redistributable is installed; see the compatibility guide.' : ''))))
             // Do not surface FreeRDP logs: native libraries can log authentication details.
             child.stderr.resume()
@@ -303,6 +322,8 @@ export class FreeRDPProcess {
             this.send('N', Buffer.from([+accepted]))
         } else if (type === 'F') {
             options.frame(decodeNativeFrame(data))
+        } else if (['l', 'f', 'a', 'q', 's'].includes(type)) {
+            options.clipboardFiles?.(type, data)
         } else if (type === 'T') {
             options.remoteText?.(data.toString('utf8'))
         } else if (type === 'B' && data.length === 0) {
@@ -324,9 +345,9 @@ export class FreeRDPProcess {
         if (this.closed || !this.child) { return }
         // During freerdp_connect the helper reads certificate/NLA decisions directly from stdin. User input
         // must not get ahead of those replies and be mistaken for a refusal.
-        if (!this.connected && ['K', 'M', 'R', 'P', 'W'].includes(type)) { return }
+        if (!this.connected && ['K', 'M', 'R', 'P', 'W', 'o', 'q', 's'].includes(type)) { return }
         // A child that has stalled must not accumulate an unbounded queue of mouse/keyboard events.
-        if (this.child.stdin.writableLength > MAX_FRAME) { this.fail(new Error('FreeRDP input stopped responding')); return }
+        if (this.child.stdin.writableLength > 4 * MAX_FILE_FRAME) { this.fail(new Error('FreeRDP input stopped responding')); return }
         this.child.stdin.write(ipcFrame(type, payload))
     }
 

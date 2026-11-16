@@ -182,8 +182,8 @@ test('nothing is read before the connection is up', async t => {
     assert.deepEqual(state.sent, ['early'])
 })
 
-test('the connection log says the ways, and that FreeRDP shares text only', () => {
-    assert.equal(freeRDPClipboardLog('both'), 'clipboard: both ways; FreeRDP shares text only')
-    assert.match(freeRDPClipboardLog('fromRemote'), /^clipboard: only from the remote desktop .*; FreeRDP shares text only$/)
+test('the connection log says the ways, and that FreeRDP shares text and files', () => {
+    assert.equal(freeRDPClipboardLog('both'), 'clipboard: both ways; FreeRDP shares text and files')
+    assert.match(freeRDPClipboardLog('fromRemote'), /^clipboard: only from the remote desktop .*; FreeRDP shares text and files$/)
     assert.equal(freeRDPClipboardLog('off'), 'clipboard: off (no clipboard channel)')
 })

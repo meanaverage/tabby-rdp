@@ -127,7 +127,7 @@ on the GNOME desktop. It is optional and off by default. [How desk works](docs/d
 
 ## RDP client preview
 
-**Settings › Remote Desktop › Settings › RDP client** selects **IronRDP** or experimental **FreeRDP**. Profiles and
+**Settings › Remote Desktop › Settings › RDP client** selects **IronRDP**, **FreeRDP native (experimental)**, or **FreeRDP WebAssembly (experimental)**. Profiles and
 behind-host desktops can override the default. Changes apply on the next connection.
 
 In an RDP profile tab's **…** menu, choose **RDP client** to switch that profile and optionally **Reconnect to apply**.
@@ -135,7 +135,8 @@ In an RDP profile tab's **…** menu, choose **RDP client** to switch that profi
 | Client | Availability | Capabilities |
 |---|---|---|
 | IronRDP (default) | macOS, Windows and Linux | The features above, subject to the server's capabilities |
-| FreeRDP (experimental) | macOS ARM64; Windows and Linux ARM64/x64 native helpers | In-tab display, keyboard/mouse, clipboard text, scaling, resize, view only, screenshots and reconnect. Clipboard pictures and files, file transfer, audio, shared folders, Hyper-V and H.264 are pending. |
+| FreeRDP native (experimental) | macOS ARM64; Windows and Linux ARM64/x64 native helpers | In-tab display, keyboard/mouse, clipboard text and files/folders, scaling, resize, view only, screenshots and reconnect. Pictures, audio, shared folders, Hyper-V and H.264 are pending. |
+| FreeRDP WebAssembly (experimental) | Bundled portable build; currently qualified on macOS ARM64 | Same features as native FreeRDP, without a platform-specific FreeRDP helper. Other client platforms remain unqualified. |
 
 Windows Server performance has **not been benchmarked**. See [FreeRDP builds, licensing and capability notes](native/README.md).
 To try the preview, open **Settings › Remote Desktop › Updates**, choose **Preview**, and install the offered version.

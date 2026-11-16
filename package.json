@@ -27,6 +27,7 @@
   "files": [
     "dist",
     "!dist/**/*.map",
+    "wasm",
     "vendor",
     "bin",
     "remote",
@@ -57,10 +58,12 @@
     "test:visual": "npm run build && tsx test/run.ts --hidden visual-host",
     "test:qa": "node --test scripts/qa/*.test.mjs",
     "qa:baseline": "node scripts/qa/baseline.mjs",
-    "pack:release": "node scripts/pack.mjs"
+    "pack:release": "node scripts/pack.mjs",
+    "build:freerdp:wasm": "node scripts/build-freerdp-wasm.mjs"
   },
   "dependencies": {
-    "semver": "7.8.6"
+    "semver": "7.8.6",
+    "ws": "8.22.0"
   },
   "devDependencies": {
     "@angular/core": "22.2.3",
@@ -73,8 +76,7 @@
     "tabby-settings": "1.0.231-nightly.0",
     "tabby-terminal": "1.0.231-nightly.0",
     "tsx": "^4.23.15",
-    "typescript": "~7.0.2",
-    "ws": "8.22.0"
+    "typescript": "~7.0.2"
   },
   "tabbyRdp": {
     "minimumTabbyVersion": "1.0.236",

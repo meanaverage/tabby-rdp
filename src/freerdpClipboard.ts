@@ -3,7 +3,7 @@ import { ClipboardMode, ClipboardWays } from './clipboard'
 /** The log line for the clipboard a FreeRDP connection was set up with (IronRDP's says the same of pictures and files). */
 export function freeRDPClipboardLog (mode: ClipboardMode): string {
     return `clipboard: ${mode === 'both' ? 'both ways' : mode === 'fromRemote' ? 'only from the remote desktop (this computer\'s is neither read nor sent)'
-        : 'off (no clipboard channel)'}${mode === 'off' ? '' : '; FreeRDP shares text only'}`
+        : 'off (no clipboard channel)'}${mode === 'off' ? '' : '; FreeRDP shares text and files'}`
 }
 
 /**
@@ -17,7 +17,7 @@ export function freeRDPClipboardLog (mode: ClipboardMode): string {
  *
  * The ways are asked on every turn: a narrowing while connected (see RemoteDesktopService.applyClipboard) stops the
  * sending at once, and is passed on to the helper (`narrow`), which drops what it was holding for the server.
- * Nothing is read before `start`, once the connection is up. Pictures and files don't go through FreeRDP.
+ * Nothing is read before `start`, once the connection is up. File offers suppress text polling until pasted.
  */
 /** How soon the same text from the server counts as the same copy announced again (see FreeRDPClipboard.remote). */
 const REPEATED_COPY_MS = 1500
@@ -26,6 +26,15 @@ export class FreeRDPClipboard {
     private last: string | undefined
     private pending: string | undefined
     private paused = false
+    filesPending: () => boolean = () => false
+
+    /** A file offer must not be overwritten by the text already on the local clipboard. */
+    localFiles (): void {
+        this.pending = undefined
+        if (this.ways().toRemote) { try { this.last = this.io.read() } catch { } }
+    }
+
+    remoteChanged (): void { this.pending = undefined }
     private lastRemote: { text: string, at: number } | undefined
     private timer: ReturnType<typeof setInterval> | undefined
     private told: ClipboardWays
@@ -79,7 +88,7 @@ export class FreeRDPClipboard {
                 this.io.write(text)
             }
         }
-        if (!ways.toRemote) {
+        if (!ways.toRemote || this.filesPending()) {
             return
         }
         let text: string

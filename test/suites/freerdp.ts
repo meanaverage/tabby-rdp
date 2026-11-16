@@ -4,6 +4,7 @@ import { suite, type CanvasInfo } from '../lib/harness.js'
 import { parseAddress } from '../../src/desktopForm.js'
 
 await suite('freerdp', async t => {
+    const client = process.env.TRD_TEST_FREERDP_RUNTIME === 'wasm' ? 'freerdp-wasm' : 'freerdp'
     const address = parseAddress(t.env.direct.address)
     if (!address || !t.env.direct.user || !t.env.direct.password) {
         t.skip('FreeRDP desktop lifecycle', 'set TRD_TEST_DIRECT, TRD_TEST_DIRECT_USER and TRD_TEST_DIRECT_PASSWORD for a dedicated test server')
@@ -15,7 +16,7 @@ await suite('freerdp', async t => {
         await H.inZone(() => RD.injector.get(require('tabby-core').ProfilesService).openNewTabForProfile({
             id: 'rdp:freerdp-test', type: 'rdp', name: 'FreeRDP test', options: {
                 host: ${JSON.stringify(address.host)}, port: ${address.port}, kind: ${JSON.stringify(t.env.direct.kind)},
-                username: ${JSON.stringify(t.env.direct.user)}, client: 'freerdp', glyphCache: false, bitmapCache: false, relaxOrderChecks: false,
+                username: ${JSON.stringify(t.env.direct.user)}, client: ${JSON.stringify(client)}, glyphCache: false, bitmapCache: false, relaxOrderChecks: false,
                 clipboard: 'off', via: '', gateway: '', account: null
             }
         }))
@@ -65,7 +66,7 @@ await suite('freerdp', async t => {
     await t.dump('H.nativePane', 'freerdp-connected')
     await t.ev(`
         H.nativeProcess = H.session(H.nativePane).ui.native
-        H.nativePid = H.nativeProcess.child.pid
+        H.nativeChild = H.nativeProcess.child
         H.nativeKeys = 0
         const send = H.nativeProcess.send.bind(H.nativeProcess)
         H.nativeProcess.send = (type, data) => { if (type === 'K') H.nativeKeys++; send(type, data) }
@@ -91,7 +92,7 @@ await suite('freerdp', async t => {
     t.check('live resize draws pixels at the smaller pane resolution', !!await t.waitFor(matchesPane(640, 480), 15), await t.ev('return H.canvas(H.nativePane)'))
     const small = await t.ev<CanvasInfo>('return H.canvas(H.nativePane)')
     t.check('display-control resize changes the remote dimensions without reconnecting', small.w < large.w &&
-        await t.ev('return H.nativeProcess.child.pid === H.nativePid'), { large, small })
+        await t.ev('return H.nativeProcess.child === H.nativeChild'), { large, small })
     await t.dump('H.nativePane', 'freerdp-resized')
     // Hold the renderer pipe while a resize produces several tiles. The input reader must bound/coalesce a
     // burst, retaining key ordering and applying backpressure rather than ending a live desktop normally.
@@ -109,8 +110,8 @@ await suite('freerdp', async t => {
         } finally { H.nativeProcess.child.stdout.resume() }
     `)
     await t.sleep(1500)
-    t.check('renderer backpressure and an input burst retain the native session', await t.ev(`return H.session(H.nativePane)?.state === 'connected' && H.session(H.nativePane).ui.native.child.pid === H.nativePid`),
-        await t.ev(`return { state: H.session(H.nativePane)?.state, pid: H.session(H.nativePane)?.ui?.native?.child?.pid, expectedPid: H.nativePid, log: H.session(H.nativePane)?.log.slice(-12) }`))
+    t.check('renderer backpressure and an input burst retain the native session', await t.ev(`return H.session(H.nativePane)?.state === 'connected' && H.session(H.nativePane).ui.native.child === H.nativeChild`),
+        await t.ev(`return { state: H.session(H.nativePane)?.state, sameChild: H.session(H.nativePane)?.ui?.native?.child === H.nativeChild, log: H.session(H.nativePane)?.log.slice(-12) }`))
     await t.ev(`H.session(H.nativePane).ui.resize(640,480,100)`)
     t.check('display/input recover after the pipe drains', !!await t.waitFor(`const c = H.canvas(H.nativePane); return c?.w === 640 && c?.h === 480 && c?.colors > 20`, 15))
     await t.settings({ resize: 'off' })
@@ -124,7 +125,7 @@ await suite('freerdp', async t => {
     t.check('view only blocks native keyboard input', await t.ev('return H.nativeKeys === 0'))
     await t.ev('H.inZone(() => RD.desktop.setViewOnly(H.nativePane, false))')
     await t.ev('H.inZone(() => RD.desktop.disconnect(H.nativePane))')
-    t.check('disconnect reaps the native process', !!await t.waitFor(`try { process.kill(H.nativePid, 0); return false } catch { return true }`, 5))
+    t.check('disconnect reaps the native process', !!await t.waitFor(`return H.nativeChild.exitCode !== null`, 5))
     t.check('disconnect removes the native UI', await t.ev(`return !H.nativePane.element.nativeElement.querySelector('.trd-freerdp')`))
     await t.ev('H.nativePane.profile.options.glyphCache = true; H.inZone(() => RD.desktop.showDesktop(H.nativePane))')
     t.check('FreeRDP reconnects with glyph caching and strict drawing-order checks', await settle())
@@ -144,7 +145,7 @@ await suite('freerdp', async t => {
     await t.ev('H.inZone(() => RD.desktop.disconnect(H.nativePane))')
     await t.ev('H.nativePane.profile.options.relaxOrderChecks = true; H.inZone(() => RD.desktop.showDesktop(H.nativePane))')
     t.check('FreeRDP reconnects with relaxed drawing-order checks and remembered trust decisions', await settle())
-    t.check('reconnect has a new process and fresh pixels', !!await t.waitFor(`return H.session(H.nativePane)?.ui?.native?.child?.pid !== H.nativePid && H.canvas(H.nativePane)?.colors > 2`, 10))
+    t.check('reconnect has a new process and fresh pixels', !!await t.waitFor(`return H.session(H.nativePane)?.ui?.native?.child !== H.nativeChild && H.canvas(H.nativePane)?.colors > 2`, 10))
     await t.dump('H.nativePane', 'freerdp-reconnected')
     if (t.env.direct.kind === 'windows') {
         await t.ev('H.inZone(() => RD.desktop.disconnect(H.nativePane))')
@@ -224,14 +225,14 @@ await suite('freerdp', async t => {
     // bounce forever between a smaller connecting pane and the larger connected pane, with either backend.
     await t.ev(`H.nativePane.element.nativeElement.style.cssText = ${JSON.stringify(paneStyle)}`)
     await t.settings({ resize: 'reconnect', headerAutoHide: 'automatic' })
-    for (const client of ['ironrdp', 'freerdp']) {
+    for (const selected of ['ironrdp', client]) {
         await t.ev(`
             H.inZone(() => RD.desktop.disconnect(H.nativePane))
-            H.nativePane.profile.options.client = '${client}'
+            H.nativePane.profile.options.client = '${selected}'
             H.nativePane.profile.options.relaxOrderChecks = false
             H.inZone(() => RD.desktop.showDesktop(H.nativePane))
         `)
-        t.check(client + ' connects with Automatic header and reconnect resize', await settle())
+        t.check(selected + ' connects with Automatic header and reconnect resize', await settle())
         await t.sleep(3000)
         const settled = await t.ev<{ connected: boolean, hidden: boolean, matches: boolean }>(`
             H.autoHeaderSession = H.session(H.nativePane)
@@ -240,7 +241,7 @@ await suite('freerdp', async t => {
                 matches: !!c && Math.abs(c.w-c.paneW) <= 2 && Math.abs(c.h-c.paneH) <= 2 }
         `)
         await t.sleep(2500)
-        t.check(client + ' Automatic header settles without a reconnect loop', settled.connected && settled.hidden && settled.matches &&
+        t.check(selected + ' Automatic header settles without a reconnect loop', settled.connected && settled.hidden && settled.matches &&
             await t.ev(`return H.session(H.nativePane) === H.autoHeaderSession && H.autoHeaderSession.state === 'connected'`), settled)
     }
     await t.settings({ headerAutoHide: 'never', resize: 'off' })
