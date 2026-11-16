@@ -4,6 +4,7 @@ import { connect } from 'net'
 import { EventEmitter } from 'events'
 import { PassThrough, Writable } from 'stream'
 import { Worker } from 'worker_threads'
+import { randomBytes } from 'crypto'
 
 export function freeRDPWasmPath (): string { return join(__dirname, '..', 'wasm/freerdp/tabby-freerdp.js') }
 export function hasFreeRDPWasm (): boolean { return existsSync(freeRDPWasmPath()) && existsSync(freeRDPWasmPath().replace(/\.js$/, '.wasm')) }
@@ -60,12 +61,32 @@ export class FreeRDPWasmProcess extends EventEmitter {
             let events: any
             if ((process as NodeJS.Process & { type?: string }).type === 'renderer') {
                 // Electron's renderer cannot host Node pthreads. A utility process can, and contains runtime failures.
-                const utility = require('@electron/remote').getBuiltin('utilityProcess')
+                const remote = require('@electron/remote')
+                const utility = remote.getBuiltin('utilityProcess')
                     .fork(join(__dirname, 'freerdpWasmWorker.js'), [], { env, stdio: 'pipe', serviceName: 'tabby-rdp FreeRDP WebAssembly' })
                 utility.stdout?.on('data', () => {})
                 utility.stderr?.on('data', () => {})
+                // Remote calls are synchronous RPC through Electron's main process. Keep only process creation
+                // there: pixel chunks and input acknowledgements use a direct renderer/utility message port.
                 child.worker = { postMessage: message => utility.postMessage(message), terminate: async () => utility.kill() }
-                events = utility
+                const ipc = require('electron').ipcRenderer
+                const channelName = 'tabby-rdp-freerdp-' + randomBytes(16).toString('hex')
+                const channel = new (remote.getBuiltin('MessageChannelMain'))()
+                const messagePort = await new Promise<MessagePort>((resolve, reject) => {
+                    const receive = (event: any) => { clearTimeout(timer); resolve(event.ports[0]) }
+                    const timer = setTimeout(() => { ipc.removeListener(channelName, receive); reject(new Error('FreeRDP message channel timed out')) }, 10000)
+                    ipc.once(channelName, receive)
+                    try {
+                        utility.postMessage({ type: 'port' }, [channel.port2])
+                        remote.getCurrentWebContents().postMessage(channelName, null, [channel.port1])
+                    } catch (error) { clearTimeout(timer); ipc.removeListener(channelName, receive); reject(error) }
+                })
+                events = new EventEmitter()
+                messagePort.onmessage = event => events.emit('message', event.data)
+                messagePort.onmessageerror = () => events.emit('error', new Error('FreeRDP message channel failed'))
+                utility.on('error', (error: Error) => events.emit('error', error))
+                utility.on('exit', (code: number) => events.emit('exit', code))
+                child.worker = { postMessage: message => messagePort.postMessage(message), terminate: async () => { messagePort.close(); utility.kill() } }
 
             } else {
                 events = new Worker(join(__dirname, 'freerdpWasmWorker.js'), { env, workerData: config })

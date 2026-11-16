@@ -1,4 +1,4 @@
-# Dedicated Windows test session only. F6 changes the latency patch; F7 toggles motion; Escape exits.
+# Dedicated Windows test session only. F6 changes the latency patch; F7 pauses motion; F8 resumes; Escape exits.
 # Run in the target's interactive session before test/suites/freerdp-benchmark.ts.
 Add-Type -AssemblyName System.Windows.Forms,System.Drawing
 Add-Type -ReferencedAssemblies System.Windows.Forms,System.Drawing -TypeDefinition @'
@@ -19,7 +19,8 @@ public class RdpBenchmarkDesktop : Form {
         timer.Start();
         KeyDown += (s,e) => {
             if(e.KeyCode == Keys.F6) { pulse = !pulse; Invalidate(); }
-            if(e.KeyCode == Keys.F7) { moving = !moving; Invalidate(); }
+            if(e.KeyCode == Keys.F7) { moving = false; Invalidate(); }
+            if(e.KeyCode == Keys.F8) { moving = true; Invalidate(); }
             if(e.KeyCode == Keys.Escape) Close();
         };
         FormClosed += (s,e) => timer.Dispose();

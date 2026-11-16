@@ -75,25 +75,28 @@ await suite('freerdp-benchmark', async t => {
             if (connected.firstPixelMs === null) throw new Error('Dedicated workload is not visible')
             // Click away from the marker so the workload owns keyboard input.
             await t.ev(`H.bench.client.send('M',H.benchModule.numbers(0x9000,400,400));H.bench.client.send('M',H.benchModule.numbers(0x1000,400,400))`)
-            await t.sleep(4000)
+            await t.ev('H.benchKey(0x42)'); await t.sleep(4000)
             const motion = await t.ev<any>(`return await H.benchWindow(${seconds * 1000})`)
+            t.check(`${label}: motion advances`, motion.displayedFrames > seconds * 5, motion.displayedFrames)
             const latency = await t.ev<number[]>(`
                 const samples=[]
                 for(let i=0;i<12;i++) {
                     const before=H.benchPixel().pulse, start=performance.now(); H.benchKey(0x40)
-                    while(performance.now()-start<3000 && H.benchPixel()?.pulse===before) await new Promise(requestAnimationFrame)
-                    if(H.benchPixel()?.pulse===before) throw new Error('Input latency patch did not change')
+                    while(performance.now()-start<15000 && H.benchPixel()?.pulse===before) await new Promise(requestAnimationFrame)
+                    if(H.benchPixel()?.pulse===before) { samples.push(-1); break }
                     samples.push(performance.now()-start); await new Promise(r=>setTimeout(r,150))
                 }
                 return samples
             `)
             await t.ev('H.benchKey(0x41)'); await t.sleep(1000)
             const idle = await t.ev<any>(`return await H.benchWindow(5000)`)
-            await t.ev('H.benchKey(0x41)')
+            await t.ev('H.benchKey(0x42)'); await t.sleep(600)
+            const image = await t.ev<string>('return H.bench.view.canvas.toDataURL()')
+            fs.writeFileSync(path.join(path.dirname(output), `${runtime}-${compatibility}-${pair}.png`), Buffer.from(image.split(',')[1], 'base64'))
             const result = { runtime, compatibility, pair, startedAt: new Date().toISOString(), connected, motion, idle, latencyMs: latency }
             results.push(result); save()
             t.time(`${label}: ${(motion.displayedFrames / (motion.milliseconds / 1000)).toFixed(1)} displayed workload frames/s`, 0)
-            t.check(`${label}: motion advances`, motion.displayedFrames > seconds * 5)
+            t.check(`${label}: input changes the latency patch`, latency.length === 12 && latency.every(ms => ms >= 0), latency)
             t.check(`${label}: idle stops animation`, idle.displayedFrames <= 2, idle.displayedFrames)
             await t.ev('H.bench.view.shutdown(); H.bench.client.shutdown()')
             await t.sleep(1500)

@@ -1,12 +1,19 @@
 /** Runs one FreeRDP WASM instance and its pthreads away from Tabby's renderer. */
 import { parentPort, workerData } from 'worker_threads'
+let utilityChannel: any
 const utilityPort = (process as NodeJS.Process & { parentPort?: any }).parentPort
 const port: { postMessage: (message: any, transfer?: ArrayBuffer[]) => void, on: (event: string, listener: (message: any) => void) => void } = parentPort ? {
     postMessage: (message, transfer) => parentPort!.postMessage(message, transfer ?? []),
     on: (event, listener) => parentPort!.on(event, listener),
 } : {
-    postMessage: message => utilityPort.postMessage(message),
-    on: (event, listener) => utilityPort.on(event, (message: any) => listener(message.data)),
+    postMessage: message => utilityChannel?.postMessage(message),
+    on: (event, listener) => utilityPort.on(event, (message: any) => {
+        if (message.data?.type !== 'port' || utilityChannel) return
+        utilityChannel = message.ports[0]
+        utilityChannel.on('message', (message: any) => listener(message.data))
+        utilityChannel.start()
+        utilityChannel.postMessage({ type: 'ready' })
+    }),
 }
 const SIZE = 1024 * 1024
 let moduleInstance: any
@@ -40,7 +47,7 @@ function pumpOutput (ending = false): void {
     let read = Atomics.load(counters, 0) >>> 0
     const write = Atomics.load(counters, 1) >>> 0
     while (read !== write) {
-        const count = Math.min((write - read) >>> 0, SIZE - read % SIZE, 64 * 1024)
+        const count = Math.min((write - read) >>> 0, SIZE - read % SIZE, 256 * 1024)
         const bytes = new Uint8Array(count)
         bytes.set(heap.subarray(outputAddress + 12 + read % SIZE, outputAddress + 12 + read % SIZE + count))
         read = (read + count) >>> 0
@@ -76,4 +83,4 @@ async function start (config: { module: string, websocket: string }): Promise<vo
     moduleInstance.callMain([])
 }
 function failed (): void { port.postMessage({ type: 'failure', message: 'Could not initialise FreeRDP WebAssembly' }) }
-if (workerData) { starting = true; start(workerData).catch(failed) } else { port.postMessage({ type: 'ready' }) }
+if (workerData) { starting = true; start(workerData).catch(failed) }

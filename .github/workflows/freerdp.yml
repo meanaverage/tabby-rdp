@@ -10,6 +10,8 @@ on:
       - 'native/CMakeLists.txt'
       - 'native/*-source.json'
       - 'scripts/build-freerdp*.mjs'
+      - 'scripts/build-pam-fixture.mjs'
+      - 'test/fixtures/pam/build.cmake'
       - '.github/workflows/freerdp.yml'
       - '.gitattributes'
   pull_request:
@@ -20,6 +22,8 @@ on:
       - 'native/CMakeLists.txt'
       - 'native/*-source.json'
       - 'scripts/build-freerdp*.mjs'
+      - 'scripts/build-pam-fixture.mjs'
+      - 'test/fixtures/pam/build.cmake'
       - '.github/workflows/freerdp.yml'
       - '.gitattributes'
   workflow_dispatch:
@@ -54,6 +58,8 @@ jobs:
         run: |
           node -e "require('fs').rmSync('native/bin',{recursive:true,force:true})"
           node scripts/build-freerdp-ci.mjs
+      - name: Build the synthetic PAM peer
+        run: node scripts/build-pam-fixture.mjs
       - name: Native protocol and security checks
         env:
           TRD_SINGLE_NATIVE_BUILD: '1'
