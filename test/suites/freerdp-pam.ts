@@ -48,8 +48,8 @@ await suite('freerdp-pam', async t => {
                 const label = `${runtime} ${mode}, announced=${announced} glyph=${glyphCache} bitmap=${bitmapCache} relaxed=${relaxed}`
                 t.check(label + ': peer announces the requested capabilities', events.events.some((e: any) => e.event === 'capabilities' && e.announced === announced))
                 const identity = events.events.some((e: any) => e.event === 'identity' && e.bracketedUsernamePreserved)
-                t.check(label + ': TLS-only consent and intact PAM username', result.nla > 0 && result.cert > 0 && identity, { ...result, identity })
-                if (bitmapCache && (announced || relaxed)) {
+                t.check(label + ': TLS-only consent and intact PAM username', result.nla === 1 && result.cert === 1 && identity, { ...result, identity })
+                if (relaxed || bitmapCache && announced) {
                     const expected = mode === 'black' ? Array(4).fill([0, 0, 0, 255]) : [[224, 64, 224, 255], [32, 192, 32, 255], [96, 224, 96, 255], [192, 32, 192, 255]]
                     t.check(label + ': cached colors survive and connection stays open', !result.ended && JSON.stringify(result.pixels) === JSON.stringify(expected), result)
                 } else if (!relaxed) {

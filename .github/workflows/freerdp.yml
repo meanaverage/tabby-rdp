@@ -66,7 +66,7 @@ jobs:
         run: |
           npm ci --ignore-scripts
           npm run build
-          node --import tsx --test test/unit/freerdp.ts
+          node --import tsx --test test/unit/freerdp.ts test/unit/freerdp-pam.ts
       - name: Stage the public native bundle
         if: always() && steps.build.outcome == 'success'
         run: node -e "const f=require('fs'),p=require('path'),name='freerdp-'+process.platform+'-'+process.arch+'.tgz';f.mkdirSync('native-artifacts',{recursive:true});f.copyFileSync(p.join('.qa',name),p.join('native-artifacts',name))"

@@ -263,18 +263,25 @@ await suite('freerdp', async t => {
         t.check('dropped file pastes through the FreeRDP provider', !!await t.waitFor(`return /Copied 1 file/.test(H.toast(H.nativePane))`, 10), await t.ev('return H.toast(H.nativePane)'))
         await command(remote + `Set-Clipboard -Value ('DROP:'+ [IO.File]::ReadAllText("$p\\dropped.txt"))`)
         t.check('dropped file has exact contents on Windows', (await t.clipboard()) === 'DROP:dropped file marker')
-        if (t.platform === 'darwin' && process.platform === 'darwin') {
+        if (t.platform === process.platform && ['darwin', 'win32'].includes(process.platform)) {
             const local = path.join(here, 'copied-folder')
             fs.mkdirSync(local); fs.writeFileSync(path.join(local, 'inner.txt'), 'copied folder marker')
             await command(remote + 'Start-Process explorer.exe $p')
-            const writer = spawn('osascript', ['-l', 'JavaScript', '-e', `ObjC.import('AppKit'); var pb = $.NSPasteboard.generalPasteboard; pb.clearContents; pb.writeObjects($([$.NSURL.fileURLWithPath(${JSON.stringify(local)})])); delay(60); ''`], { stdio: 'ignore' })
+            const mac = process.platform === 'darwin'
+            const script = `Add-Type -AssemblyName System.Windows.Forms; $files=New-Object System.Collections.Specialized.StringCollection; [void]$files.Add('${local.replace(/'/g, "''")}'); [Windows.Forms.Clipboard]::SetFileDropList($files)`
+            const writer = mac
+                ? spawn('osascript', ['-l', 'JavaScript', '-e', `ObjC.import('AppKit'); var pb = $.NSPasteboard.generalPasteboard; pb.clearContents; pb.writeObjects($([$.NSURL.fileURLWithPath(${JSON.stringify(local)})])); delay(60); ''`], { stdio: 'ignore' })
+                : spawn('powershell.exe', ['-NoProfile', '-STA', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], { stdio: 'ignore', windowsHide: true })
             t.onCleanup(() => writer.kill())
+            if (!mac) await new Promise<void>((resolve, reject) => {
+                writer.once('error', reject); writer.once('exit', code => code === 0 ? resolve() : reject(new Error('Could not set the Windows file clipboard')))
+            })
             await t.sleep(700)
-            await t.press('v', ['Meta'])
-            t.check('Finder folder clipboard pastes with Command-V', !!await t.waitFor(`return /Copied 1 file/.test(H.toast(H.nativePane))`, 10), await t.ev('return H.toast(H.nativePane)'))
+            await t.press('v', [mac ? 'Meta' : 'Control'])
+            t.check(`${mac ? 'Finder' : 'Windows'} folder clipboard pastes with ${mac ? 'Command' : 'Ctrl'}-V`, !!await t.waitFor(`return /Copied 1 file/.test(H.toast(H.nativePane))`, 10), await t.ev('return H.toast(H.nativePane)'))
             writer.kill()
             await command(remote + `Set-Clipboard -Value ('FOLDER:'+ [IO.File]::ReadAllText("$p\\copied-folder\\inner.txt"))`)
-            t.check('Finder folder arrives with its file intact', (await t.clipboard()) === 'FOLDER:copied folder marker')
+            t.check('copied folder arrives with its file intact', (await t.clipboard()) === 'FOLDER:copied folder marker')
         }
         await command(remote + "Remove-Item -LiteralPath $p -Recurse -Force;Set-Clipboard -Value ''")
         await t.ev(`H.nativePane.profile.options.clipboard = 'off'`)

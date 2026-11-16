@@ -26,7 +26,7 @@ const server = http.createServer(async (request, response) => {
     try { ({ mode, announced } = JSON.parse(body)) } catch { finish(400, {}); return }
     if (typeof announced !== 'boolean') { finish(400, {}); return }
     if (!['opaque', 'transparent', 'partial', 'no-alpha', 'black'].includes(mode)) { finish(400, {}); return }
-    child?.kill(); events = []; sequence++
+    child?.kill(); const caseEvents = events = []; const caseSequence = ++sequence
     const running = child = spawn(process.env.TRD_PAM_SERVER, [cert, key, mode, bind, announced ? 'announced' : 'unannounced'], { windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] })
     let text = '', answered = false
     const timer = setTimeout(() => { if (!answered) { answered = true; finish(504, { error: 'Peer startup timed out' }); running.kill() } }, 8000)
@@ -35,12 +35,12 @@ const server = http.createServer(async (request, response) => {
         while (text.includes('\n')) {
             const n = text.indexOf('\n'), line = text.slice(0, n); text = text.slice(n + 1)
             let event; try { event = JSON.parse(line) } catch { continue }
-            events.push(event)
-            if (event.event === 'listening' && !answered) { answered = true; clearTimeout(timer); finish(200, { sequence, host: bind, port: event.port, fingerprint }) }
+            caseEvents.push(event)
+            if (event.event === 'listening' && !answered) { answered = true; clearTimeout(timer); finish(200, { sequence: caseSequence, host: bind, port: event.port, fingerprint }) }
         }
     })
     running.on('error', () => { if (!answered) { answered = true; clearTimeout(timer); finish(500, { error: 'Peer failed to start' }) } })
-    running.on('exit', code => { events.push({ event: 'exit', code }); if (child === running) child = null })
+    running.on('exit', code => { caseEvents.push({ event: 'exit', code }); if (child === running) child = null })
 })
 server.listen(Number(process.env.TRD_PAM_PORT || 8766), bind, () => console.log('PAM fixture controller ready'))
 for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => { child?.kill(); server.close(); process.exit() })

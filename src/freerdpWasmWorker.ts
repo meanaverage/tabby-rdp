@@ -47,7 +47,7 @@ function pumpOutput (ending = false): void {
     let read = Atomics.load(counters, 0) >>> 0
     const write = Atomics.load(counters, 1) >>> 0
     while (read !== write) {
-        const count = Math.min((write - read) >>> 0, SIZE - read % SIZE, 256 * 1024)
+        const count = Math.min((write - read) >>> 0, SIZE - read % SIZE)
         const bytes = new Uint8Array(count)
         bytes.set(heap.subarray(outputAddress + 12 + read % SIZE, outputAddress + 12 + read % SIZE + count))
         read = (read + count) >>> 0
