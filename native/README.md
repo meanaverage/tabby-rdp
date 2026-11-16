@@ -108,15 +108,16 @@ their own licensing and updating the packaging inventory; changing FreeRDP's top
 ## Verification
 
 FreeRDP 3.33.1 native protocol/security and clipboard callback checks pass on macOS ARM64, Linux ARM64/x64 and
-Windows ARM64/x64. The WASM protocol/security checks pass on macOS ARM64 and Linux x64. Packaged native and WASM
-clients also pass TLS policy, process restart/cleanup and canvas checks inside Tabby on macOS ARM64, Linux x64 and
+Windows ARM64/x64. The WASM protocol/security checks pass on macOS ARM64 and Linux x64. The packaged WASM
+client also passes TLS policy, process restart/cleanup and canvas checks inside Tabby on macOS ARM64, Linux x64 and
 Windows x64. These hosted checks use synthetic peers and need no private RDP server.
 
 On macOS ARM64, both clients pass live Windows Server 2022 clipboard tests: nested-folder and empty-file downloads,
 binary contents, folder uploads with a 2 MiB file verified by SHA-256, drag/drop, Finder folder paste with Command-V,
-and Save to Downloads with preserved paths. Windows Server 2025 x64 also passes all 36 applicable packed WASM lifecycle checks against Windows Server 2022,
-including text, file/folder upload and download, resize, reconnect and cleanup. Live Linux file-transfer qualification
-and Windows Explorer file paste remain pending. The older qualification below does not qualify the new builds.
+and Save to Downloads with preserved paths. Windows Server 2025 x64 also passes all 38 packed WASM lifecycle checks against Windows Server 2022,
+including text, file/folder upload and download, Windows folder clipboard paste with Ctrl-V, resize, reconnect and cleanup.
+Live Linux file-transfer qualification remains pending. A [Windows native/WASM comparison](../test/fixtures/performance/README.md#windows-comparison-2026-11-16)
+measures similar frame rates and input latency, with higher WASM CPU and memory use. The older qualification below does not qualify the new builds.
 
 ```sh
 npm run typecheck
@@ -128,6 +129,13 @@ npm test -- --hidden freerdp
 # Verify the installed plugin package as well:
 npm test -- --packed --hidden freerdp
 ```
+
+The [TLS-only PAM regression peer](../test/fixtures/pam/README.md) passes all 64 native/WASM cases (224 assertions)
+through Tabby's canvas on Windows Server 2025 x64 against a Windows Server 2022 peer. It covers bracketed usernames,
+TLS-only consent, independently toggled glyph/bitmap caching and relaxed checks, announced/unannounced drawing
+orders, opaque/zero/partial/omitted bitmap alpha and genuine black pixels. Native and WASM results match in every
+case. Linux and Windows, x64 and ARM64, also pass 18 core-level peer cases each in CI. The peer does not generate glyph-cache
+text orders or emulate Senhasegura MFA, appliance policies or session handoff; those still need appliance testing.
 
 The FreeRDP unit tests run framing, bounds, keyboard and authenticated-relay tests on every platform. When the
 helper exists, they additionally run real native TLS/NLA certificate-rejection tests, verifying that no username

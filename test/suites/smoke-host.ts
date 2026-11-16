@@ -27,7 +27,8 @@ await suite('smoke-host', async t => {
     `))
     const freeRDP = await ev<{ found: boolean, bundled: boolean, optional: boolean }>(`
         const wasm = require('tabby-rdp/dist/freerdpWasm.js'), path = require('path')
-        const root = path.dirname(require.resolve('tabby-rdp/package.json'))
+        const loaded = Object.keys(require('module')._cache).find(file => file.split(path.sep).join('/').endsWith('/dist/freerdpWasm.js'))
+        const root = path.dirname(path.dirname(loaded))
         return { found: wasm.hasFreeRDPWasm(), bundled: wasm.freeRDPWasmPath() === path.join(root, 'wasm', 'freerdp', 'tabby-freerdp.js'),
             optional: !!require('tabby-rdp/package.json').optionalDependencies }
     `)

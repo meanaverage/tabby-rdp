@@ -137,7 +137,7 @@ In an RDP profile tab's **…** menu, choose **RDP client** to switch that profi
 | IronRDP (default) | macOS, Windows and Linux | The features above, subject to the server's capabilities |
 | FreeRDP WebAssembly (experimental) | Bundled for macOS, Windows and Linux | In-tab display, keyboard/mouse, clipboard text and files/folders, scaling, resize, view only, screenshots and reconnect. Pictures, audio, shared folders, Hyper-V and H.264 are pending. No separate FreeRDP package is needed. |
 
-Windows Server performance has **not been benchmarked**. See [FreeRDP builds, licensing and capability notes](native/README.md).
+A [Windows VM comparison](test/fixtures/performance/README.md#windows-comparison-2026-11-16) found similar frame rates and input latency, with higher WASM CPU and memory use. See [FreeRDP builds, licensing and capability notes](native/README.md).
 To try the preview, open **Settings › Remote Desktop › Updates**, choose **Preview**, and install the offered version.
 
 <a id="settings"></a>

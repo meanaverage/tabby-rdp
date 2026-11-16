@@ -32,3 +32,29 @@ process and must not be called unique physical RAM. Preserve the raw JSON/JSONL,
 This comparison does not establish performance on Linux/macOS, H.264 workloads, physical GPUs or busy networks.
 The PAM fixture separately covers TLS-only cached drawing orders; it does not reproduce an appliance's MFA or
 session handoff.
+
+## Windows comparison, 2026-11-16
+
+Tabby 1.0.236 on Windows Server 2025 x64 (6 vCPU, 8 GiB) connected directly to Windows Server 2022 x64
+(4 vCPU, 8 GiB) on the same hypervisor. Both clients used FreeRDP 3.33.1. Three alternating pairs ran for each
+setting group: 20 seconds of motion, 12 input samples and five seconds idle per connection. All 48 checks passed.
+The WebAssembly bridge uses direct Electron message ports and batches up to its 1 MiB ring-buffer limit.
+
+| Settings | Runtime | Median frames/s | CPU, % of one core | Private memory, MiB | Input median / p95, ms |
+|---|---|---:|---:|---:|---:|
+| Compatibility options off | Native | 14.8 | 57 | 468 | 72.5 / 116 |
+| Compatibility options off | WASM | 15.3 | 83 | 836 | 84.5 / 131 |
+| Glyph + bitmap cache + relaxed checks | Native | 15.9 | 74 | 477 | 84.5 / 163 |
+| Glyph + bitmap cache + relaxed checks | WASM | 15.1 | 108 | 860 | 94.5 / 159 |
+
+CPU and memory are means of the motion phases across three runs, covering the whole Tabby process tree and any
+native FreeRDP child. Latency percentiles pool 36 samples per row. Private bytes measure committed process memory,
+not unique resident physical RAM. [Per-run measurements and binary identities](windows-x64.json) retain the input
+samples and phase summaries. The source commit identifies the tested runtime; later documentation changes do not
+change those binaries.
+
+In this workload WASM had similar frame rates and input latency, with about 46% more CPU and 370–380 MiB more
+private memory. This is a small synthetic VM comparison, not evidence that every desktop, GPU, network, codec or
+long-running session performs similarly. Earlier small output batches accumulated cached-motion latency; the
+measured build removes that bottleneck without unbounding the queue. Native builds remain available for repeatable
+comparisons from source.

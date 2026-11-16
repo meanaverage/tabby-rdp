@@ -21,3 +21,12 @@ not generate glyph-cache text orders. Native/WASM results are compared case by c
 
 This tests protocol and renderer behavior related to PAM compatibility. It does not emulate Senhasegura's login
 widgets, MFA, appliance policies or handoff to a target session, and cannot certify those flows.
+
+The native build workflow also runs `test/unit/freerdp-pam.ts` on Windows and Linux, ARM64 and x64. That suite
+connects both the native and WASM cores to a local peer and checks TLS policy callbacks, the bracketed username,
+RGB preservation and strict/relaxed rejection. The Tabby suite additionally checks Chromium canvas alpha behavior.
+
+On 2026-11-16, Windows Server 2025 x64 running Tabby 1.0.236 passed all 64 canvas cases (224 assertions) against the
+Windows Server 2022 x64 peer. Native and WASM outcomes matched in every case. The core-only CI matrix separately
+passed 18 peer cases each on Linux and Windows, x64 and ARM64. This evidence supports protocol parity, not certification
+of a Senhasegura installation.
