@@ -19,12 +19,12 @@
     }
   },
   "buildSources": {
-    "native/main.c": "a8c7cb018a26a503d123cba9a5c559a6b54d568731a2e9d49ad515b6655146bf",
+    "native/main.c": "cc1c9fb0ccb300a63c934d4bfa0680073eb936c1ed7165cd83816ac5dd4ee015",
     "native/wasm-io.h": "5986bb4f3b7d0e76a4cf0d1886310db374a2ec12eaf96e8f1db815c1b8aa1ff1",
     "native/options.cmake": "6879d34b4d55166395f31e688ff82fd217ec38942a3007d60c7ac25b90301ab9",
     "native/CMakeLists.txt": "b3273da04795ad3e139d7b06040eb942c4b037a7de839c34f6715027f0e15021",
     "native/wasm-source.json": "ffa07ddd5aeb704c7979214aa8bfe78597ee9b659f6029a7680282ea1b2eb78a",
-    "scripts/build-freerdp-wasm.mjs": "fd1f062caf903aa5b8e70e221e88b8a574e304747e38797308a6507f30e426ef"
+    "scripts/build-freerdp-wasm.mjs": "516b4ea06466f04a95f0b120d8c7fe32d6b302cdc67adb867da1851cb5c146b1"
   },
   "files": [
     {
@@ -57,7 +57,7 @@
     },
     {
       "path": "tabby-freerdp.wasm",
-      "sha256": "c2c175bf8c4acf4cc3cc20f9d146442b4d2fdb8c23ebd6585bbec203648bbef2"
+      "sha256": "b0184dcc0b5b2fa3ee57ae881c1fcc6f21bd25920c5db34de9004c855bc1af14"
     }
   ]
 }

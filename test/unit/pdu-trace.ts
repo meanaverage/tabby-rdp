@@ -470,10 +470,17 @@ test('H264 diagnostics reject truncated SPS and excessive picture-order cycles',
     assert.equal(short.width, undefined)
     assert.equal(short.height, undefined)
     const ue = (value: number) => { const n = (value + 1).toString(2); return '0'.repeat(n.length - 1) + n }
-    // Baseline profile, SPS 0, frame-number 0, POC type 1, then 256 cycle entries (maximum 255).
-    const bits = '01000010' + '00000000' + '00011110' + ue(0) + ue(0) + ue(1) + '0' + ue(0) + ue(0) + ue(256)
-    const padded = bits + '0'.repeat((8 - bits.length % 8) % 8)
-    const payload: number[] = [0, 0, 1, 0x67]
-    for (let i = 0; i < padded.length; i += 8) payload.push(parseInt(padded.slice(i, i + 8), 2))
-    assert.equal(inspectH264(Uint8Array.from(payload)).width, undefined)
+    const withCycles = (count: number) => {
+        // Complete baseline SPS: each cycle's signed offset is zero, then a valid 16x16 picture tail.
+        const bits = '01000010' + '00000000' + '00011110' + ue(0) + ue(0) + ue(1)
+            + '0' + ue(0) + ue(0) + ue(count) + '1'.repeat(count)
+            + ue(1) + '0' + ue(0) + ue(0) + '110' + '1'
+        const padded = bits + '0'.repeat((8 - bits.length % 8) % 8)
+        const payload: number[] = [0, 0, 1, 0x67]
+        for (let i = 0; i < padded.length; i += 8) payload.push(parseInt(padded.slice(i, i + 8), 2))
+        return inspectH264(Uint8Array.from(payload))
+    }
+    assert.deepEqual(withCycles(255), { keyFrame: false, sps: true, nals: 1, width: 16, height: 16 })
+    assert.equal(withCycles(256).width, undefined)
+
 })

@@ -10,8 +10,8 @@ var __privateAdd = (obj, member, value) => member.has(obj) ? __typeError("Cannot
 var __privateSet = (obj, member, value, setter) => (__accessCheck(obj, member, "write to private field"), setter ? setter.call(obj, value) : member.set(obj, value), value);
 var _t2, _e2, _a, _b;
 typeof window < "u" && (window.__svelte || (window.__svelte = { v: /* @__PURE__ */ new Set() })).v.add("5");
-const sr = 2, nr = "[", or = "]", Qe = {}, K = Symbol(), ii = false, J = 2, vi = 4, kt = 8, Ht = 16, ye = 32, Ie = 64, pt = 128, G = 256, bt = 512, H = 1024, Ce = 2048, Ke = 4096, vt = 8192, St = 16384, ar = 32768, lr = 65536, ur = 1 << 19, wi = 1 << 20, dt = Symbol("$state"), dr = Symbol("legacy props");
-var mi = Array.isArray, cr = Array.prototype.indexOf, fr = Array.from, wt = Object.keys, mt = Object.defineProperty, ze = Object.getOwnPropertyDescriptor, hr = Object.getOwnPropertyDescriptors, pr = Object.prototype, br = Array.prototype, gi = Object.getPrototypeOf;
+const sr = 2, nr = "[", or = "]", Qe = {}, K = Symbol(), ii = false, J = 2, vi = 4, kt = 8, Ht = 16, ye = 32, Ie = 64, pt = 128, Y = 256, bt = 512, j = 1024, Ce = 2048, Ke = 4096, vt = 8192, St = 16384, ar = 32768, lr = 65536, ur = 1 << 19, wi = 1 << 20, dt = Symbol("$state"), dr = Symbol("legacy props");
+var mi = Array.isArray, cr = Array.prototype.indexOf, hr = Array.from, wt = Object.keys, mt = Object.defineProperty, ze = Object.getOwnPropertyDescriptor, fr = Object.getOwnPropertyDescriptors, pr = Object.prototype, br = Array.prototype, gi = Object.getPrototypeOf;
 function _i(t) {
   for (var e = 0; e < t.length; e++)
     t[e]();
@@ -92,20 +92,20 @@ function Ci(t, e = false) {
 function Rr(t) {
   return k !== null && !Z && (k.f & J) !== 0 && (oe === null ? Fr([t]) : oe.push(t)), t;
 }
-function q(t, e) {
+function H(t, e) {
   return k !== null && !Z && Hi() && (k.f & (J | Ht)) !== 0 && // If the source was created locally within the current derived, then
   // we allow the mutation.
   (oe === null || !oe.includes(t)) && Dr(), $r(t, e);
 }
 function $r(t, e) {
-  return t.equals(e) || (t.v, t.v = e, t.wv = Fi(), Ei(t, Ce), D !== null && (D.f & H) !== 0 && (D.f & (ye | Ie)) === 0 && (de === null ? Mr([t]) : de.push(t))), e;
+  return t.equals(e) || (t.v, t.v = e, t.wv = Fi(), Ei(t, Ce), D !== null && (D.f & j) !== 0 && (D.f & (ye | Ie)) === 0 && (de === null ? Mr([t]) : de.push(t))), e;
 }
 function Ei(t, e) {
   var i = t.reactions;
   if (i !== null)
     for (var r = i.length, s = 0; s < r; s++) {
       var o = i[s], d = o.f;
-      (d & Ce) === 0 && (fe(o, e), (d & (H | G)) !== 0 && ((d & J) !== 0 ? Ei(
+      (d & Ce) === 0 && (he(o, e), (d & (j | Y)) !== 0 && ((d & J) !== 0 ? Ei(
         /** @type {Derived} */
         o,
         Ke
@@ -121,7 +121,7 @@ function ki(t) {
     /** @type {Derived} */
     k
   ) : null;
-  return D === null || i !== null && (i.f & G) !== 0 ? e |= G : D.f |= wi, {
+  return D === null || i !== null && (i.f & Y) !== 0 ? e |= Y : D.f |= wi, {
     ctx: B,
     deps: null,
     effects: null,
@@ -171,8 +171,8 @@ function Or(t) {
   return e;
 }
 function Di(t) {
-  var e = Or(t), i = (me || (t.f & G) !== 0) && t.deps !== null ? Ke : H;
-  fe(t, i), t.equals(e) || (t.v = e, t.wv = Fi());
+  var e = Or(t), i = (me || (t.f & Y) !== 0) && t.deps !== null ? Ke : j;
+  he(t, i), t.equals(e) || (t.v = e, t.wv = Fi());
 }
 function Gt(t) {
   console.warn("https://svelte.dev/e/hydration_mismatch");
@@ -216,14 +216,14 @@ function De(t, e = null, i) {
     /** @type {any} */
     t,
     {
-      defineProperty(c, b, h) {
-        (!("value" in h) || h.configurable === false || h.enumerable === false || h.writable === false) && Er();
+      defineProperty(c, b, f) {
+        (!("value" in f) || f.configurable === false || f.enumerable === false || f.writable === false) && Er();
         var w = s.get(b);
-        return w === void 0 ? (w = ne(h.value), s.set(b, w)) : q(w, De(h.value, p)), true;
+        return w === void 0 ? (w = ne(f.value), s.set(b, w)) : H(w, De(f.value, p)), true;
       },
       deleteProperty(c, b) {
-        var h = s.get(b);
-        if (h === void 0)
+        var f = s.get(b);
+        if (f === void 0)
           b in c && s.set(b, ne(K));
         else {
           if (o && typeof b == "string") {
@@ -231,13 +231,13 @@ function De(t, e = null, i) {
               /** @type {Source<number>} */
               s.get("length")
             ), n = Number(b);
-            Number.isInteger(n) && n < w.v && q(w, n);
+            Number.isInteger(n) && n < w.v && H(w, n);
           }
-          q(h, K), si(d);
+          H(f, K), si(d);
         }
         return true;
       },
-      get(c, b, h) {
+      get(c, b, f) {
         var _a2;
         if (b === dt)
           return t;
@@ -246,14 +246,14 @@ function De(t, e = null, i) {
           var l = U(w);
           return l === K ? void 0 : l;
         }
-        return Reflect.get(c, b, h);
+        return Reflect.get(c, b, f);
       },
       getOwnPropertyDescriptor(c, b) {
-        var h = Reflect.getOwnPropertyDescriptor(c, b);
-        if (h && "value" in h) {
+        var f = Reflect.getOwnPropertyDescriptor(c, b);
+        if (f && "value" in f) {
           var w = s.get(b);
-          w && (h.value = U(w));
-        } else if (h === void 0) {
+          w && (f.value = U(w));
+        } else if (f === void 0) {
           var n = s.get(b), l = n == null ? void 0 : n.v;
           if (n !== void 0 && l !== K)
             return {
@@ -263,39 +263,39 @@ function De(t, e = null, i) {
               writable: true
             };
         }
-        return h;
+        return f;
       },
       has(c, b) {
         var _a2;
         if (b === dt)
           return true;
-        var h = s.get(b), w = h !== void 0 && h.v !== K || Reflect.has(c, b);
-        if (h !== void 0 || D !== null && (!w || ((_a2 = ze(c, b)) == null ? void 0 : _a2.writable))) {
-          h === void 0 && (h = ne(w ? De(c[b], p) : K), s.set(b, h));
-          var n = U(h);
+        var f = s.get(b), w = f !== void 0 && f.v !== K || Reflect.has(c, b);
+        if (f !== void 0 || D !== null && (!w || ((_a2 = ze(c, b)) == null ? void 0 : _a2.writable))) {
+          f === void 0 && (f = ne(w ? De(c[b], p) : K), s.set(b, f));
+          var n = U(f);
           if (n === K)
             return false;
         }
         return w;
       },
-      set(c, b, h, w) {
+      set(c, b, f, w) {
         var _a2;
         var n = s.get(b), l = b in c;
         if (o && b === "length")
-          for (var a = h; a < /** @type {Source<number>} */
+          for (var a = f; a < /** @type {Source<number>} */
           n.v; a += 1) {
             var u = s.get(a + "");
-            u !== void 0 ? q(u, K) : a in c && (u = ne(K), s.set(a + "", u));
+            u !== void 0 ? H(u, K) : a in c && (u = ne(K), s.set(a + "", u));
           }
-        n === void 0 ? (!l || ((_a2 = ze(c, b)) == null ? void 0 : _a2.writable)) && (n = ne(void 0), q(n, De(h, p)), s.set(b, n)) : (l = n.v !== K, q(n, De(h, p)));
-        var f = Reflect.getOwnPropertyDescriptor(c, b);
-        if ((f == null ? void 0 : f.set) && f.set.call(w, h), !l) {
+        n === void 0 ? (!l || ((_a2 = ze(c, b)) == null ? void 0 : _a2.writable)) && (n = ne(void 0), H(n, De(f, p)), s.set(b, n)) : (l = n.v !== K, H(n, De(f, p)));
+        var h = Reflect.getOwnPropertyDescriptor(c, b);
+        if ((h == null ? void 0 : h.set) && h.set.call(w, f), !l) {
           if (o && typeof b == "string") {
             var $ = (
               /** @type {Source<number>} */
               s.get("length")
             ), A = Number(b);
-            Number.isInteger(A) && A >= $.v && q($, A + 1);
+            Number.isInteger(A) && A >= $.v && H($, A + 1);
           }
           si(d);
         }
@@ -307,8 +307,8 @@ function De(t, e = null, i) {
           var l = s.get(n);
           return l === void 0 || l.v !== K;
         });
-        for (var [h, w] of s)
-          w.v !== K && !(h in c) && b.push(h);
+        for (var [f, w] of s)
+          w.v !== K && !(f in c) && b.push(f);
         return b;
       },
       setPrototypeOf() {
@@ -318,7 +318,7 @@ function De(t, e = null, i) {
   );
 }
 function si(t, e = 1) {
-  q(t, t.v + e);
+  H(t, t.v + e);
 }
 var ni, Ri, $i, Ai;
 function It() {
@@ -351,7 +351,7 @@ function Pt(t, e) {
 function Lr(t) {
   t.textContent = "";
 }
-let ct = false, xt = false, yt = null, ft = false, Yt = false;
+let ct = false, xt = false, yt = null, ht = false, Yt = false;
 function oi(t) {
   Yt = t;
 }
@@ -368,7 +368,7 @@ let oe = null;
 function Fr(t) {
   oe = t;
 }
-let N = null, V = 0, de = null;
+let N = null, q = 0, de = null;
 function Mr(t) {
   de = t;
 }
@@ -382,17 +382,17 @@ function Tt(t) {
   if ((e & Ce) !== 0)
     return true;
   if ((e & Ke) !== 0) {
-    var i = t.deps, r = (e & G) !== 0;
+    var i = t.deps, r = (e & Y) !== 0;
     if (i !== null) {
       var s, o, d = (e & bt) !== 0, p = r && D !== null && !me, c = i.length;
       if (d || p) {
         var b = (
           /** @type {Derived} */
           t
-        ), h = b.parent;
+        ), f = b.parent;
         for (s = 0; s < c; s++)
           o = i[s], (d || !((_a2 = o == null ? void 0 : o.reactions) == null ? void 0 : _a2.includes(b))) && (o.reactions ?? (o.reactions = [])).push(b);
-        d && (b.f ^= bt), p && h !== null && (h.f & G) === 0 && (b.f ^= G);
+        d && (b.f ^= bt), p && f !== null && (f.f & Y) === 0 && (b.f ^= Y);
       }
       for (s = 0; s < c; s++)
         if (o = i[s], Tt(
@@ -404,7 +404,7 @@ function Tt(t) {
         ), o.wv > t.wv)
           return true;
     }
-    (!r || D !== null && !me) && fe(t, H);
+    (!r || D !== null && !me) && he(t, j);
   }
   return false;
 }
@@ -446,7 +446,7 @@ function Mi(t, e, i = true) {
         o,
         e,
         false
-      ) : e === o && (i ? fe(o, Ce) : (o.f & H) !== 0 && fe(o, Ke), Zt(
+      ) : e === o && (i ? he(o, Ce) : (o.f & j) !== 0 && he(o, Ke), Zt(
         /** @type {Effect} */
         o
       ));
@@ -454,25 +454,25 @@ function Mi(t, e, i = true) {
 }
 function Pi(t) {
   var _a2;
-  var e = N, i = V, r = de, s = k, o = me, d = oe, p = B, c = Z, b = t.f;
+  var e = N, i = q, r = de, s = k, o = me, d = oe, p = B, c = Z, b = t.f;
   N = /** @type {null | Value[]} */
-  null, V = 0, de = null, me = (b & G) !== 0 && (Z || !ft || k === null), k = (b & (ye | Ie)) === 0 ? t : null, oe = null, ai(t.ctx), Z = false, Ct++;
+  null, q = 0, de = null, me = (b & Y) !== 0 && (Z || !ht || k === null), k = (b & (ye | Ie)) === 0 ? t : null, oe = null, ai(t.ctx), Z = false, Ct++;
   try {
-    var h = (
+    var f = (
       /** @type {Function} */
       (0, t.fn)()
     ), w = t.deps;
     if (N !== null) {
       var n;
-      if (Et(t, V), w !== null && V > 0)
-        for (w.length = V + N.length, n = 0; n < N.length; n++)
-          w[V + n] = N[n];
+      if (Et(t, q), w !== null && q > 0)
+        for (w.length = q + N.length, n = 0; n < N.length; n++)
+          w[q + n] = N[n];
       else
         t.deps = w = N;
       if (!me)
-        for (n = V; n < w.length; n++)
+        for (n = q; n < w.length; n++)
           ((_a2 = w[n]).reactions ?? (_a2.reactions = [])).push(t);
-    } else w !== null && V < w.length && (Et(t, V), w.length = V);
+    } else w !== null && q < w.length && (Et(t, q), w.length = q);
     if (Hi() && de !== null && !Z && w !== null && (t.f & (J | Ke | Ce)) === 0)
       for (n = 0; n < /** @type {Source[]} */
       de.length; n++)
@@ -481,9 +481,9 @@ function Pi(t) {
           /** @type {Effect} */
           t
         );
-    return s !== null && Ct++, h;
+    return s !== null && Ct++, f;
   } finally {
-    N = e, V = i, de = r, k = s, me = o, oe = d, ai(p), Z = c;
+    N = e, q = i, de = r, k = s, me = o, oe = d, ai(p), Z = c;
   }
 }
 function Ur(t, e) {
@@ -498,7 +498,7 @@ function Ur(t, e) {
   i === null && (e.f & J) !== 0 && // Destroying a child effect while updating a parent effect can cause a dependency to appear
   // to be unused, when in fact it is used by the currently-updating parent. Checking `new_deps`
   // allows us to skip the expensive work of disconnecting and immediately reconnecting it
-  (N === null || !N.includes(e)) && (fe(e, Ke), (e.f & (G | bt)) === 0 && (e.f ^= bt), Si(
+  (N === null || !N.includes(e)) && (he(e, Ke), (e.f & (Y | bt)) === 0 && (e.f ^= bt), Si(
     /** @type {Derived} **/
     e
   ), Et(
@@ -516,9 +516,9 @@ function Et(t, e) {
 function Xt(t) {
   var e = t.f;
   if ((e & St) === 0) {
-    fe(t, H);
-    var i = D, r = B, s = ft;
-    D = t, ft = true;
+    he(t, j);
+    var i = D, r = B, s = ht;
+    D = t, ht = true;
     try {
       (e & Ht) !== 0 ? Jr(t) : zi(t), Bi(t);
       var o = Pi(t);
@@ -528,7 +528,7 @@ function Xt(t) {
     } catch (c) {
       Rt(c, t, i, r || t.ctx);
     } finally {
-      ft = s, D = i;
+      ht = s, D = i;
     }
   }
 }
@@ -550,7 +550,7 @@ function Ni() {
       et = [];
       for (var r = 0; r < i; r++) {
         var s = e[r];
-        (s.f & H) === 0 && (s.f ^= H);
+        (s.f & j) === 0 && (s.f ^= j);
         var o = Ir(s);
         zr(o);
       }
@@ -578,20 +578,20 @@ function Zt(t) {
     e = e.parent;
     var i = e.f;
     if ((i & (Ie | ye)) !== 0) {
-      if ((i & H) === 0) return;
-      e.f ^= H;
+      if ((i & j) === 0) return;
+      e.f ^= j;
     }
   }
   et.push(e);
 }
 function Ir(t) {
   for (var e = [], i = t.first; i !== null; ) {
-    var r = i.f, s = (r & ye) !== 0, o = s && (r & H) !== 0;
+    var r = i.f, s = (r & ye) !== 0, o = s && (r & j) !== 0;
     if (!o && (r & vt) === 0) {
       if ((r & vi) !== 0)
         e.push(i);
       else if (s)
-        i.f ^= H;
+        i.f ^= j;
       else {
         var d = k;
         try {
@@ -628,7 +628,7 @@ function U(t) {
   if (k !== null && !Z) {
     oe !== null && oe.includes(t) && Sr();
     var r = k.deps;
-    t.rv < Ct && (t.rv = Ct, N === null && r !== null && r[V] === t ? V++ : N === null ? N = [t] : (!me || !N.includes(t)) && N.push(t));
+    t.rv < Ct && (t.rv = Ct, N === null && r !== null && r[q] === t ? q++ : N === null ? N = [t] : (!me || !N.includes(t)) && N.push(t));
   } else if (i && /** @type {Derived} */
   t.deps === null && /** @type {Derived} */
   t.effects === null) {
@@ -636,7 +636,7 @@ function U(t) {
       /** @type {Derived} */
       t
     ), o = s.parent;
-    o !== null && (o.f & G) === 0 && (s.f ^= G);
+    o !== null && (o.f & Y) === 0 && (s.f ^= Y);
   }
   return i && (s = /** @type {Derived} */
   t, Tt(s) && Di(s)), t.v;
@@ -650,11 +650,11 @@ function $t(t) {
   }
 }
 const Kr = -7169;
-function fe(t, e) {
+function he(t, e) {
   t.f = t.f & Kr | e;
 }
 function Wr(t) {
-  D === null && k === null && xr(), k !== null && (k.f & G) !== 0 && D === null && _r(), Yt && gr();
+  D === null && k === null && xr(), k !== null && (k.f & Y) !== 0 && D === null && _r(), Yt && gr();
 }
 function Vr(t, e) {
   var i = e.last;
@@ -696,7 +696,7 @@ function Te(t, e, i, r = true) {
 }
 function qr(t) {
   const e = Te(kt, null, false);
-  return fe(e, H), e.teardown = t, e;
+  return he(e, j), e.teardown = t, e;
 }
 function Hr(t) {
   Wr();
@@ -783,7 +783,7 @@ function xe(t, e = true) {
     }
     i = true;
   }
-  zi(t, e && !i), Et(t, 0), fe(t, St);
+  zi(t, e && !i), Et(t, 0), he(t, St);
   var d = t.transitions;
   if (d !== null)
     for (const c of d)
@@ -929,7 +929,7 @@ function Xe(t) {
         return o || i;
       }
     });
-    var h = k, w = D;
+    var f = k, w = D;
     ge(null), _e(null);
     try {
       for (var n, l = []; o !== null; ) {
@@ -942,8 +942,8 @@ function Xe(t) {
           // -> the target could not have been disabled because it emits the event in the first place
           t.target === o))
             if (mi(u)) {
-              var [f, ...$] = u;
-              f.apply(o, [t, ...$]);
+              var [h, ...$] = u;
+              h.apply(o, [t, ...$]);
             } else
               u.call(o, t);
         } catch (A) {
@@ -961,7 +961,7 @@ function Xe(t) {
         throw n;
       }
     } finally {
-      t.__root = e, delete t.currentTarget, ge(h), _e(w);
+      t.__root = e, delete t.currentTarget, ge(f), _e(w);
     }
   }
 }
@@ -1050,8 +1050,8 @@ function Xi(t, { target: e, anchor: i, props: r = {}, events: s, context: o, int
       }
     }
   };
-  c(fr(ji)), Kt.add(c);
-  var b = void 0, h = Gr(() => {
+  c(hr(ji)), Kt.add(c);
+  var b = void 0, f = Gr(() => {
     var w = i ?? e.appendChild(Oi());
     return Zr(() => {
       if (o) {
@@ -1080,7 +1080,7 @@ function Xi(t, { target: e, anchor: i, props: r = {}, events: s, context: o, int
       Kt.delete(c), w !== i && ((_a2 = w.parentNode) == null ? void 0 : _a2.removeChild(w));
     };
   });
-  return Vt.set(b, h), b;
+  return Vt.set(b, f), b;
 }
 let Vt = /* @__PURE__ */ new WeakMap();
 function us(t, e) {
@@ -1122,7 +1122,7 @@ function cs(t, e, i) {
   }
   return r === "" ? null : r;
 }
-function fs(t, e, i, r, s, o) {
+function hs(t, e, i, r, s, o) {
   var d = t.__className;
   if (Q || d !== i) {
     var p = cs(i, r, o);
@@ -1136,15 +1136,15 @@ function fs(t, e, i, r, s, o) {
 }
 function ui(t, e, i, r) {
   var s = t.__attributes ?? (t.__attributes = {});
-  Q && (s[e] = t.getAttribute(e)), s[e] !== (s[e] = i) && ("__styles" in t && (t.__styles = {}), i == null ? t.removeAttribute(e) : typeof i != "string" && hs(t).includes(e) ? t[e] = i : t.setAttribute(e, i));
+  Q && (s[e] = t.getAttribute(e)), s[e] !== (s[e] = i) && ("__styles" in t && (t.__styles = {}), i == null ? t.removeAttribute(e) : typeof i != "string" && fs(t).includes(e) ? t[e] = i : t.setAttribute(e, i));
 }
 var di = /* @__PURE__ */ new Map();
-function hs(t) {
+function fs(t) {
   var e = di.get(t.nodeName);
   if (e) return e;
   di.set(t.nodeName, e = []);
   for (var i, r = t, s = Element.prototype; s !== r; ) {
-    i = hr(r);
+    i = fr(r);
     for (var o in i)
       i[o].set && e.push(o);
     r = gi(r);
@@ -1196,14 +1196,14 @@ function ut(t, e, i, r) {
     );
     return l === void 0 ? c() : (d = true, p = false, l);
   };
-  var h = false, w = /* @__PURE__ */ Ci(s), n = /* @__PURE__ */ ki(() => {
+  var f = false, w = /* @__PURE__ */ Ci(s), n = /* @__PURE__ */ ki(() => {
     var l = b(), a = U(w);
-    return h ? (h = false, a) : w.v = l;
+    return f ? (f = false, a) : w.v = l;
   });
   return function(l, a) {
     if (arguments.length > 0) {
       const u = a ? U(n) : l;
-      return n.equals(u) || (h = true, q(w, u), p && o !== void 0 && (o = u), $t(() => U(n))), l;
+      return n.equals(u) || (f = true, H(w, u), p && o !== void 0 && (o = u), $t(() => U(n))), l;
     }
     return U(n);
   };
@@ -1237,7 +1237,7 @@ class vs {
           return d === dr ? true : (U(i.get(d) ?? r(d, Reflect.get(o, d))), Reflect.has(o, d));
         },
         set(o, d, p) {
-          return q(i.get(d) ?? r(d, p), p), Reflect.set(o, d, p);
+          return H(i.get(d) ?? r(d, p), p), Reflect.set(o, d, p);
         }
       }
     );
@@ -1361,7 +1361,7 @@ typeof HTMLElement == "function" && (Ji = class extends HTMLElement {
         r in i && (r === "default" && !this.$$d.children ? (this.$$d.children = t(r), e.default = true) : e[r] = t(r));
       for (const r of this.attributes) {
         const s = this.$$g_p(r.name);
-        s in this.$$d || (this.$$d[s] = ht(s, r.value, this.$$p_d, "toProp"));
+        s in this.$$d || (this.$$d[s] = ft(s, r.value, this.$$p_d, "toProp"));
       }
       for (const r in this.$$p_d)
         !(r in this.$$d) && this[r] !== void 0 && (this.$$d[r] = this[r], delete this[r]);
@@ -1380,7 +1380,7 @@ typeof HTMLElement == "function" && (Ji = class extends HTMLElement {
           for (const r of wt(this.$$c)) {
             if (!((_a2 = this.$$p_d[r]) == null ? void 0 : _a2.reflect)) continue;
             this.$$d[r] = this.$$c[r];
-            const s = ht(
+            const s = ft(
               r,
               this.$$d[r],
               this.$$p_d,
@@ -1408,7 +1408,7 @@ typeof HTMLElement == "function" && (Ji = class extends HTMLElement {
    */
   attributeChangedCallback(t, e, i) {
     var _a2;
-    this.$$r || (t = this.$$g_p(t), this.$$d[t] = ht(t, i, this.$$p_d, "toProp"), (_a2 = this.$$c) == null ? void 0 : _a2.$set({ [t]: this.$$d[t] }));
+    this.$$r || (t = this.$$g_p(t), this.$$d[t] = ft(t, i, this.$$p_d, "toProp"), (_a2 = this.$$c) == null ? void 0 : _a2.$set({ [t]: this.$$d[t] }));
   }
   disconnectedCallback() {
     this.$$cn = false, Promise.resolve().then(() => {
@@ -1424,7 +1424,7 @@ typeof HTMLElement == "function" && (Ji = class extends HTMLElement {
     ) || t;
   }
 });
-function ht(t, e, i, r) {
+function ft(t, e, i, r) {
   var _a2;
   const s = (_a2 = i[t]) == null ? void 0 : _a2.type;
   if (e = s === "Boolean" && typeof e != "boolean" ? e != null : e, !r || !i[t])
@@ -1482,11 +1482,11 @@ function ms(t, e, i, r, s, o) {
       },
       set(c) {
         var _a2;
-        c = ht(p, c, e), this.$$d[p] = c;
+        c = ft(p, c, e), this.$$d[p] = c;
         var b = this.$$c;
         if (b) {
-          var h = (_a2 = ze(b, p)) == null ? void 0 : _a2.get;
-          h ? b[p] = c : b.$set({ [p]: c });
+          var f = (_a2 = ze(b, p)) == null ? void 0 : _a2.get;
+          f ? b[p] = c : b.$set({ [p]: c });
         }
       }
     });
@@ -1515,11 +1515,11 @@ const L = new gs();
 function _s(t) {
   return t && t.__esModule && Object.prototype.hasOwnProperty.call(t, "default") ? t.default : t;
 }
-var Ze = { exports: {} }, xs = Ze.exports, fi;
+var Ze = { exports: {} }, xs = Ze.exports, hi;
 function ys() {
-  return fi || (fi = 1, (function(t, e) {
+  return hi || (hi = 1, (function(t, e) {
     (function(i, r) {
-      var s = "1.0.41", o = "", d = "?", p = "function", c = "undefined", b = "object", h = "string", w = "major", n = "model", l = "name", a = "type", u = "vendor", f = "version", $ = "architecture", A = "console", m = "mobile", _ = "tablet", O = "smarttv", F = "wearable", ee = "embedded", ae = 500, Ee = "Amazon", he = "Apple", it = "ASUS", rt = "BlackBerry", te = "Browser", Re = "Chrome", At = "Edge", $e = "Firefox", Ae = "Google", We = "Honor", st = "Huawei", Ot = "Lenovo", Oe = "LG", Ve = "Microsoft", qe = "Motorola", Le = "Nvidia", nt = "OnePlus", ke = "Opera", pe = "OPPO", be = "Samsung", He = "Sharp", ie = "Sony", le = "Xiaomi", Fe = "Zebra", Me = "Facebook", j = "Chromium OS", v = "Mac OS", T = " Browser", M = function(y, C) {
+      var s = "1.0.41", o = "", d = "?", p = "function", c = "undefined", b = "object", f = "string", w = "major", n = "model", l = "name", a = "type", u = "vendor", h = "version", $ = "architecture", A = "console", m = "mobile", _ = "tablet", O = "smarttv", F = "wearable", ee = "embedded", ae = 500, Ee = "Amazon", fe = "Apple", it = "ASUS", rt = "BlackBerry", te = "Browser", Re = "Chrome", At = "Edge", $e = "Firefox", Ae = "Google", We = "Honor", st = "Huawei", Ot = "Lenovo", Oe = "LG", Ve = "Microsoft", qe = "Motorola", Le = "Nvidia", nt = "OnePlus", ke = "Opera", pe = "OPPO", be = "Samsung", He = "Sharp", ie = "Sony", le = "Xiaomi", Fe = "Zebra", Me = "Facebook", G = "Chromium OS", v = "Mac OS", T = " Browser", M = function(y, C) {
         var x = {};
         for (var S in y)
           C[S] && C[S].length % 2 === 0 ? x[S] = C[S].concat(y[S]) : x[S] = y[S];
@@ -1529,13 +1529,13 @@ function ys() {
           C[y[x].toUpperCase()] = y[x];
         return C;
       }, z = function(y, C) {
-        return typeof y === h ? P(C).indexOf(P(y)) !== -1 : false;
+        return typeof y === f ? P(C).indexOf(P(y)) !== -1 : false;
       }, P = function(y) {
         return y.toLowerCase();
       }, ve = function(y) {
-        return typeof y === h ? y.replace(/[^\d\.]/g, o).split(".")[0] : r;
+        return typeof y === f ? y.replace(/[^\d\.]/g, o).split(".")[0] : r;
       }, Pe = function(y, C) {
-        if (typeof y === h)
+        if (typeof y === f)
           return y = y.replace(/^\s\s*/, o), typeof C === c ? y : y.substring(0, ae);
       }, je = function(y, C) {
         for (var x = 0, S, ue, re, E, g, se; x < C.length && !g; ) {
@@ -1582,12 +1582,12 @@ function ys() {
             /\b(?:crmo|crios)\/([\w\.]+)/i
             // Chrome for Android/iOS
           ],
-          [f, [l, "Chrome"]],
+          [h, [l, "Chrome"]],
           [
             /edg(?:e|ios|a)?\/([\w\.]+)/i
             // Microsoft Edge
           ],
-          [f, [l, "Edge"]],
+          [h, [l, "Edge"]],
           [
             // Presto based
             /(opera mini)\/([-\w\.]+)/i,
@@ -1597,33 +1597,33 @@ function ys() {
             /(opera)(?:.+version\/|[\/ ]+)([\w\.]+)/i
             // Opera
           ],
-          [l, f],
+          [l, h],
           [
             /opios[\/ ]+([\w\.]+)/i
             // Opera mini on iphone >= 8.0
           ],
-          [f, [l, ke + " Mini"]],
+          [h, [l, ke + " Mini"]],
           [
             /\bop(?:rg)?x\/([\w\.]+)/i
             // Opera GX
           ],
-          [f, [l, ke + " GX"]],
+          [h, [l, ke + " GX"]],
           [
             /\bopr\/([\w\.]+)/i
             // Opera Webkit
           ],
-          [f, [l, ke]],
+          [h, [l, ke]],
           [
             // Mixed
             /\bb[ai]*d(?:uhd|[ub]*[aekoprswx]{5,6})[\/ ]?([\w\.]+)/i
             // Baidu
           ],
-          [f, [l, "Baidu"]],
+          [h, [l, "Baidu"]],
           [
             /\b(?:mxbrowser|mxios|myie2)\/?([-\w\.]*)\b/i
             // Maxthon
           ],
-          [f, [l, "Maxthon"]],
+          [h, [l, "Maxthon"]],
           [
             /(kindle)\/([\w\.]+)/i,
             // Kindle
@@ -1642,22 +1642,22 @@ function ys() {
             /(weibo)__([\d\.]+)/i
             // Weibo
           ],
-          [l, f],
+          [l, h],
           [
             /quark(?:pc)?\/([-\w\.]+)/i
             // Quark
           ],
-          [f, [l, "Quark"]],
+          [h, [l, "Quark"]],
           [
             /\bddg\/([\w\.]+)/i
             // DuckDuckGo
           ],
-          [f, [l, "DuckDuckGo"]],
+          [h, [l, "DuckDuckGo"]],
           [
             /(?:\buc? ?browser|(?:juc.+)ucweb)[\/ ]?([\w\.]+)/i
             // UCBrowser
           ],
-          [f, [l, "UC" + te]],
+          [h, [l, "UC" + te]],
           [
             /microm.+\bqbcore\/([\w\.]+)/i,
             // WeChat Desktop for Windows Built-in Browser
@@ -1665,97 +1665,97 @@ function ys() {
             /micromessenger\/([\w\.]+)/i
             // WeChat
           ],
-          [f, [l, "WeChat"]],
+          [h, [l, "WeChat"]],
           [
             /konqueror\/([\w\.]+)/i
             // Konqueror
           ],
-          [f, [l, "Konqueror"]],
+          [h, [l, "Konqueror"]],
           [
             /trident.+rv[: ]([\w\.]{1,9})\b.+like gecko/i
             // IE11
           ],
-          [f, [l, "IE"]],
+          [h, [l, "IE"]],
           [
             /ya(?:search)?browser\/([\w\.]+)/i
             // Yandex
           ],
-          [f, [l, "Yandex"]],
+          [h, [l, "Yandex"]],
           [
             /slbrowser\/([\w\.]+)/i
             // Smart Lenovo Browser
           ],
-          [f, [l, "Smart Lenovo " + te]],
+          [h, [l, "Smart Lenovo " + te]],
           [
             /(avast|avg)\/([\w\.]+)/i
             // Avast/AVG Secure Browser
           ],
-          [[l, /(.+)/, "$1 Secure " + te], f],
+          [[l, /(.+)/, "$1 Secure " + te], h],
           [
             /\bfocus\/([\w\.]+)/i
             // Firefox Focus
           ],
-          [f, [l, $e + " Focus"]],
+          [h, [l, $e + " Focus"]],
           [
             /\bopt\/([\w\.]+)/i
             // Opera Touch
           ],
-          [f, [l, ke + " Touch"]],
+          [h, [l, ke + " Touch"]],
           [
             /coc_coc\w+\/([\w\.]+)/i
             // Coc Coc Browser
           ],
-          [f, [l, "Coc Coc"]],
+          [h, [l, "Coc Coc"]],
           [
             /dolfin\/([\w\.]+)/i
             // Dolphin
           ],
-          [f, [l, "Dolphin"]],
+          [h, [l, "Dolphin"]],
           [
             /coast\/([\w\.]+)/i
             // Opera Coast
           ],
-          [f, [l, ke + " Coast"]],
+          [h, [l, ke + " Coast"]],
           [
             /miuibrowser\/([\w\.]+)/i
             // MIUI Browser
           ],
-          [f, [l, "MIUI" + T]],
+          [h, [l, "MIUI" + T]],
           [
             /fxios\/([\w\.-]+)/i
             // Firefox for iOS
           ],
-          [f, [l, $e]],
+          [h, [l, $e]],
           [
             /\bqihoobrowser\/?([\w\.]*)/i
             // 360
           ],
-          [f, [l, "360"]],
+          [h, [l, "360"]],
           [
             /\b(qq)\/([\w\.]+)/i
             // QQ
           ],
-          [[l, /(.+)/, "$1Browser"], f],
+          [[l, /(.+)/, "$1Browser"], h],
           [
             /(oculus|sailfish|huawei|vivo|pico)browser\/([\w\.]+)/i
           ],
-          [[l, /(.+)/, "$1" + T], f],
+          [[l, /(.+)/, "$1" + T], h],
           [
             // Oculus/Sailfish/HuaweiBrowser/VivoBrowser/PicoBrowser
             /samsungbrowser\/([\w\.]+)/i
             // Samsung Internet
           ],
-          [f, [l, be + " Internet"]],
+          [h, [l, be + " Internet"]],
           [
             /metasr[\/ ]?([\d\.]+)/i
             // Sogou Explorer
           ],
-          [f, [l, "Sogou Explorer"]],
+          [h, [l, "Sogou Explorer"]],
           [
             /(sogou)mo\w+\/([\d\.]+)/i
             // Sogou Mobile
           ],
-          [[l, "Sogou Mobile"], f],
+          [[l, "Sogou Mobile"], h],
           [
             /(electron)\/([\w\.]+) safari/i,
             // Electron-based App
@@ -1764,7 +1764,7 @@ function ys() {
             /m?(qqbrowser|2345(?=browser|chrome|explorer))\w*[\/ ]?v?([\w\.]+)/i
             // QQ/2345
           ],
-          [l, f],
+          [l, h],
           [
             /(lbbrowser|rekonq)/i,
             // LieBao Browser/Rekonq
@@ -1778,13 +1778,13 @@ function ys() {
             /ome\/([\w\.]+).+qihu (360)[es]e/i
             // 360
           ],
-          [f, l],
+          [h, l],
           [
             // WebView
             /((?:fban\/fbios|fb_iab\/fb4a)(?!.+fbav)|;fbav\/([\w\.]+);)/i
             // Facebook App for iOS & Android
           ],
-          [[l, Me], f],
+          [[l, Me], h],
           [
             /(Klarna)\/([\w\.]+)/i,
             // Klarna Shopping Browser for iOS & Android
@@ -1805,72 +1805,72 @@ function ys() {
             /(chromium|instagram|snapchat)[\/ ]([-\w\.]+)/i
             // Chromium/Instagram/Snapchat
           ],
-          [l, f],
+          [l, h],
           [
             /\bgsa\/([\w\.]+) .*safari\//i
             // Google Search Appliance on iOS
           ],
-          [f, [l, "GSA"]],
+          [h, [l, "GSA"]],
           [
             /musical_ly(?:.+app_?version\/|_)([\w\.]+)/i
             // TikTok
           ],
-          [f, [l, "TikTok"]],
+          [h, [l, "TikTok"]],
           [
             /headlesschrome(?:\/([\w\.]+)| )/i
             // Chrome Headless
           ],
-          [f, [l, Re + " Headless"]],
+          [h, [l, Re + " Headless"]],
           [
             / wv\).+(chrome)\/([\w\.]+)/i
             // Chrome WebView
           ],
-          [[l, Re + " WebView"], f],
+          [[l, Re + " WebView"], h],
           [
             /droid.+ version\/([\w\.]+)\b.+(?:mobile safari|safari)/i
             // Android Browser
           ],
-          [f, [l, "Android " + te]],
+          [h, [l, "Android " + te]],
           [
             /(chrome|omniweb|arora|[tizenoka]{5} ?browser)\/v?([\w\.]+)/i
             // Chrome/OmniWeb/Arora/Tizen/Nokia
           ],
-          [l, f],
+          [l, h],
           [
             /version\/([\w\.\,]+) .*mobile\/\w+ (safari)/i
             // Mobile Safari
           ],
-          [f, [l, "Mobile Safari"]],
+          [h, [l, "Mobile Safari"]],
           [
             /version\/([\w(\.|\,)]+) .*(mobile ?safari|safari)/i
             // Safari & Safari Mobile
           ],
-          [f, l],
+          [h, l],
           [
             /webkit.+?(mobile ?safari|safari)(\/[\w\.]+)/i
             // Safari < 3.0
           ],
-          [l, [f, Ge, rr]],
+          [l, [h, Ge, rr]],
           [
             /(webkit|khtml)\/([\w\.]+)/i
           ],
-          [l, f],
+          [l, h],
           [
             // Gecko based
             /(navigator|netscape\d?)\/([-\w\.]+)/i
             // Netscape
           ],
-          [[l, "Netscape"], f],
+          [[l, "Netscape"], h],
           [
             /(wolvic|librewolf)\/([\w\.]+)/i
             // Wolvic/LibreWolf
           ],
-          [l, f],
+          [l, h],
           [
             /mobile vr; rv:([\w\.]+)\).+firefox/i
             // Firefox Reality
           ],
-          [f, [l, $e + " Reality"]],
+          [h, [l, $e + " Reality"]],
           [
             /ekiohf.+(flow)\/([\w\.]+)/i,
             // Flow
@@ -1890,12 +1890,12 @@ function ys() {
             /\b(links) \(([\w\.]+)/i
             // Links
           ],
-          [l, [f, /_/g, "."]],
+          [l, [h, /_/g, "."]],
           [
             /(cobalt)\/([\w\.]+)/i
             // Cobalt
           ],
-          [l, [f, /master.|lts./, ""]]
+          [l, [h, /master.|lts./, ""]]
         ],
         cpu: [
           [
@@ -1961,18 +1961,18 @@ function ys() {
             /(?:\/|\()(ip(?:hone|od)[\w, ]*)(?:\/|;)/i
             // iPod/iPhone
           ],
-          [n, [u, he], [a, m]],
+          [n, [u, fe], [a, m]],
           [
             /\((ipad);[-\w\),; ]+apple/i,
             // iPad
             /applecoremedia\/[\w\.]+ \((ipad)/i,
             /\b(ipad)\d\d?,\d\d?[;\]].+ios/i
           ],
-          [n, [u, he], [a, _]],
+          [n, [u, fe], [a, _]],
           [
             /(macintosh);/i
           ],
-          [n, [u, he]],
+          [n, [u, fe]],
           [
             // Sharp
             /\b(sh-?[altvz]?\d\d[a-ekm]?)/i
@@ -2419,7 +2419,7 @@ function ys() {
             /(apple) ?tv/i
             // Apple TV
           ],
-          [u, [n, he + " TV"], [a, O]],
+          [u, [n, fe + " TV"], [a, O]],
           [
             /crkey/i
             // Google Chromecast
@@ -2521,7 +2521,7 @@ function ys() {
             /(watch)(?: ?os[,\/]|\d,\d\/)[\d\.]+/i
             // Apple Watch
           ],
-          [n, [u, he], [a, F]],
+          [n, [u, fe], [a, F]],
           [
             /(opwwe\d{3})/i
             // OnePlus Watch
@@ -2581,7 +2581,7 @@ function ys() {
             /(homepod).+mac os/i
             // Apple HomePod
           ],
-          [n, [u, he], [a, ee]],
+          [n, [u, fe], [a, ee]],
           [
             /windows iot/i
           ],
@@ -2620,17 +2620,17 @@ function ys() {
             /windows.+ edge\/([\w\.]+)/i
             // EdgeHTML
           ],
-          [f, [l, At + "HTML"]],
+          [h, [l, At + "HTML"]],
           [
             /(arkweb)\/([\w\.]+)/i
             // ArkWeb
           ],
-          [l, f],
+          [l, h],
           [
             /webkit\/537\.36.+chrome\/(?!27)([\w\.]+)/i
             // Blink
           ],
-          [f, [l, "Blink"]],
+          [h, [l, "Blink"]],
           [
             /(presto)\/([\w\.]+)/i,
             // Presto
@@ -2645,7 +2645,7 @@ function ys() {
             /\b(libweb)/i
             // LibWeb
           ],
-          [l, f],
+          [l, h],
           [
             /ladybird\//i
           ],
@@ -2654,7 +2654,7 @@ function ys() {
             /rv\:([\w\.]{1,9})\b.+(gecko)/i
             // Gecko
           ],
-          [f, l]
+          [h, l]
         ],
         os: [
           [
@@ -2662,19 +2662,19 @@ function ys() {
             /microsoft (windows) (vista|xp)/i
             // Windows (iTunes)
           ],
-          [l, f],
+          [l, h],
           [
             /(windows (?:phone(?: os)?|mobile|iot))[\/ ]?([\d\.\w ]*)/i
             // Windows Phone
           ],
-          [l, [f, Ge, Qt]],
+          [l, [h, Ge, Qt]],
           [
             /windows nt 6\.2; (arm)/i,
             // Windows RT
             /windows[\/ ]([ntce\d\. ]+\w)(?!.+xbox)/i,
             /(?:win(?=3|9|n)|win 9x )([nt\d\.]+)/i
           ],
-          [[f, Ge, Qt], [l, "Windows"]],
+          [[h, Ge, Qt], [l, "Windows"]],
           [
             // iOS/macOS
             /[adehimnop]{4,7}\b(?:.*os ([\w]+) like mac|; opera)/i,
@@ -2682,66 +2682,66 @@ function ys() {
             /(?:ios;fbsv\/|iphone.+ios[\/ ])([\d\.]+)/i,
             /cfnetwork\/.+darwin/i
           ],
-          [[f, /_/g, "."], [l, "iOS"]],
+          [[h, /_/g, "."], [l, "iOS"]],
           [
             /(mac os x) ?([\w\. ]*)/i,
             /(macintosh|mac_powerpc\b)(?!.+haiku)/i
             // Mac OS
           ],
-          [[l, v], [f, /_/g, "."]],
+          [[l, v], [h, /_/g, "."]],
           [
             // Mobile OSes
             /droid ([\w\.]+)\b.+(android[- ]x86|harmonyos)/i
             // Android-x86/HarmonyOS
           ],
-          [f, l],
+          [h, l],
           [
             /(ubuntu) ([\w\.]+) like android/i
             // Ubuntu Touch
           ],
-          [[l, /(.+)/, "$1 Touch"], f],
+          [[l, /(.+)/, "$1 Touch"], h],
           [
             // Android/Blackberry/WebOS/QNX/Bada/RIM/KaiOS/Maemo/MeeGo/S40/Sailfish OS/OpenHarmony/Tizen
             /(android|bada|blackberry|kaios|maemo|meego|openharmony|qnx|rim tablet os|sailfish|series40|symbian|tizen|webos)\w*[-\/; ]?([\d\.]*)/i
           ],
-          [l, f],
+          [l, h],
           [
             /\(bb(10);/i
             // BlackBerry 10
           ],
-          [f, [l, rt]],
+          [h, [l, rt]],
           [
             /(?:symbian ?os|symbos|s60(?=;)|series ?60)[-\/ ]?([\w\.]*)/i
             // Symbian
           ],
-          [f, [l, "Symbian"]],
+          [h, [l, "Symbian"]],
           [
             /mozilla\/[\d\.]+ \((?:mobile|tablet|tv|mobile; [\w ]+); rv:.+ gecko\/([\w\.]+)/i
             // Firefox OS
           ],
-          [f, [l, $e + " OS"]],
+          [h, [l, $e + " OS"]],
           [
             /web0s;.+rt(tv)/i,
             /\b(?:hp)?wos(?:browser)?\/([\w\.]+)/i
             // WebOS
           ],
-          [f, [l, "webOS"]],
+          [h, [l, "webOS"]],
           [
             /watch(?: ?os[,\/]|\d,\d\/)([\d\.]+)/i
             // watchOS
           ],
-          [f, [l, "watchOS"]],
+          [h, [l, "watchOS"]],
           [
             // Google Chromecast
             /crkey\/([\d\.]+)/i
             // Google Chromecast
           ],
-          [f, [l, Re + "cast"]],
+          [h, [l, Re + "cast"]],
           [
             /(cros) [\w]+(?:\)| ([\w\.]+)\b)/i
             // Chromium OS
           ],
-          [[l, j], f],
+          [[l, G], h],
           [
             // Smart TVs
             /panasonic;(viera)/i,
@@ -2773,12 +2773,12 @@ function ys() {
             /(haiku) (\w+)/i
             // Haiku
           ],
-          [l, f],
+          [l, h],
           [
             /(sunos) ?([\w\.\d]*)/i
             // Solaris
           ],
-          [[l, "Solaris"], f],
+          [[l, "Solaris"], h],
           [
             /((?:open)?solaris)[-\/ ]?([\w\.]*)/i,
             // Solaris
@@ -2789,15 +2789,15 @@ function ys() {
             /(unix) ?([\w\.]*)/i
             // UNIX
           ],
-          [l, f]
+          [l, h]
         ]
-      }, Y = function(y, C) {
-        if (typeof y === b && (C = y, y = r), !(this instanceof Y))
-          return new Y(y, C).getResult();
+      }, X = function(y, C) {
+        if (typeof y === b && (C = y, y = r), !(this instanceof X))
+          return new X(y, C).getResult();
         var x = typeof i !== c && i.navigator ? i.navigator : r, S = y || (x && x.userAgent ? x.userAgent : o), ue = x && x.userAgentData ? x.userAgentData : r, re = C ? M(ei, C) : ei, E = x && x.userAgent == S;
         return this.getBrowser = function() {
           var g = {};
-          return g[l] = r, g[f] = r, je.call(g, S, re.browser), g[w] = ve(g[f]), E && x && x.brave && typeof x.brave.isBrave == p && (g[l] = "Brave"), g;
+          return g[l] = r, g[h] = r, je.call(g, S, re.browser), g[w] = ve(g[h]), E && x && x.brave && typeof x.brave.isBrave == p && (g[l] = "Brave"), g;
         }, this.getCPU = function() {
           var g = {};
           return g[$] = r, je.call(g, S, re.cpu), g;
@@ -2806,10 +2806,10 @@ function ys() {
           return g[u] = r, g[n] = r, g[a] = r, je.call(g, S, re.device), E && !g[a] && ue && ue.mobile && (g[a] = m), E && g[n] == "Macintosh" && x && typeof x.standalone !== c && x.maxTouchPoints && x.maxTouchPoints > 2 && (g[n] = "iPad", g[a] = _), g;
         }, this.getEngine = function() {
           var g = {};
-          return g[l] = r, g[f] = r, je.call(g, S, re.engine), g;
+          return g[l] = r, g[h] = r, je.call(g, S, re.engine), g;
         }, this.getOS = function() {
           var g = {};
-          return g[l] = r, g[f] = r, je.call(g, S, re.os), E && !g[l] && ue && ue.platform && ue.platform != "Unknown" && (g[l] = ue.platform.replace(/chrome os/i, j).replace(/macos/i, v)), g;
+          return g[l] = r, g[h] = r, je.call(g, S, re.os), E && !g[l] && ue && ue.platform && ue.platform != "Unknown" && (g[l] = ue.platform.replace(/chrome os/i, G).replace(/macos/i, v)), g;
         }, this.getResult = function() {
           return {
             ua: this.getUA(),
@@ -2822,13 +2822,13 @@ function ys() {
         }, this.getUA = function() {
           return S;
         }, this.setUA = function(g) {
-          return S = typeof g === h && g.length > ae ? Pe(g, ae) : g, this;
+          return S = typeof g === f && g.length > ae ? Pe(g, ae) : g, this;
         }, this.setUA(S), this;
       };
-      Y.VERSION = s, Y.BROWSER = R([l, f, w]), Y.CPU = R([$]), Y.DEVICE = R([n, u, a, A, m, O, _, F, ee]), Y.ENGINE = Y.OS = R([l, f]), t.exports && (e = t.exports = Y), e.UAParser = Y;
+      X.VERSION = s, X.BROWSER = R([l, h, w]), X.CPU = R([$]), X.DEVICE = R([n, u, a, A, m, O, _, F, ee]), X.ENGINE = X.OS = R([l, h]), t.exports && (e = t.exports = X), e.UAParser = X;
       var Ne = typeof i !== c && (i.jQuery || i.Zepto);
       if (Ne && !Ne.ua) {
-        var ot = new Y();
+        var ot = new X();
         Ne.ua = ot.getResult(), Ne.ua.get = function() {
           return ot.getUA();
         }, Ne.ua.set = function(y) {
@@ -2842,7 +2842,7 @@ function ys() {
   })(Ze, Ze.exports)), Ze.exports;
 }
 var Cs = ys();
-const Es = /* @__PURE__ */ _s(Cs), ks = new Es(), Qi = ks.getResult(), Ss = (_a = Qi.engine.name) == null ? void 0 : _a.toLowerCase(), hi = Number((_b = Qi.engine.version) == null ? void 0 : _b.split(".")[0]), Ut = {
+const Es = /* @__PURE__ */ _s(Cs), ks = new Es(), Qi = ks.getResult(), Ss = (_a = Qi.engine.name) == null ? void 0 : _a.toLowerCase(), fi = Number((_b = Qi.engine.version) == null ? void 0 : _b.split(".")[0]), Ut = {
   "0x0001": "Escape",
   "0x0002": "Digit1",
   "0x0003": "Digit2",
@@ -3006,8 +3006,8 @@ const Es = /* @__PURE__ */ _s(Cs), ks = new Es(), Qi = ks.getResult(), Ss = (_a 
   // The documentation says it's 'AudioVolumeMute', but the actual test shows that it's 'VolumeMute'.
   "0xE02E": "VolumeDown",
   "0xE030": "VolumeUp",
-  "0xE05B": hi > 117 ? "MetaLeft" : "OSLeft",
-  "0xE05C": hi > 117 ? "MetaRight" : "OSRight"
+  "0xE05B": fi > 117 ? "MetaLeft" : "OSLeft",
+  "0xE05C": fi > 117 ? "MetaRight" : "OSRight"
 }, Ts = {
   blink: Bt({ ...Ut, ...pi }),
   gecko: Bt({ ...Ut, ...Ds }),
@@ -3612,9 +3612,9 @@ class Os {
     };
   }
 }
-var W = /* @__PURE__ */ ((t) => (t[t.Full = 0] = "Full", t[t.TextOnly = 1] = "TextOnly", t[t.TextOnlyServerOnly = 2] = "TextOnlyServerOnly", t[t.None = 3] = "None", t))(W || {}), er = /* @__PURE__ */ ((t) => (t[t.General = 0] = "General", t[t.WrongPassword = 1] = "WrongPassword", t[t.LogonFailure = 2] = "LogonFailure", t[t.AccessDenied = 3] = "AccessDenied", t[t.RDCleanPath = 4] = "RDCleanPath", t[t.ProxyConnect = 5] = "ProxyConnect", t[t.NegotiationFailure = 6] = "NegotiationFailure", t))(er || {});
+var V = /* @__PURE__ */ ((t) => (t[t.Full = 0] = "Full", t[t.TextOnly = 1] = "TextOnly", t[t.TextOnlyServerOnly = 2] = "TextOnlyServerOnly", t[t.None = 3] = "None", t))(V || {}), er = /* @__PURE__ */ ((t) => (t[t.General = 0] = "General", t[t.WrongPassword = 1] = "WrongPassword", t[t.LogonFailure = 2] = "LogonFailure", t[t.AccessDenied = 3] = "AccessDenied", t[t.RDCleanPath = 4] = "RDCleanPath", t[t.ProxyConnect = 5] = "ProxyConnect", t[t.NegotiationFailure = 6] = "NegotiationFailure", t))(er || {});
 const Ls = 100;
-function X(t) {
+function W(t) {
   throw {
     kind: () => er.General,
     backtrace: () => t
@@ -3624,7 +3624,7 @@ class Fs {
   constructor(e, i) {
     __publicField(this, "remoteDesktopService");
     __publicField(this, "module");
-    __publicField(this, "ClipboardApiSupported", W.None);
+    __publicField(this, "ClipboardApiSupported", V.None);
     __publicField(this, "lastClientClipboardItems", {});
     __publicField(this, "lastReceivedClipboardData", {});
     __publicField(this, "lastSentClipboardData", null);
@@ -3704,29 +3704,29 @@ class Fs {
       this.remoteDesktopService.emitWarningEvent("Clipboard is available only in secure contexts (HTTPS).");
       return;
     }
-    if (navigator.clipboard != null && (navigator.clipboard.read != null && navigator.clipboard.write != null ? this.ClipboardApiSupported = W.Full : navigator.clipboard.readText != null ? (this.ClipboardApiSupported = W.TextOnly, this.remoteDesktopService.emitWarningEvent(
+    if (navigator.clipboard != null && (navigator.clipboard.read != null && navigator.clipboard.write != null ? this.ClipboardApiSupported = V.Full : navigator.clipboard.readText != null ? (this.ClipboardApiSupported = V.TextOnly, this.remoteDesktopService.emitWarningEvent(
       "Clipboard is limited to text-only data types due to an outdated browser version!"
-    )) : navigator.clipboard.writeText != null && (this.ClipboardApiSupported = W.TextOnlyServerOnly, this.remoteDesktopService.emitWarningEvent(
+    )) : navigator.clipboard.writeText != null && (this.ClipboardApiSupported = V.TextOnlyServerOnly, this.remoteDesktopService.emitWarningEvent(
       "Clipboard reading is not supported and writing is limited to text-only data types due to an outdated browser version!"
-    ))), this.ClipboardApiSupported === W.Full)
+    ))), this.ClipboardApiSupported === V.Full)
       try {
         (await navigator.permissions.query({
           name: "clipboard-read"
-        })).state === "denied" && (this.ClipboardApiSupported = W.TextOnly);
+        })).state === "denied" && (this.ClipboardApiSupported = V.TextOnly);
       } catch {
         try {
           await navigator.clipboard.read();
         } catch {
-          this.ClipboardApiSupported = W.TextOnly;
+          this.ClipboardApiSupported = V.TextOnly;
         }
       }
-    if (this.ClipboardApiSupported === W.None) {
+    if (this.ClipboardApiSupported === V.None) {
       this.remoteDesktopService.emitWarningEvent(
         "Clipboard is not supported due to an outdated browser version!"
       );
       return;
     }
-    this.disposed || (this.remoteDesktopService.sessionEndedObservable.subscribe(() => this.stopMonitoring()), this.remoteDesktopService.setOnForceClipboardUpdate(this.onForceClipboardUpdate.bind(this)), this.ClipboardApiSupported === W.Full ? this.remoteDesktopService.autoClipboard ? (this.remoteDesktopService.setOnRemoteClipboardChanged(this.onRemoteClipboardChangedAutoMode.bind(this)), this.remoteDesktopService.sessionStartedObservable.subscribe((e) => {
+    this.disposed || (this.remoteDesktopService.sessionEndedObservable.subscribe(() => this.stopMonitoring()), this.remoteDesktopService.setOnForceClipboardUpdate(this.onForceClipboardUpdate.bind(this)), this.ClipboardApiSupported === V.Full ? this.remoteDesktopService.autoClipboard ? (this.remoteDesktopService.setOnRemoteClipboardChanged(this.onRemoteClipboardChangedAutoMode.bind(this)), this.remoteDesktopService.sessionStartedObservable.subscribe((e) => {
       this.monitoringActive = !this.disposed, this.scheduleOnMonitorClipboardUpdate();
     })) : this.remoteDesktopService.setOnRemoteClipboardChanged(
       this.onRemoteClipboardChangedManualMode.bind(this)
@@ -3735,33 +3735,33 @@ class Fs {
   // Copies clipboard content received from the server to the local clipboard.
   // Returns the result of the operation. On failure, it additionally raises an error session event.
   async saveRemoteClipboardData() {
-    if (this.ClipboardApiSupported !== W.Full)
+    if (this.ClipboardApiSupported !== V.Full)
       return await this.ffSaveRemoteClipboardData();
-    this.clipboardDataToSave == null && X("The server did not send the clipboard data.");
+    this.clipboardDataToSave == null && W("The server did not send the clipboard data.");
     try {
       const e = this.clipboardDataToRecord(this.clipboardDataToSave), i = new ClipboardItem(e);
       await navigator.clipboard.write([i]), this.clipboardDataToSave = null;
     } catch (e) {
-      X("Failed to write to the clipboard: " + e);
+      W("Failed to write to the clipboard: " + e);
     }
   }
   // Sends local clipboard's content to the server.
   // Returns the result of the operation. On failure, it additionally raises an error session event.
   async sendClipboardData() {
-    if (this.paused && X("The clipboard is paused."), this.ClipboardApiSupported !== W.Full)
+    if (this.paused && W("The clipboard is paused."), this.ClipboardApiSupported !== V.Full)
       return await this.ffSendClipboardData();
     const e = await navigator.clipboard.read().catch((s) => {
-      X("Failed to read from the clipboard: " + s);
+      W("Failed to read from the clipboard: " + s);
     });
-    e.length == 0 && X("The clipboard has no data.");
+    e.length == 0 && W("The clipboard has no data.");
     const i = e[0];
-    i.types.some((s) => s.startsWith("text/") || s.startsWith("image/png")) || X("The clipboard has no data of supported type (text or image).");
+    i.types.some((s) => s.startsWith("text/") || s.startsWith("image/png")) || W("The clipboard has no data of supported type (text or image).");
     const r = new this.module.ClipboardData();
     for (const s of i.types) {
       const o = s.startsWith("text/"), d = await i.getType(s);
       o ? r.addText(s, await d.text()) : r.addBinary(s, new Uint8Array(await d.arrayBuffer()));
     }
-    r.isEmpty() || (this.lastSentClipboardData = r, this.offeredLatest = true, await this.remoteDesktopService.onClipboardChanged(r));
+    (this.paused || this.disposed) && W("The clipboard is paused or disposed."), r.isEmpty() || (this.lastSentClipboardData = r, this.offeredLatest = true, await this.remoteDesktopService.onClipboardChanged(r));
   }
   scheduleOnMonitorClipboardUpdate() {
     clearTimeout(this.monitorTimer), this.monitorTimer = this.monitoringActive && !this.disposed ? setTimeout(() => {
@@ -3855,12 +3855,12 @@ class Fs {
       const s = {};
       let o = true;
       for (const d of r.types) {
-        const p = d.startsWith("text/"), c = await r.getType(d), b = p ? await c.text() : new Uint8Array(await c.arrayBuffer()), h = p ? function(n, l) {
+        const p = d.startsWith("text/"), c = await r.getType(d), b = p ? await c.text() : new Uint8Array(await c.arrayBuffer()), f = p ? function(n, l) {
           return n === l;
         } : function(n, l) {
           return !(n instanceof Uint8Array) || !(l instanceof Uint8Array) ? false : n.length === l.length && n.every((a, u) => a === l[u]);
         }, w = this.lastClientClipboardItems[d];
-        h(w, b) || (h(this.lastReceivedClipboardData[d], b) ? this.lastClientClipboardItems[d] = this.lastReceivedClipboardData[d] : o = false), s[d] = b;
+        f(w, b) || (f(this.lastReceivedClipboardData[d], b) ? this.lastClientClipboardItems[d] = this.lastReceivedClipboardData[d] : o = false), s[d] = b;
       }
       if (!o && !this.disposed && this.monitoringActive && !this.monitoringSuppressed && !this.paused && this.isFocused()) {
         this.lastClientClipboardItems = s;
@@ -3903,11 +3903,11 @@ class Fs {
   // Copies clipboard content received from the server to the local clipboard.
   // Returns the result of the operation. On failure, it additionally raises an error session event.
   async ffSaveRemoteClipboardData() {
-    this.ffClipboardDataToSave == null && X("The server did not send the clipboard data.");
+    this.ffClipboardDataToSave == null && W("The server did not send the clipboard data.");
     try {
       await navigator.clipboard.writeText(this.ffClipboardDataToSave), this.ffClipboardDataToSave = null;
     } catch (e) {
-      X("Failed to write to the clipboard: " + e);
+      W("Failed to write to the clipboard: " + e);
     }
   }
   // Firefox specific function. We are using text-only clipboard API here.
@@ -3915,13 +3915,13 @@ class Fs {
   // Sends local clipboard's content to the server.
   // Returns the result of the operation. On failure, it additionally raises an error session event.
   async ffSendClipboardData() {
-    this.ClipboardApiSupported !== W.TextOnly && X("The browser does not support clipboard read.");
+    this.ClipboardApiSupported !== V.TextOnly && W("The browser does not support clipboard read.");
     const e = await navigator.clipboard.readText().catch((r) => {
-      X("Failed to read from the clipboard: " + r);
+      W("Failed to read from the clipboard: " + r);
     });
-    e.length == 0 && X("The clipboard has no data.");
+    e.length == 0 && W("The clipboard has no data.");
     const i = new this.module.ClipboardData();
-    i.addText("text/plain", e), i.isEmpty() || (this.lastSentClipboardData = i, this.offeredLatest = true, await this.remoteDesktopService.onClipboardChanged(i));
+    i.addText("text/plain", e), (this.paused || this.disposed) && W("The clipboard is paused or disposed."), i.isEmpty() || (this.lastSentClipboardData = i, this.offeredLatest = true, await this.remoteDesktopService.onClipboardChanged(i));
   }
 }
 function tr(t = window) {
@@ -3949,15 +3949,15 @@ function ir(t, e) {
   let i = ut(e, "scale"), r = ut(e, "verbose"), s = ut(e, "flexcenter"), o = ut(e, "module"), d = Ft(false), p = () => {
     var _a2, _b2;
     return L.info(`
-            capturingInputs: ${document.activeElement === h}
+            capturingInputs: ${document.activeElement === f}
             current active element: ${document.activeElement}
         `), ((_b2 = (_a2 = document.activeElement) == null ? void 0 : _a2.shadowRoot) == null ? void 0 : _b2.firstElementChild) === c;
-  }, c, b, h, w = Ft(""), n = Ft(""), l = new As(o()), a = new Fs(l, o()), u = new Os(l, a), f = we.Fit, $ = false, A;
+  }, c, b, f, w = Ft(""), n = Ft(""), l = new As(o()), a = new Fs(l, o()), u = new Os(l, a), h = we.Fit, $ = false, A;
   function m(v) {
     p() && Ve(v);
   }
   function _() {
-    he(), it(), window.addEventListener("keydown", m, false), window.addEventListener("keyup", m, false), window.addEventListener("focus", pe), window.addEventListener("focusin", pe), window.addEventListener("blur", be), document.addEventListener("visibilitychange", He);
+    fe(), it(), window.addEventListener("keydown", m, false), window.addEventListener("keyup", m, false), window.addEventListener("focus", pe), window.addEventListener("focusin", pe), window.addEventListener("blur", be), document.addEventListener("visibilitychange", He);
   }
   function O() {
     s() === "true" && (c.style.flexGrow = "", c.style.display = "", c.style.justifyContent = "", c.style.alignItems = "");
@@ -3967,17 +3967,17 @@ function ir(t, e) {
   }
   function ee(v, T, M) {
     let R = `height: ${v}; width: ${T}`;
-    R = `${R}; max-height: ${v}; max-width: ${T}; min-height: ${v}; min-width: ${T}`, q(w, De(R));
+    R = `${R}; max-height: ${v}; max-width: ${T}; min-height: ${v}; min-width: ${T}`, H(w, De(R));
   }
   function ae(v, T, M) {
-    q(n, `height: ${v}; width: ${T}; overflow: ${M}`);
+    H(n, `height: ${v}; width: ${T}; overflow: ${M}`);
   }
   const Ee = (v) => {
     te(i());
   };
-  function he() {
+  function fe() {
     l.resizeObservable.subscribe((v) => {
-      L.info(`Resize canvas to: ${v.desktopSize.width}x${v.desktopSize.height}`), h.width = v.desktopSize.width, h.height = v.desktopSize.height, te(i());
+      L.info(`Resize canvas to: ${v.desktopSize.width}x${v.desktopSize.height}`), f.width = v.desktopSize.width, f.height = v.desktopSize.height, te(i());
     });
   }
   function it() {
@@ -3986,50 +3986,50 @@ function ir(t, e) {
     }), l.dynamicResizeObservable.subscribe((v) => {
       L.info(`Dynamic resize!, width: ${v.width}, height: ${v.height}`), ee(v.height.toString() + "px", v.width.toString() + "px");
     }), l.changeVisibilityObservable.subscribe((v) => {
-      q(d, De(v)), v && (ae("100%", "100%", "hidden"), clearTimeout(A), A = setTimeout(() => te(i()), 150));
+      H(d, De(v)), v && (ae("100%", "100%", "hidden"), clearTimeout(A), A = setTimeout(() => te(i()), 150));
     });
   }
   function rt() {
-    te(f);
+    te(h);
   }
   function te(v) {
     if (!$ && (O(), U(d)))
       switch (v) {
         case "fit":
         case we.Fit:
-          L.info("Size to fit"), f = we.Fit, i("fit"), At();
+          L.info("Size to fit"), h = we.Fit, i("fit"), At();
           break;
         case "full":
         case we.Full:
-          L.info("Size to full"), f = we.Full, Re(), i("full");
+          L.info("Size to full"), h = we.Full, Re(), i("full");
           break;
         case "real":
         case we.Real:
-          L.info("Size to real"), f = we.Real, $e(), i("real");
+          L.info("Size to real"), h = we.Real, $e(), i("real");
           break;
       }
   }
   function Re() {
     const v = qe(), T = v.x, M = v.y;
-    let R = h.width, z = h.height;
-    const P = Math.min(T / h.width, M / h.height);
+    let R = f.width, z = f.height;
+    const P = Math.min(T / f.width, M / f.height);
     R = R * P, z = z * P, ae(`${M}px`, `${T}px`, "hidden"), R = R > 0 ? R : 0, z = z > 0 ? z : 0, ee(`${z}px`, `${R}px`);
   }
   function At(v = false) {
     const T = Le(), M = b.getBoundingClientRect(), R = T.x - M.x, z = T.y - M.y;
-    let P = h.width, ve = h.height;
-    if (!v || R < h.width || z < h.height) {
-      const Pe = Math.min(R / h.width, z / h.height);
+    let P = f.width, ve = f.height;
+    if (!v || R < f.width || z < f.height) {
+      const Pe = Math.min(R / f.width, z / f.height);
       P = P * Pe, ve = ve * Pe;
     }
     P = P > 0 ? P : 0, ve = ve > 0 ? ve : 0, ae("initial", "initial", "hidden"), ee(`${ve}px`, `${P}px`), F();
   }
   function $e() {
     const v = Le(), T = b.getBoundingClientRect(), M = v.x - T.x, R = v.y - T.y;
-    M < h.width || R < h.height ? ae(`${Math.min(R, h.height)}px`, `${Math.min(M, h.width)}px`, "auto") : ae("initial", "initial", "initial"), ee(`${h.height}px`, `${h.width}px`), F();
+    M < f.width || R < f.height ? ae(`${Math.min(R, f.height)}px`, `${Math.min(M, f.width)}px`, "auto") : ae("initial", "initial", "initial"), ee(`${f.height}px`, `${f.width}px`), F();
   }
   function Ae(v) {
-    const T = h == null ? void 0 : h.getBoundingClientRect(), M = (h == null ? void 0 : h.width) / T.width, R = (h == null ? void 0 : h.height) / T.height, z = {
+    const T = f == null ? void 0 : f.getBoundingClientRect(), M = (f == null ? void 0 : f.width) / T.width, R = (f == null ? void 0 : f.height) / T.height, z = {
       x: Math.round((v.clientX - T.left) * M),
       y: Math.round((v.clientY - T.top) * R)
     };
@@ -4042,7 +4042,7 @@ function ir(t, e) {
     l.mouseWheel(v);
   }
   function Ot(v) {
-    h.focus({ preventScroll: true }), l.mouseIn(v);
+    f.focus({ preventScroll: true }), l.mouseIn(v);
   }
   function Oe(v) {
     l.mouseOut(v);
@@ -4057,7 +4057,7 @@ function ir(t, e) {
     return Ms(e.$$host);
   }
   async function nt() {
-    L.info("Start canvas initialization..."), h.width = 800, h.height = 600, l.setCanvas(h), l.setOnCanvasResized(rt), _();
+    L.info("Start canvas initialization..."), f.width = 800, f.height = 600, l.setCanvas(f), l.setOnCanvasResized(rt), _();
   }
   function ke() {
     let v = {
@@ -4092,17 +4092,17 @@ function ir(t, e) {
   });
   var ie = Bs(), le = Pt(ie);
   let Fe;
-  var Me = Pt(le), j = Pt(Me);
-  return j.__mousemove = Ae, j.__mousedown = [Ps, We], j.__mouseup = [Ns, We], j.__contextmenu = [Us], Nt(j, (v) => h = v, () => h), Mt(Me), Mt(le), Nt(le, (v) => b = v, () => b), Mt(ie), Nt(ie, (v) => c = v, () => c), Yr(() => {
-    Fe = fs(le, 1, `screen-wrapper scale-${i() ?? ""}`, "svelte-1103xra", Fe, {
+  var Me = Pt(le), G = Pt(Me);
+  return G.__mousemove = Ae, G.__mousedown = [Ps, We], G.__mouseup = [Ns, We], G.__contextmenu = [Us], Nt(G, (v) => f = v, () => f), Mt(Me), Mt(le), Nt(le, (v) => b = v, () => b), Mt(ie), Nt(ie, (v) => c = v, () => c), Yr(() => {
+    Fe = hs(le, 1, `screen-wrapper scale-${i() ?? ""}`, "svelte-1103xra", Fe, {
       hidden: !U(d),
       "capturing-inputs": p
     }), ui(le, "style", U(n)), ui(Me, "style", U(w));
-  }), lt("mouseleave", j, (v) => {
+  }), lt("mouseleave", G, (v) => {
     Oe(v);
-  }), lt("mouseenter", j, (v) => {
+  }), lt("mouseenter", G, (v) => {
     Ot(v);
-  }), lt("wheel", j, st), lt("selectstart", j, (v) => {
+  }), lt("wheel", G, st), lt("selectstart", G, (v) => {
     v.preventDefault();
   }), Gi(t, ie), qi({
     get scale() {
