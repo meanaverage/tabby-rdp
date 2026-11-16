@@ -148,7 +148,10 @@ int main(int argc, char** argv) {
     BOOL announced = argc < 6 || !strcmp(argv[5], "announced");
     if (argc == 6 && strcmp(argv[5], "announced") && strcmp(argv[5], "unannounced")) return 2;
     BOOLSET(BitmapCacheEnabled, announced);
-    if (!freerdp_settings_set_default_order_support(s)) return 8;
+    BYTE* orders = freerdp_settings_get_pointer_writable(s, FreeRDP_OrderSupport);
+    if (!orders) return 8;
+    orders[NEG_MEMBLT_INDEX] = orders[NEG_MEM3BLT_INDEX] = announced;
+    orders[NEG_MEMBLT_V2_INDEX] = orders[NEG_MEM3BLT_V2_INDEX] = announced;
     printf("{\"event\":\"capabilities\",\"announced\":%s}\n", announced ? "true" : "false");
     peer->Activate = activate;
     peer->PostConnect = post_connect;

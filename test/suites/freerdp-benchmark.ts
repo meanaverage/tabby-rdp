@@ -93,7 +93,7 @@ await suite('freerdp-benchmark', async t => {
             await t.ev('H.benchKey(0x42)'); await t.sleep(600)
             const image = await t.ev<string>('return H.bench.view.canvas.toDataURL()')
             fs.writeFileSync(path.join(path.dirname(output), `${runtime}-${compatibility}-${pair}.png`), Buffer.from(image.split(',')[1], 'base64'))
-            const result = { runtime, compatibility, pair, startedAt: new Date().toISOString(), connected, motion, idle, latencyMs: latency }
+            const result = { runtime, compatibility, pair, finishedAt: new Date().toISOString(), connected, motion, idle, latencyMs: latency }
             results.push(result); save()
             t.time(`${label}: ${(motion.displayedFrames / (motion.milliseconds / 1000)).toFixed(1)} displayed workload frames/s`, 0)
             t.check(`${label}: input changes the latency patch`, latency.length === 12 && latency.every(ms => ms >= 0), latency)

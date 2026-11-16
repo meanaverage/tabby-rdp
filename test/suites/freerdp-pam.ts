@@ -22,7 +22,7 @@ await suite('freerdp-pam', async t => {
     `)
     const results: any[] = []
     for (const glyphCache of [false, true]) for (const bitmapCache of [false, true]) for (const relaxed of [false, true]) {
-        // All alpha variants with bitmap caching; a representative unsupported-cache negative case without it.
+        // All alpha variants for announced bitmap caching; transparent tiles cover unnegotiated cases.
         for (const announced of [true, false]) for (const mode of bitmapCache && announced ? ['opaque', 'transparent', 'partial', 'no-alpha', 'black'] : ['transparent']) {
             for (const runtime of ['native', 'wasm']) {
                 const peer = await request('/case', { mode, announced })
@@ -46,6 +46,7 @@ await suite('freerdp-pam', async t => {
                 `)
                 const events = await request('/events')
                 const label = `${runtime} ${mode}, announced=${announced} glyph=${glyphCache} bitmap=${bitmapCache} relaxed=${relaxed}`
+                t.check(label + ': peer announces the requested capabilities', events.events.some((e: any) => e.event === 'capabilities' && e.announced === announced))
                 const identity = events.events.some((e: any) => e.event === 'identity' && e.bracketedUsernamePreserved)
                 t.check(label + ': TLS-only consent and intact PAM username', result.nla > 0 && result.cert > 0 && identity, { ...result, identity })
                 if (bitmapCache && (announced || relaxed)) {
@@ -64,7 +65,7 @@ await suite('freerdp-pam', async t => {
     }
     for (let i = 0; i < results.length; i += 2) {
         const [native, wasm] = results.slice(i, i + 2)
-        t.check(`native/WASM parity: ${native.mode}, glyph=${native.glyphCache} bitmap=${native.bitmapCache} relaxed=${native.relaxed}`,
+        t.check(`native/WASM parity: ${native.mode}, announced=${native.announced} glyph=${native.glyphCache} bitmap=${native.bitmapCache} relaxed=${native.relaxed}`,
             native.result.ended === wasm.result.ended && JSON.stringify(native.result.pixels) === JSON.stringify(wasm.result.pixels))
     }
 }, { needsHost: false })

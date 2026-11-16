@@ -14,9 +14,10 @@ to 8766. The test certificate and key are synthetic; never pass real credentials
 
 On the client, set `TRD_PAM_CONTROLLER`, an independently verified `TRD_PAM_FINGERPRINT`, and optionally
 `TRD_PAM_OUTPUT`, then run `node --import tsx test/run.ts freerdp-pam`. The suite exercises both runtimes through
-Tabby's actual canvas, all combinations of glyph caching/bitmap caching/relaxed checks, and the alpha variants
-when bitmap caching is enabled. Bitmap caching disabled with strict checks is a negative case: those unannounced
-orders must be refused. Native/WASM results are compared case by case.
+Tabby's actual canvas, all combinations of glyph caching/bitmap caching/relaxed checks, and announced versus deliberately unannounced
+drawing orders. All alpha variants run with announced bitmap caching; the other cases use a transparent tile.
+Strict checks must reject orders that were not negotiated. Glyph caching is varied as a setting; this peer does
+not generate glyph-cache text orders. Native/WASM results are compared case by case.
 
 This tests protocol and renderer behavior related to PAM compatibility. It does not emulate Senhasegura's login
 widgets, MFA, appliance policies or handoff to a target session, and cannot certify those flows.
