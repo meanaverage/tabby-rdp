@@ -5,6 +5,7 @@ import { createServer, Socket } from 'net'
 import { basename, dirname, join } from 'path'
 import { Duplex, Readable, Writable } from 'stream'
 import { rootCertificates } from 'tls'
+import { setTimeout as nodeSetTimeout, clearTimeout as nodeClearTimeout } from 'timers'
 import { ByteQueue } from './byteQueue'
 import { certificateAuthorities, certificateDetails, CertificateDetails } from './authorities'
 import { ClipboardWays } from './clipboard'
@@ -388,9 +389,9 @@ export class FreeRDPProcess {
         this.child?.kill()
         const child = this.child
         if (child) {
-            const timer = setTimeout(() => { if (child.exitCode === null && child.signalCode === null) { child.kill('SIGKILL') } }, 1000)
+            const timer = nodeSetTimeout(() => { if (child.exitCode === null && child.signalCode === null) { child.kill('SIGKILL') } }, 1000)
             timer.unref()
-            child.once('close', () => clearTimeout(timer))
+            child.once('close', () => nodeClearTimeout(timer))
         }
     }
 }

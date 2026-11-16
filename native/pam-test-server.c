@@ -20,9 +20,6 @@
 #include <sys/socket.h>
 #include <unistd.h>
 #endif
-#ifndef _WIN32
-typedef int SOCKET;
-#endif
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -126,7 +123,7 @@ int main(int argc, char** argv) {
     socklen_t size = sizeof(addr);
 #endif
     if (getsockname(server, (struct sockaddr*)&addr, &size)) return 4;
-    printf("{\"event\":\"listening\",\"host\":\"127.0.0.1\",\"port\":%u}\n", ntohs(addr.sin_port));
+    printf("{\"event\":\"listening\",\"host\":\"%s\",\"port\":%u}\n", bindAddress, ntohs(addr.sin_port));
     SOCKET fd = accept(server, NULL, NULL);
     close(server);
     if (fd == (SOCKET)-1) return 5;

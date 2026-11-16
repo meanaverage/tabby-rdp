@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createRequire } from 'node:module'
 import { connect, createServer } from 'node:net'
-import { once } from 'node:events'
+import { once, EventEmitter } from 'node:events'
 import { existsSync, readFileSync, readdirSync, lstatSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
@@ -483,3 +483,23 @@ for (const version of [0, 2, 3, 4, 5, 6, -1, 'overflow', 'missing'] as const) {
         if (!allowed) assert.equal(reply.length, 0, 'reject before any CredSSP authentication response')
     })
 }
+
+
+test('shutdown uses Node timers when the Electron renderer supplies numeric browser timers', () => {
+    const client = new FreeRDPProcess('native')
+    client.started.catch(() => {})
+    let killed = 0, destroyed = false, browserTimerUsed = false
+    const child = Object.assign(new EventEmitter(), { exitCode: null, signalCode: null,
+        stdin: { destroy () { destroyed = true } }, kill () { killed++; return true } })
+    client.child = child
+    const original = globalThis.setTimeout
+    try {
+        globalThis.setTimeout = (() => { browserTimerUsed = true; return 42 }) as unknown as typeof setTimeout
+        assert.doesNotThrow(() => client.shutdown())
+        child.emit('close')
+        client.shutdown()
+    } finally { globalThis.setTimeout = original }
+    assert.equal(browserTimerUsed, false)
+    assert.equal(destroyed, true)
+    assert.equal(killed, 1)
+})
