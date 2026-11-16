@@ -21,8 +21,8 @@
   "buildSources": {
     "native/main.c": "cc1c9fb0ccb300a63c934d4bfa0680073eb936c1ed7165cd83816ac5dd4ee015",
     "native/wasm-io.h": "5986bb4f3b7d0e76a4cf0d1886310db374a2ec12eaf96e8f1db815c1b8aa1ff1",
-    "native/options.cmake": "6879d34b4d55166395f31e688ff82fd217ec38942a3007d60c7ac25b90301ab9",
-    "native/CMakeLists.txt": "b3273da04795ad3e139d7b06040eb942c4b037a7de839c34f6715027f0e15021",
+    "native/options.cmake": "d9398d2ce305abcc69f0f9faa9146ffbda2dc714324cec2a5c85edbcc43957da",
+    "native/CMakeLists.txt": "c6fe4154dc92ad32b54d178451505d23f6d5c98ca5dffda17579f17ec7d55aeb",
     "native/wasm-source.json": "ffa07ddd5aeb704c7979214aa8bfe78597ee9b659f6029a7680282ea1b2eb78a",
     "scripts/build-freerdp-wasm.mjs": "516b4ea06466f04a95f0b120d8c7fe32d6b302cdc67adb867da1851cb5c146b1"
   },
