@@ -163,18 +163,22 @@ await suite('freerdp', async t => {
         await t.clickDesktop('H.nativePane')
         await t.ev(`const w = require('@electron/remote').getCurrentWindow(); w.show(); w.focus(); H.canvasElement(H.nativePane).focus()`)
         await t.escape()
-        await t.clipboard('notepad'); await t.sleep(500)
-        // Run opens Notepad directly; clicking the centre of a restored desktop could focus Explorer instead.
+        // Set up Notepad through raw input so window activation and clipboard ownership are not part of
+        // launching the fixture. The checks below exercise the UI keyboard and clipboard paths themselves.
         await t.ev(`
-            if (!H.session(H.nativePane)?.ui?.native) throw new Error(JSON.stringify({ state: H.session(H.nativePane)?.state, log: H.session(H.nativePane)?.log.slice(-15) }))
-            const n = H.session(H.nativePane).ui.native
-            const send = (scan, up = false) => { const b = Buffer.alloc(12); b.writeUInt32BE(up ? 0x8000 : 0); b.writeUInt32BE(scan, 4); n.send('K', b) }
-            send(0x15b); send(0x13); send(0x13, true); send(0x15b, true)
+            H.fixtureKey = (scan, up = false, unicode = 0) => {
+                const b = Buffer.alloc(12); b.writeUInt32BE(up ? 0x8000 : 0); b.writeUInt32BE(scan, 4); b.writeUInt32BE(unicode, 8)
+                H.session(H.nativePane).ui.native.send('K', b)
+            }
+            H.fixtureKey(0x15b); H.fixtureKey(0x13); H.fixtureKey(0x13, true); H.fixtureKey(0x15b, true)
         `)
         await t.sleep(1200)
-        await t.press('a', ['Control'])
-        await t.press('v', ['Control']); await t.sleep(500)
-        await t.enter()
+        await t.ev(`
+            H.fixtureKey(0x1d); H.fixtureKey(0x1e); H.fixtureKey(0x1e, true); H.fixtureKey(0x1d, true)
+            for (const ch of 'notepad') { H.fixtureKey(0, false, ch.charCodeAt(0)); H.fixtureKey(0, true, ch.charCodeAt(0)) }
+        `)
+        await t.sleep(400)
+        await t.ev('H.fixtureKey(0x1c); H.fixtureKey(0x1c, true)')
         await t.sleep(3000)
         await t.ev(`const w = require('@electron/remote').getCurrentWindow(); w.show(); w.focus(); H.canvasElement(H.nativePane).focus()`)
         await t.press('n', ['Control'])
