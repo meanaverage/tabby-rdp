@@ -3,7 +3,7 @@ export type RDPClient = 'ironrdp' | 'freerdp'
 
 export const RDP_CLIENT_LABELS: Record<RDPClient, string> = {
     ironrdp: 'IronRDP',
-    freerdp: 'FreeRDP WebAssembly (experimental)',
+    freerdp: 'FreeRDP',
 }
 
 /** An absent or invalid override follows the global setting. Existing installations keep IronRDP. */

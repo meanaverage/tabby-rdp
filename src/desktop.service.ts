@@ -4382,7 +4382,7 @@ export class RemoteDesktopService {
         const bitmapCache = spec.bitmapCache ?? settings.bitmapCache
         session.log.push(`FreeRDP bitmap caching: ${bitmapCache ? 'enabled (experimental)' : 'disabled'}`)
         session.log.push(`FreeRDP drawing order checks: ${relaxOrderChecks ? 'relaxed' : 'strict'}`)
-        session.log.push('FreeRDP preview: pictures on the clipboard, audio, microphone and shared folders are unavailable')
+        session.log.push('FreeRDP: pictures on the clipboard, audio, microphone and shared folders are unavailable')
         // Text through the clipboard channel, the ways the settings let it go as they are now, for this connection.
         session.clipboard = settings.clipboard
         session.log.push(freeRDPClipboardLog(session.clipboard))

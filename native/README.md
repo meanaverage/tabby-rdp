@@ -1,4 +1,4 @@
-# FreeRDP preview
+# FreeRDP
 
 Settings › Remote Desktop › Settings › **RDP client** selects the default client. RDP profiles and the add/edit
 desktop form have an override. An empty override follows Settings. IronRDP remains the default. Existing FreeRDP selections use the bundled WebAssembly build on reconnect; `freerdp-wasm` is accepted as an alias for `freerdp`.
@@ -17,11 +17,11 @@ Each RDP profile or configured desktop can follow Settings, enable any of these 
 Changes apply on the next FreeRDP connection. IronRDP uses its own graphics capabilities.
 
 An RDP profile tab's ellipsis/right-click menu also has **RDP client**: **Follow default**, **IronRDP**, or
-**FreeRDP WebAssembly (experimental)**. The checkmark shows the saved next-connection choice; **Current session** names the
+**FreeRDP**. The checkmark shows the saved next-connection choice; **Current session** names the
 client already running. Changing the choice offers **Reconnect to apply** or **Keep current session**, without
 disconnecting automatically. A saved profile keeps its override; an unsaved quick connection keeps it in that tab.
 
-The initial FreeRDP preview renders inside the Tabby tab and supports keyboard, mouse, Unicode input, view only,
+FreeRDP renders inside the Tabby tab and supports keyboard, mouse, Unicode input, view only,
 screenshots, scaling, reconnect and the display-control channel. It uses the plugin's existing direct, SSH and RD
 Gateway transports, credential store and certificate/NLA prompts. Each FreeRDP attempt has its own Electron utility process.
 
@@ -29,8 +29,7 @@ FreeRDP shares clipboard **text and files/folders** the ways the clipboard setti
 off, which leaves the clipboard channel out); in view only, no clipboard goes either way. It does **not** yet implement pictures on the clipboard, audio
 playback/capture, shared folders, or Hyper-V VMConnect.
 The supplied FreeRDP 3.33.1 build uses bitmap decoding (and the graphics pipeline for GNOME), with optional H.264
-codecs disabled. Authentication uses NTLM on every platform; Windows SSPI, Kerberos and domain-policy behavior
-are not qualified. Hyper-V consoles that inherit the global client setting continue to use IronRDP.
+codecs disabled. Authentication uses NTLM on every platform. Windows SSPI and Kerberos are not provided; the earlier native Windows client could use SSPI. Domain-policy behavior remains unqualified. Hyper-V consoles that inherit the global client setting continue to use IronRDP.
 
 This is FreeRDP's core compiled to WebAssembly with Tabby's adapter and canvas. It is not FreeRDP's separate SDL/browser
 client. The bracketed PAM username handling, TLS-only consent, caching options and opaque desktop pixels are shared

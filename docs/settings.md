@@ -33,7 +33,7 @@ The Settings tab groups everyday controls first, followed by SSH integration, Fr
 
 | Setting | Default | Behavior |
 |---|---|---|
-| RDP client (`client`) | IronRDP (`ironrdp`) | Experimental FreeRDP (`freerdp`) uses bundled WebAssembly. The earlier `freerdp-wasm` preview name is accepted as an alias. Profiles and desktops can override the default; changes apply on reconnect. No separate FreeRDP helper package is needed. [Capabilities](../native/README.md). |
+| RDP client (`client`) | IronRDP (`ironrdp`) | FreeRDP (`freerdp`) uses bundled WebAssembly. The earlier `freerdp-wasm` name is accepted as an alias. Profiles and desktops can override the default; changes apply on reconnect. No separate FreeRDP helper package is needed. [Capabilities](../native/README.md). |
 
 ### FreeRDP WebAssembly settings coverage
 
@@ -49,8 +49,7 @@ The Settings tab groups everyday controls first, followed by SSH integration, Fr
 | Diagnostic log | Plugin connection messages are available. IronRDP protocol logging and its PDU trace detail do not become FreeRDP protocol logs. |
 
 Hyper-V VMConnect requires IronRDP. The bundled FreeRDP build uses NTLM and does not provide Windows SSPI or
-Kerberos. See [platform and live-test coverage](compatibility.md#freerdp-client-preview). The experimental client
-therefore does not yet provide full feature parity with IronRDP.
+Kerberos. See [platform and live-test coverage](compatibility.md#freerdp-client). Choose IronRDP when a connection needs its additional channels or authentication support.
 
 ### Display
 

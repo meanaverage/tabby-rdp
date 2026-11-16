@@ -2,7 +2,7 @@
 
 # Clipboard, files and desktop controls
 
-The default IronRDP client supports the sharing features below. The experimental FreeRDP WebAssembly client supports clipboard
+The default IronRDP client supports the sharing features below. The FreeRDP client supports clipboard
 text and file/folder transfers, in the directions the clipboard setting allows (none in view only). Pictures on the
 clipboard, shared drives and audio still need IronRDP. See [client capabilities](../native/README.md).
 
