@@ -1,8 +1,9 @@
 # IronRDP, patched
 
 tabby-rdp's remote desktop is [IronRDP](https://github.com/Devolutions/IronRDP)'s web client (Rust compiled to
-WebAssembly, plus its `iron-remote-desktop` web component), bundled in `vendor/`. Released IronRDP connects to
-Windows, but not to GNOME Remote Desktop, and its web client has no sound or microphone. The patches here close those gaps. The
+WebAssembly, plus its `iron-remote-desktop` web component), bundled in `vendor/`. The pinned base predates the
+GNOME Remote Desktop, sound and microphone support integrated here. The patches supply those capabilities and
+carry reviewed upstream corrections while 0.6.x keeps that base. The
 fixes among them are meant for upstream, and are submitted there one by one.
 
 `vendor/` is built from IronRDP at [`BASE_COMMIT`](BASE_COMMIT) with the patches in [`patches/`](patches) applied in
