@@ -23,9 +23,9 @@ await suite('freerdp-pam', async t => {
     const results: any[] = []
     for (const glyphCache of [false, true]) for (const bitmapCache of [false, true]) for (const relaxed of [false, true]) {
         // All alpha variants with bitmap caching; a representative unsupported-cache negative case without it.
-        for (const mode of bitmapCache ? ['opaque', 'transparent', 'partial', 'no-alpha', 'black'] : ['transparent']) {
+        for (const announced of [true, false]) for (const mode of bitmapCache && announced ? ['opaque', 'transparent', 'partial', 'no-alpha', 'black'] : ['transparent']) {
             for (const runtime of ['native', 'wasm']) {
-                const peer = await request('/case', { mode })
+                const peer = await request('/case', { mode, announced })
                 if (peer.fingerprint !== fingerprint) throw new Error('Fixture fingerprint changed')
                 const result = await t.ev<any>(`
                     const client=H.pamClient=new H.pamModule.FreeRDPProcess(${JSON.stringify(runtime)})
@@ -45,16 +45,16 @@ await suite('freerdp-pam', async t => {
                     view.shutdown();client.shutdown();return result
                 `)
                 const events = await request('/events')
-                const label = `${runtime} ${mode}, glyph=${glyphCache} bitmap=${bitmapCache} relaxed=${relaxed}`
+                const label = `${runtime} ${mode}, announced=${announced} glyph=${glyphCache} bitmap=${bitmapCache} relaxed=${relaxed}`
                 const identity = events.events.some((e: any) => e.event === 'identity' && e.bracketedUsernamePreserved)
                 t.check(label + ': TLS-only consent and intact PAM username', result.nla > 0 && result.cert > 0 && identity, { ...result, identity })
-                if (bitmapCache) {
+                if (bitmapCache && (announced || relaxed)) {
                     const expected = mode === 'black' ? Array(4).fill([0, 0, 0, 255]) : [[224, 64, 224, 255], [32, 192, 32, 255], [96, 224, 96, 255], [192, 32, 192, 255]]
                     t.check(label + ': cached colors survive and connection stays open', !result.ended && JSON.stringify(result.pixels) === JSON.stringify(expected), result)
                 } else if (!relaxed) {
-                    t.check(label + ': strict mode rejects unannounced bitmap caching', result.ended, result)
+                    t.check(label + ': strict mode rejects unnegotiated drawing orders', result.ended, result)
                 }
-                results.push({ runtime, mode, glyphCache, bitmapCache, relaxed, result, identity })
+                results.push({ runtime, mode, announced, glyphCache, bitmapCache, relaxed, result, identity })
                 if (process.env.TRD_PAM_OUTPUT) {
                     fs.mkdirSync(path.dirname(process.env.TRD_PAM_OUTPUT), { recursive: true })
                     fs.writeFileSync(process.env.TRD_PAM_OUTPUT, JSON.stringify(results, null, 2))

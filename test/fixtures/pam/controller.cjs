@@ -22,11 +22,12 @@ const server = http.createServer(async (request, response) => {
     if (request.method !== 'POST' || request.url !== '/case') { finish(404, {}); return }
     let body = ''
     for await (const chunk of request) { body += chunk; if (body.length > 256) { finish(413, {}); return } }
-    let mode
-    try { mode = JSON.parse(body).mode } catch { finish(400, {}); return }
+    let mode, announced
+    try { ({ mode, announced } = JSON.parse(body)) } catch { finish(400, {}); return }
+    if (typeof announced !== 'boolean') { finish(400, {}); return }
     if (!['opaque', 'transparent', 'partial', 'no-alpha', 'black'].includes(mode)) { finish(400, {}); return }
     child?.kill(); events = []; sequence++
-    const running = child = spawn(process.env.TRD_PAM_SERVER, [cert, key, mode, bind], { windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] })
+    const running = child = spawn(process.env.TRD_PAM_SERVER, [cert, key, mode, bind, announced ? 'announced' : 'unannounced'], { windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] })
     let text = '', answered = false
     const timer = setTimeout(() => { if (!answered) { answered = true; finish(504, { error: 'Peer startup timed out' }); running.kill() } }, 8000)
     running.stdout.on('data', chunk => {

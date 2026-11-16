@@ -102,7 +102,7 @@ static BOOL bitmap_paint(freerdp_peer* peer, const char* mode) {
 }
 
 int main(int argc, char** argv) {
-    if (argc != 4 && argc != 5) { fprintf(stderr, "usage: redirect-server cert.pem key.pem opaque|transparent|partial|no-alpha|black [bind-address]\n"); return 2; }
+    if (argc < 4 || argc > 6) { fprintf(stderr, "usage: redirect-server cert.pem key.pem opaque|transparent|partial|no-alpha|black [bind-address] [announced|unannounced]\n"); return 2; }
     const char* mode = argv[3];
     if (strcmp(mode,"opaque") && strcmp(mode,"transparent") && strcmp(mode,"no-alpha") && strcmp(mode,"black") && strcmp(mode,"partial")) return 2;
     setbuf(stdout, NULL);
@@ -114,7 +114,7 @@ int main(int argc, char** argv) {
     if (!winpr_InitializeSSL(WINPR_SSL_INIT_DEFAULT)) return 3;
     SOCKET server = socket(AF_INET, SOCK_STREAM, 0);
     struct sockaddr_in addr = { .sin_family = AF_INET, .sin_port = 0 };
-    const char* bindAddress = argc == 5 ? argv[4] : "127.0.0.1";
+    const char* bindAddress = argc >= 5 ? argv[4] : "127.0.0.1";
     if (inet_pton(AF_INET, bindAddress, &addr.sin_addr) != 1) return 4;
     if (bind(server, (struct sockaddr*)&addr, sizeof(addr)) || listen(server, 1)) return 4;
     #ifdef _WIN32
@@ -144,6 +144,12 @@ int main(int argc, char** argv) {
     BOOLSET(RemoteFxCodec, FALSE); BOOLSET(NSCodec, FALSE); BOOLSET(SupportGraphicsPipeline, FALSE);
     BOOLSET(SupportDisplayControl, FALSE); BOOLSET(NetworkAutoDetect, FALSE);
     NUM(ColorDepth, 32); NUM(DesktopWidth, 800); NUM(DesktopHeight, 600);
+    /* A compliant peer announces MemBlt. The negative fixture deliberately omits it. */
+    BOOL announced = argc < 6 || !strcmp(argv[5], "announced");
+    if (argc == 6 && strcmp(argv[5], "announced") && strcmp(argv[5], "unannounced")) return 2;
+    BOOLSET(BitmapCacheEnabled, announced);
+    if (!freerdp_settings_set_default_order_support(s)) return 8;
+    printf("{\"event\":\"capabilities\",\"announced\":%s}\n", announced ? "true" : "false");
     peer->Activate = activate;
     peer->PostConnect = post_connect;
     if (!peer->Initialize(peer)) return 9;
