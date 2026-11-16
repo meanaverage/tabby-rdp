@@ -3097,6 +3097,11 @@ export class RemoteDesktopService {
         this.changed$.next()
     }
 
+    /** Whether this connection's client supports microphone redirection. */
+    canUseMicrophone (pane: DesktopPane): boolean {
+        return this.sessions.get(pane)?.client === 'ironrdp'
+    }
+
     /** Whether the microphone was stopped for the pane's desktop (see stopMicrophone). */
     microphoneStoppedFor (pane: DesktopPane): boolean {
         const session = this.sessions.get(pane)

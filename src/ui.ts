@@ -182,7 +182,7 @@ export function desktopActions (desktop: RemoteDesktopService, keyboard: Desktop
         },
         // With the setting on, every desktop gets the microphone when it asks for it; this one can be left out,
         // reconnects included, and taken back in (see RemoteDesktopService.stopMicrophone).
-        ...desktop.settings().microphone ? [{
+        ...desktop.settings().microphone && desktop.canUseMicrophone(pane) ? [{
             type: 'checkbox' as const,
             label: 'Send the microphone (when this desktop asks for it)',
             checked: !microphoneStopped,

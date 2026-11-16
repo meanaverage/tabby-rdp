@@ -108,7 +108,7 @@ export function numbers (...values: number[]): Buffer {
     return out
 }
 
-/** The native helper's IPC 7 start message: six strings followed by nine uint32 fields, the last the clipboard's ways. */
+/** The native helper's IPC 8 start message: six strings followed by nine uint32 fields, the last the clipboard's ways. */
 export function freeRDPStart (options: Pick<FreeRDPOptions, 'host' | 'username' | 'password' | 'domain' | 'width' | 'height' | 'pipeline' | 'autologon' | 'relaxOrderChecks' | 'glyphCache' | 'bitmapCache' | 'clipboard'>,
     relay: { port: number, token: string }): Buffer {
     const strings = [options.host, options.username, options.password, options.domain, '', relay.token]

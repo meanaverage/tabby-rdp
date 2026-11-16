@@ -73,7 +73,7 @@ test('real JS provider uploads file contents and handles repeat pastes without I
     const upload = provider.uploadFiles([{ file: new Blob(['hello']), name: 'hello.txt', size: 5, lastModified: 0 }])
     assert.equal(sent[0].type, 'o')
     const generation = sent[0].data.readUInt32BE(0)
-    provider.receive('a', Buffer.from([1]))
+    provider.receive('a', Buffer.concat([numbers(generation), Buffer.from([1])]))
     provider.receive('q', numbers(generation, 41, 0, 1, 0, 0, 8))
     assert.equal(sent.at(-1)!.data.readBigUInt64LE(12), 5n)
     provider.receive('q', numbers(generation, 42, 0, 2, 0, 0, 5))
@@ -136,4 +136,31 @@ test('text polling leaves an offered file list intact and resumes for newly copi
     assert.deepEqual(sent, [])
     files = false; clipboard.poll()
     assert.deepEqual(sent, ['after'])
+})
+
+test('file acknowledgements ignore a replaced local offer', async t => {
+    const { provider } = await fixture(t)
+    const answered: boolean[] = []
+    provider.handleFormatListResponse = (ok: boolean) => answered.push(ok)
+    provider.sendInitiateFileCopy(entries)
+    provider.sendInitiateFileCopy(entries)
+    provider.receive('a', Buffer.concat([numbers(1), Buffer.from([0])]))
+    assert.deepEqual(answered, [])
+    provider.receive('a', Buffer.concat([numbers(2), Buffer.from([1])]))
+    assert.deepEqual(answered, [true])
+})
+
+test('replacing an upload fails abandoned requests and permits reusing their streams', async t => {
+    const { provider, sent } = await fixture(t)
+    provider.handleFileContentsRequest = () => {} // A disk read that never answered.
+    provider.sendInitiateFileCopy(entries)
+    provider.receive('q', numbers(1, 12, 0, 2, 0, 0, 5))
+    provider.sendInitiateFileCopy(entries)
+    assert.equal(sent.at(-2)!.type, 's')
+    assert.deepEqual(sent.at(-2)!.data, numbers(1, 12, 1))
+    const before = sent.length
+    provider.receive('q', numbers(2, 12, 0, 2, 0, 0, 5))
+    assert.equal(sent.length, before)
+    provider.sendSubmitFileContents(12, false, Buffer.from('new'))
+    assert.deepEqual(sent.at(-1)!.data, Buffer.concat([numbers(2, 12, 0), Buffer.from('new')]))
 })

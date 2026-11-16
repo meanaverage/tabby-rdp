@@ -93,6 +93,8 @@ export function freeRDPFileProvider (
         sendInitiateFileCopy (files: FileInfo[]): void {
             if (!ways().toRemote) { throw new Error('Clipboard files cannot go to this desktop') }
             const descriptors = encodeFileList(files)
+            for (const [stream, generation] of this.requests) { send('s', numbers(generation, stream, 1)) }
+            this.requests.clear()
             this.localGeneration = (this.localGeneration + 1) >>> 0
             localOffer()
             send('o', Buffer.concat([numbers(this.localGeneration), descriptors]))
@@ -130,8 +132,8 @@ export function freeRDPFileProvider (
                 try { this.handleFilesAvailable(decodeFileList(data.subarray(4)), undefined) } catch (error: any) {
                     this.emit('error', { message: error.message })
                 }
-            } else if (type === 'a' && data.length === 1) {
-                this.handleFormatListResponse(data[0] === 1)
+            } else if (type === 'a' && data.length === 5) {
+                if (data.readUInt32BE(0) === this.localGeneration) { this.handleFormatListResponse(data[4] === 1) }
             } else if (type === 'q' && data.length === 28) {
                 const generation = data.readUInt32BE(0), stream = data.readUInt32BE(4)
                 const position = data.readUInt32BE(16) + data.readUInt32BE(20) * 0x100000000

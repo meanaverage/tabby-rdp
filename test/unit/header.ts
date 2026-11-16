@@ -259,13 +259,14 @@ test('the note that typing goes into all desktops, at the top in the middle too,
 })
 
 /** A connected desktop's actions in the menus, over a stand-in service: the microphone setting `on`, and stopped or not. */
-function actions (on: boolean, stopped: boolean) {
+function actions (on: boolean, stopped: boolean, supportsMicrophone = true) {
     const calls: string[] = []
     const desktop = {
         desktopOf: () => ({ id: '10.0.0.5:3389', name: 'Win', kind: 'windows' }),
         isConnected: () => true,
         isViewOnly: () => false,
         settings: () => ({ microphone: on }),
+        canUseMicrophone: () => supportsMicrophone,
         microphoneStoppedFor: () => stopped,
         stopMicrophone: () => calls.push('stop'),
         resumeMicrophone: () => calls.push('send again'),
@@ -285,6 +286,8 @@ test('a desktop\'s menu turns its microphone off and on again, while the setting
     assert.deepEqual(stopped.calls, ['send again'])
     // With the setting off, no desktop gets it: nothing to switch.
     assert.equal(actions(false, false).item, undefined)
+    // The global setting can be on for IronRDP while this desktop uses FreeRDP.
+    assert.equal(actions(true, false, false).item, undefined)
 })
 
 test('a desktop\'s menu offers paste and typing into all as the desktops showing count, and Type into all while it is on', async () => {

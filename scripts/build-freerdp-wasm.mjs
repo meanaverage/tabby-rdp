@@ -10,7 +10,8 @@ const freerdp = JSON.parse(readFileSync(join(root, 'native/freerdp-source.json')
 const work = join(root, '.qa/freerdp-wasm'), prefix = join(work, 'install')
 const emsdk = resolve(process.env.EMSDK || join(root, '.qa/emsdk'))
 const emcmake = join(emsdk, 'upstream/emscripten/emcmake')
-const run = (command, args, options = {}) => execFileSync(command, args, { cwd: root, stdio: 'inherit', ...options })
+const run = (command, args, options = {}) => execFileSync(command, args, { cwd: root, stdio: 'inherit',
+    env: { ...process.env, SOURCE_DATE_EPOCH: '0' }, ...options })
 const hash = file => createHash('sha256').update(readFileSync(file)).digest('hex')
 const version = execFileSync(join(emsdk, 'upstream/emscripten/emcc'), ['--version'], { encoding: 'utf8' })
 if (!version.split('\n')[0].includes(` ${pins.emscripten} (`)) throw new Error(`Use Emscripten ${pins.emscripten}`)
@@ -33,7 +34,7 @@ const configure = (name, source, args) => {
     const build = join(work, `build-${name}`)
     run(emcmake, ['cmake', '-S', source, '-B', build, '-G', 'Ninja', '-DCMAKE_BUILD_TYPE=Release',
         `-DCMAKE_INSTALL_PREFIX=${prefix}`, `-DCMAKE_PREFIX_PATH=${prefix}`, `-DCMAKE_FIND_ROOT_PATH=${prefix}`,
-        '-DCMAKE_C_FLAGS=-pthread', '-DCMAKE_CXX_FLAGS=-pthread', '-DCMAKE_EXE_LINKER_FLAGS=-pthread',
+        `-DCMAKE_C_FLAGS=-pthread -ffile-prefix-map=${root}=.`, `-DCMAKE_CXX_FLAGS=-pthread -ffile-prefix-map=${root}=.`, '-DCMAKE_EXE_LINKER_FLAGS=-pthread',
         '-DBUILD_SHARED_LIBS=OFF', ...args])
     run('cmake', ['--build', build, '--parallel', '8', ...(name === 'freerdp' ? ['--target', 'tabby-freerdp'] : [])])
     if (name !== 'freerdp') run('cmake', ['--install', build])
@@ -46,6 +47,7 @@ configure('zlib', zlib, ['-DZLIB_BUILD_SHARED=OFF', '-DZLIB_BUILD_TESTING=OFF'])
 const sourceDir = await source('freerdp', freerdp, `freerdp-${freerdp.version}.tar.gz`)
 const build = configure('freerdp', join(root, 'native'), [`-DFREERDP_SOURCE_DIR=${sourceDir}`, `-DOPENSSL_ROOT_DIR=${prefix}`])
 const destination = join(root, 'wasm/freerdp')
+rmSync(destination, { recursive: true, force: true })
 mkdirSync(join(destination, 'licenses'), { recursive: true })
 for (const file of ['tabby-freerdp.js', 'tabby-freerdp.wasm']) copyFileSync(join(build, file), join(destination, file))
 copyFileSync(join(emsdk, 'upstream/emscripten/LICENSE'), join(destination, 'licenses/Emscripten-LICENSE'))

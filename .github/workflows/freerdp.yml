@@ -4,6 +4,9 @@ on:
   push:
     branches: [main]
     paths:
+      - 'wasm/**'
+      - 'src/freerdp*.ts'
+      - 'test/unit/freerdp*.ts'
       - 'native/*.c'
       - 'native/*.h'
       - 'native/*.cmake'
@@ -16,6 +19,9 @@ on:
       - '.gitattributes'
   pull_request:
     paths:
+      - 'wasm/**'
+      - 'src/freerdp*.ts'
+      - 'test/unit/freerdp*.ts'
       - 'native/*.c'
       - 'native/*.h'
       - 'native/*.cmake'
@@ -26,6 +32,7 @@ on:
       - 'test/fixtures/pam/build.cmake'
       - '.github/workflows/freerdp.yml'
       - '.gitattributes'
+  workflow_call:
   workflow_dispatch:
 
 permissions:
@@ -97,6 +104,7 @@ jobs:
           .qa/emsdk/emsdk install "$(node -p "require('./native/wasm-source.json').emscripten")"
           .qa/emsdk/emsdk activate "$(node -p "require('./native/wasm-source.json').emscripten")"
       - name: Compile portable FreeRDP
+        id: wasm_build
         run: node scripts/build-freerdp-wasm.mjs
       - name: WebAssembly protocol and security checks
         env:
@@ -107,8 +115,13 @@ jobs:
           node --import tsx --test test/unit/freerdp-wasm.ts test/unit/freerdp-files.ts
           node --import tsx --test --test-name-pattern='refuses|CredSSP' test/unit/freerdp.ts
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always() && steps.wasm_build.outcome == 'success'
         with:
           name: freerdp-wasm
           path: wasm/freerdp
           if-no-files-found: error
           retention-days: 14
+      - name: Committed WebAssembly matches an independent source build
+        run: |
+          git diff --exit-code -- wasm/freerdp
+          test -z "$(git ls-files --others --exclude-standard -- wasm/freerdp)"

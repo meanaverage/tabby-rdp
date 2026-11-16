@@ -5,6 +5,19 @@
 #undef NDEBUG
 #include <assert.h>
 static UINT32 offered, requested, requests, responseFlags, responseBytes;
+static unsigned file_acks(FILE* file, UINT32 generation, BOOL ok) {
+    fflush(file); rewind(file);
+    BYTE header[5], data[5]; unsigned count = 0;
+    while (fread(header, 1, 5, file) == 5) {
+        UINT32 length = read32(header + 1);
+        if (header[0] == 'a') {
+            assert(length == 5 && fread(data, 1, 5, file) == 5);
+            assert(read32(data) == generation && data[4] == (ok ? 1 : 0)); count++;
+        } else assert(fseek(file, length, SEEK_CUR) == 0);
+    }
+    clearerr(file); fseek(file, 0, SEEK_END);
+    return count;
+}
 static UINT capture_offer(CliprdrClientContext* clip, const CLIPRDR_FORMAT_LIST* list) {
     (void)clip; offered = list->numFormats ? list->formats[0].formatId : 0;
     if (offered == FILE_FORMAT) assert(strcmp(list->formats[0].formatName, "FileGroupDescriptorW") == 0);
@@ -44,15 +57,36 @@ int main(void) {
     clip.ClientFormatDataRequest = capture_request; clip.ClientFormatListResponse = capture_ack;
     clip.ClientFormatDataResponse = capture_data; clip.ClientFileContentsResponse = capture_file;
     clip.ClientFileContentsRequest = capture_file_request;
+    BYTE files[600] = { 0 }; write32(files, 7); files[4] = 1; /* one FILEDESCRIPTORW */
+    Command offer = { 'o', sizeof(files), files, NULL };
+    clipboard_file_command(&c, &offer); /* Not ready: fail immediately, keep the existing text. */
+    assert(file_acks(outputFile, 7, FALSE) == 1);
+    set_local_text(&c, (const BYTE*)"text", 4);
+    c.clipboardReady = TRUE; /* Ready without file-streaming capability. */
+    clipboard_file_command(&c, &offer);
+    assert(c.localText && c.localTextLength == 4 && !c.localFiles);
+    assert(file_acks(outputFile, 7, FALSE) == 2);
+    c.clipboardReady = FALSE;
     CLIPRDR_GENERAL_CAPABILITY_SET general = { CB_CAPSTYPE_GENERAL, 12, CB_CAPS_VERSION_2, CB_STREAM_FILECLIP_ENABLED };
     CLIPRDR_CAPABILITIES caps = { 0 }; caps.cCapabilitiesSets = 1; caps.capabilitySets = (void*)&general;
     assert(clipboard_server_capabilities(&clip, &caps) == CHANNEL_RC_OK);
     assert(clipboard_monitor_ready(&clip, NULL) == CHANNEL_RC_OK);
-    assert(c.fileStreaming && offered == 0);
-    BYTE files[600] = { 0 }; write32(files, 7); files[4] = 1; /* one FILEDESCRIPTORW */
-    Command offer = { 'o', sizeof(files), files, NULL };
+    assert(c.fileStreaming && offered == CF_UNICODETEXT);
     clipboard_file_command(&c, &offer);
+    assert(offered == CF_UNICODETEXT && c.offerPending && c.offerAgain);
+    CLIPRDR_FORMAT_LIST_RESPONSE offerResponse = { 0 };
+    offerResponse.common.msgFlags = CB_RESPONSE_FAIL;
+    assert(clipboard_server_format_list_response(&clip, &offerResponse) == CHANNEL_RC_OK);
+    /* A delayed rejection of text cannot reject the new file offer. */
+    assert(file_acks(outputFile, 7, FALSE) == 2);
     assert(offered == FILE_FORMAT && c.localGeneration == 7);
+    offerResponse.common.msgFlags = CB_RESPONSE_OK;
+    assert(clipboard_server_format_list_response(&clip, &offerResponse) == CHANNEL_RC_OK);
+    assert(!c.offerPending);
+    fflush(outputFile); assert(fseek(outputFile, -10, SEEK_END) == 0);
+    BYTE accepted[10]; assert(fread(accepted, 1, 10, outputFile) == 10);
+    assert(accepted[0] == 'a' && read32(accepted + 1) == 5 && read32(accepted + 5) == 7 && accepted[9] == 1);
+    fseek(outputFile, 0, SEEK_END);
     CLIPRDR_FORMAT_DATA_REQUEST dataRequest = { 0 }; dataRequest.requestedFormatId = FILE_FORMAT;
     assert(clipboard_server_data_request(&clip, &dataRequest) == CHANNEL_RC_OK);
     assert(responseFlags == CB_RESPONSE_OK && responseBytes == 596);

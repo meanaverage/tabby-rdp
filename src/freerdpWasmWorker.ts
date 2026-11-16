@@ -1,5 +1,6 @@
 /** Runs one FreeRDP WASM instance and its pthreads away from Tabby's renderer. */
 import { parentPort, workerData } from 'worker_threads'
+import { boundedWebSocket } from './freerdpWasmSocket'
 let utilityChannel: any
 const utilityPort = (process as NodeJS.Process & { parentPort?: any }).parentPort
 const port: { postMessage: (message: any, transfer?: ArrayBuffer[]) => void, on: (event: string, listener: (message: any) => void) => void } = parentPort ? {
@@ -10,6 +11,7 @@ const port: { postMessage: (message: any, transfer?: ArrayBuffer[]) => void, on:
     on: (event, listener) => utilityPort.on(event, (message: any) => {
         if (message.data?.type !== 'port' || utilityChannel) return
         utilityChannel = message.ports[0]
+        utilityChannel.on('close', ownerGone)
         utilityChannel.on('message', (message: any) => listener(message.data))
         utilityChannel.start()
         utilityChannel.postMessage({ type: 'ready' })
@@ -22,6 +24,28 @@ let inputAddress = 0, outputAddress = 0
 let input: { data: Uint8Array, offset: number } | undefined
 let outputWaiting = false
 let timer: ReturnType<typeof setInterval> | undefined
+let stopping = false
+
+/** Wake blocked certificate/input/output waits when the renderer or pipe disappears. */
+function closeRings (): void {
+    if (!moduleInstance || !inputAddress || !outputAddress) { return }
+    for (const address of [inputAddress, outputAddress]) {
+        const counters = new Int32Array(moduleInstance.HEAPU8.buffer, address, 3)
+        Atomics.store(counters, 2, 1)
+        Atomics.notify(counters, 0); Atomics.notify(counters, 1)
+    }
+}
+function ownerGone (): void {
+    if (stopping) { return }
+    stopping = true
+    clearInterval(timer)
+    input = undefined
+    closeRings()
+    // A thread blocked outside the rings must not keep an ownerless session alive.
+    setTimeout(() => process.exit(0), 250)
+}
+parentPort?.on('close', ownerGone)
+utilityPort?.on('close', ownerGone)
 
 function pumpInput (): void {
     if (!input || !moduleInstance) { return }
@@ -58,6 +82,8 @@ function pumpOutput (ending = false): void {
     }
 }
 port.on('message', message => {
+    if (message.type === 'eof') { ownerGone(); return }
+    if (stopping) { return }
     if (message.type === 'init' && !starting) {
         starting = true
         start(message.config).catch(failed)
@@ -67,20 +93,34 @@ port.on('message', message => {
     } else if (message.type === 'output-ack') { outputWaiting = false; pumpOutput() }
 })
 async function start (config: { module: string, websocket: string }): Promise<void> {
+    // Emscripten's nonblocking socket shim calls ws.send in this isolated worker. Bound that
+    // final queue as well as the IPC rings: a peer can request file ranges without reading them.
+    const wsPath = require.resolve('ws')
+    const Socket = require(wsPath)
+    require.cache[wsPath]!.exports = boundedWebSocket(Socket, () => failed('FreeRDP stopped: the server is not reading uploaded data'))
     const createFreeRDP = require(config.module)
     moduleInstance = await createFreeRDP({
         noInitialRun: true,
         websocket: { url: config.websocket, subprotocol: 'binary' },
         // FreeRDP logs can contain authentication details. Only framed IPC leaves this worker.
         print: () => {}, printErr: () => {},
-        onAbort: () => port.postMessage({ type: 'failure', message: 'FreeRDP WebAssembly aborted' }),
-        onExit: (code: number) => { clearInterval(timer); pumpOutput(true); port.postMessage({ type: 'exit', code }) },
+        onAbort: () => failed('FreeRDP WebAssembly aborted'),
+        onExit: (code: number) => {
+            clearInterval(timer)
+            if (!stopping) { pumpOutput(true); port.postMessage({ type: 'exit', code }) }
+            stopping = true
+            setTimeout(() => process.exit(code), 0)
+        },
     })
     inputAddress = moduleInstance._tabby_input_buffer()
     outputAddress = moduleInstance._tabby_output_buffer()
+    if (stopping) { closeRings(); return }
     timer = setInterval(() => { pumpInput(); pumpOutput() }, 1)
     pumpInput()
     moduleInstance.callMain([])
 }
-function failed (): void { port.postMessage({ type: 'failure', message: 'Could not initialise FreeRDP WebAssembly' }) }
+function failed (reason?: unknown): void {
+    if (stopping) { return }
+    try { port.postMessage({ type: 'failure', message: typeof reason === 'string' ? reason : 'Could not initialise FreeRDP WebAssembly' }) } finally { ownerGone() }
+}
 if (workerData) { starting = true; start(workerData).catch(failed) }

@@ -804,6 +804,8 @@ export class FileTransfer {
                 if (r.number !== null) {
                     this.served.delete(r.number)
                 }
+                // Settle the protocol request too: providers may retain its stream until answered.
+                this.submit?.(r.streamId, true, new Uint8Array())
             }
             return live
         })

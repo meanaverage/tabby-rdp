@@ -60,6 +60,9 @@ typedef struct {
     WCHAR* localText; /* This computer's clipboard text for the server, NUL-terminated UTF-16; NULL for none. */
     size_t localTextLength; /* In WCHARs, without the NUL. */
     BOOL clipboardReady; /* Under offerLock. */
+    /* Format-list responses carry no ID: keep one outstanding announcement and coalesce changes. */
+    BOOL offerPending, offerAgain, offeredFiles;
+    UINT32 offeredGeneration;
     BYTE* localFiles;
     UINT32 localFilesLength, localGeneration;
     BOOL fileStreaming;
@@ -279,17 +282,29 @@ static UINT32 clipboard_ways(Context* c) {
     return ways;
 }
 /* Under offerLock. File descriptors and text are mutually exclusive offers. */
+static void clipboard_file_ack(Context* c, UINT32 generation, BOOL ok) {
+    BYTE data[5]; write32(data, generation); data[4] = ok ? 1 : 0;
+    (void)output(c, 'a', data, sizeof(data));
+}
 static UINT clipboard_offer_locked(Context* c, CliprdrClientContext* cliprdr) {
+    if (c->offerPending) { c->offerAgain = TRUE; return CHANNEL_RC_OK; }
     CLIPRDR_FORMAT format = { CF_UNICODETEXT, NULL };
     CLIPRDR_FORMAT_LIST list = { 0 };
     list.common.msgType = CB_FORMAT_LIST;
     EnterCriticalSection(&c->clipboardLock);
     BOOL files = c->localFiles && c->fileStreaming;
     BOOL offer = (c->clipboard & CLIPBOARD_TO_REMOTE) && (files || c->localText);
+    c->offeredFiles = offer && files; c->offeredGeneration = c->localGeneration;
     if (files) { format.formatId = FILE_FORMAT; format.formatName = "FileGroupDescriptorW"; }
     LeaveCriticalSection(&c->clipboardLock);
     list.numFormats = offer ? 1 : 0; list.formats = offer ? &format : NULL;
-    return cliprdr->ClientFormatList(cliprdr, &list);
+    c->offerPending = TRUE; c->offerAgain = FALSE;
+    UINT rc = cliprdr->ClientFormatList(cliprdr, &list);
+    if (rc != CHANNEL_RC_OK) {
+        c->offerPending = FALSE;
+        if (c->offeredFiles) clipboard_file_ack(c, c->offeredGeneration, FALSE);
+    }
+    return rc;
 }
 static UINT clipboard_offer(Context* c) {
     EnterCriticalSection(&c->offerLock);
@@ -356,9 +371,15 @@ static UINT clipboard_server_format_list(CliprdrClientContext* cliprdr, const CL
 }
 static UINT clipboard_server_format_list_response(CliprdrClientContext* cliprdr, const CLIPRDR_FORMAT_LIST_RESPONSE* response) {
     Context* c = cliprdr->custom;
-    BYTE ok = (response->common.msgFlags & CB_RESPONSE_OK) != 0;
-    (void)output(c, 'a', &ok, 1);
-    return CHANNEL_RC_OK;
+    EnterCriticalSection(&c->offerLock);
+    UINT rc = CHANNEL_RC_OK;
+    if (c->offerPending) {
+        c->offerPending = FALSE;
+        if (c->offeredFiles) clipboard_file_ack(c, c->offeredGeneration, (response->common.msgFlags & CB_RESPONSE_OK) != 0);
+        if (c->offerAgain) rc = clipboard_offer_locked(c, cliprdr);
+    }
+    LeaveCriticalSection(&c->offerLock);
+    return rc;
 }
 static UINT clipboard_server_data_request(CliprdrClientContext* cliprdr, const CLIPRDR_FORMAT_DATA_REQUEST* request) {
     Context* c = cliprdr->custom;
@@ -449,21 +470,26 @@ static void clipboard_file_command(Context* c, const Command* cmd) {
     const BYTE* p = cmd->data;
     EnterCriticalSection(&c->offerLock);
     CliprdrClientContext* cliprdr = c->cliprdr;
-    if (!cliprdr || !c->clipboardReady) { LeaveCriticalSection(&c->offerLock); return; }
+    if (!cliprdr || !c->clipboardReady) {
+        if (cmd->type == 'o' && cmd->length >= 8) clipboard_file_ack(c, read32(p), FALSE);
+        LeaveCriticalSection(&c->offerLock); return;
+    }
     if (cmd->type == 'o' && cmd->length >= 8 && cmd->length <= MAX_FILE_LIST + 4) {
         EnterCriticalSection(&c->clipboardLock);
-        if (c->clipboard & CLIPBOARD_TO_REMOTE) {
-            free(c->localFiles); c->localFiles = malloc(cmd->length - 4);
-            c->localFilesLength = c->localFiles ? cmd->length - 4 : 0;
-            if (c->localFiles) memcpy(c->localFiles, p + 4, c->localFilesLength);
+        BOOL supported = (c->clipboard & CLIPBOARD_TO_REMOTE) && c->fileStreaming;
+        BYTE* files = supported ? malloc(cmd->length - 4) : NULL;
+        supported = files != NULL;
+        if (supported) {
+            memcpy(files, p + 4, cmd->length - 4);
+            free(c->localFiles); c->localFiles = files;
+            c->localFilesLength = cmd->length - 4;
             c->localGeneration = read32(p);
             if (c->localText) { memset(c->localText, 0, (c->localTextLength + 1) * sizeof(WCHAR)); free(c->localText); }
             c->localText = NULL; c->localTextLength = 0;
         }
-        BOOL supported = c->fileStreaming;
         LeaveCriticalSection(&c->clipboardLock);
         if (supported) (void)clipboard_offer_locked(c, cliprdr);
-        else { BYTE ok = 0; (void)output(c, 'a', &ok, 1); }
+        else clipboard_file_ack(c, read32(p), FALSE);
     } else if (cmd->type == 'q' && cmd->length == 28) {
         CLIPRDR_FILE_CONTENTS_REQUEST request = { 0 };
         request.common.msgType = CB_FILECONTENTS_REQUEST;
@@ -522,7 +548,9 @@ static void channel_disconnected(void* context, const ChannelDisconnectedEventAr
     Context* c = context;
     if (strcmp(e->name, DISP_DVC_CHANNEL_NAME) == 0) { c->disp = NULL; c->displayReady = FALSE; }
     else if (strcmp(e->name, CLIPRDR_SVC_CHANNEL_NAME) == 0) {
-        EnterCriticalSection(&c->offerLock); c->cliprdr = NULL; c->clipboardReady = FALSE; LeaveCriticalSection(&c->offerLock);
+        EnterCriticalSection(&c->offerLock);
+        c->cliprdr = NULL; c->clipboardReady = FALSE; c->offerPending = FALSE; c->offerAgain = FALSE;
+        LeaveCriticalSection(&c->offerLock);
     }
     else freerdp_client_OnChannelDisconnectedEventHandler(&c->client, e);
 }
@@ -623,7 +651,7 @@ static BOOL process_input(Context* c) {
     return !ended;
 }
 int main(int argc, char** argv) {
-    if (argc == 2 && strcmp(argv[1], "--version") == 0) { printf("tabby-freerdp IPC 7; FreeRDP %s\n", FREERDP_VERSION_FULL); return 0; }
+    if (argc == 2 && strcmp(argv[1], "--version") == 0) { printf("tabby-freerdp IPC 8; FreeRDP %s\n", FREERDP_VERSION_FULL); return 0; }
     if (argc != 1) return 2;
 #ifdef _WIN32
     _setmode(_fileno(stdin), _O_BINARY); _setmode(_fileno(stdout), _O_BINARY);

@@ -24,6 +24,7 @@ export class FreeRDPWasmProcess extends EventEmitter {
     private connections = new Set<any>()
     private inputDone?: (error?: Error | null) => void
     private ended = false
+    private unload?: () => void
 
     private constructor () {
         super()
@@ -31,7 +32,7 @@ export class FreeRDPWasmProcess extends EventEmitter {
             if (!this.worker || this.ended) { done(new Error('FreeRDP WebAssembly stopped')); return }
             this.inputDone = done
             this.worker.postMessage({ type: 'input', data: new Uint8Array(data) })
-        } })
+        }, final: done => { this.worker?.postMessage({ type: 'eof' }); done() } })
     }
 
     static async create (relay: { port: number, token: string }, env: NodeJS.ProcessEnv): Promise<FreeRDPWasmProcess> {
@@ -46,7 +47,11 @@ export class FreeRDPWasmProcess extends EventEmitter {
             const socket = connect({ host: '127.0.0.1', port: relay.port })
             child.connections.add(websocket); child.connections.add(socket)
             const close = () => { websocket.terminate(); socket.destroy(); child.connections.delete(websocket); child.connections.delete(socket) }
-            websocket.on('error', close); websocket.on('close', close); socket.on('error', close); socket.on('close', close)
+            websocket.on('error', close); websocket.on('close', close); socket.on('error', close)
+            // ws queues its close frame after earlier sends. A clean TCP end must preserve the
+            // server's final disconnect/error-info PDU; errors and explicit kills still abort.
+            socket.on('end', () => websocket.close())
+            socket.on('close', (failed: boolean) => failed ? close() : websocket.close())
             websocket.on('message', (data: Buffer, binary: boolean) => {
                 if (!binary) { close(); return }
                 if (!socket.write(data)) { websocket.pause() }
@@ -87,6 +92,8 @@ export class FreeRDPWasmProcess extends EventEmitter {
                 utility.on('error', (error: Error) => events.emit('error', error))
                 utility.on('exit', (code: number) => events.emit('exit', code))
                 child.worker = { postMessage: message => messagePort.postMessage(message), terminate: async () => { messagePort.close(); utility.kill() } }
+                child.unload = () => { child.kill() }
+                window.addEventListener('beforeunload', child.unload)
 
             } else {
                 events = new Worker(join(__dirname, 'freerdpWasmWorker.js'), { env, workerData: config })
@@ -117,6 +124,7 @@ export class FreeRDPWasmProcess extends EventEmitter {
     kill (signal: NodeJS.Signals = 'SIGTERM'): boolean {
         if (this.ended) { return false }
         this.ended = true
+        if (this.unload) { window.removeEventListener('beforeunload', this.unload); this.unload = undefined }
         this.signalCode = this.exitCode === null ? signal : null
         this.server?.close()
         for (const connection of this.connections) { connection.terminate?.(); connection.destroy?.() }
