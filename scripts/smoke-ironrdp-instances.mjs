@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawn } from 'node:child_process'
 import WebSocket from 'ws'
-import ts from 'typescript'
+import ts from '@typescript/typescript6'
 
 // Compile the DOM-facing application code for this page. Extract the actual DesktopSession class unchanged so
 // its cleanup is exercised without loading the surrounding Angular/Node service in a plain browser.
@@ -21,7 +21,10 @@ const sessionClass = service.statements.find(node => ts.isClassDeclaration(node)
 if (!sessionClass) throw new Error('DesktopSession class not found')
 app.set('/app/desktopSession.js', compile(`import { SessionLog } from './sessionLog.js';
 import { terminalInputs } from './hostCompat.js';
-import { renderOsd } from './osd.js';\n` + sessionClass.getText(service)))
+import { renderOsd } from './osd.js';
+// Only IronRDP views are mounted in this browser fixture. DesktopSession also checks the native view's class.
+class FreeRDPView {}
+` + sessionClass.getText(service)))
 
 const html = `<!doctype html><html><body><pre id="result">PENDING</pre><script type="module">
 try {
