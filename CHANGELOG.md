@@ -2,6 +2,8 @@
 
 ## 0.6.5 (unreleased)
 
+- IronRDP skips empty H.264 views so a remote desktop can keep drawing when the server sends an empty view alongside a picture. Frame acknowledgements report queue depth as unavailable when the client has no buffered-byte measurement.
+
 ## 0.6.4
 
 **Added**

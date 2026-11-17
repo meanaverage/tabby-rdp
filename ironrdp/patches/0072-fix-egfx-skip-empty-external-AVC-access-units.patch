@@ -1,0 +1,66 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: meanaverage <18336095+meanaverage@users.noreply.github.com>
+Date: Tue, 17 Nov 2026 11:15:20 -0800
+Subject: [PATCH] fix(egfx): skip empty external AVC access units
+
+An empty view cannot produce a browser decoder callback. Omit that view
+before registering pending work. Continue processing its companion view
+and acknowledge the frame when its actual picture is complete.
+---
+ crates/ironrdp-egfx/src/client.rs             |  4 ++++
+ .../tests/egfx/external_h264.rs               | 24 +++++++++++++++++++
+ 2 files changed, 28 insertions(+)
+
+diff --git a/crates/ironrdp-egfx/src/client.rs b/crates/ironrdp-egfx/src/client.rs
+index ee5f44a9..fc54d90b 100644
+--- a/crates/ironrdp-egfx/src/client.rs
++++ b/crates/ironrdp-egfx/src/client.rs
+@@ -841,6 +841,10 @@ impl GraphicsPipelineClient {
+ 
+         let mut queued = Vec::with_capacity(streams.len());
+         for (stream, main_view) in streams {
++            // An empty AVC444 view produces no picture and needs no decoder completion.
++            if stream.data.is_empty() {
++                continue;
++            }
+             let regions: Vec<ExclusiveRectangle> = if main_view {
+                 let regions: Vec<ExclusiveRectangle> = stream
+                     .rectangles
+diff --git a/crates/ironrdp-testsuite-core/tests/egfx/external_h264.rs b/crates/ironrdp-testsuite-core/tests/egfx/external_h264.rs
+index cf73fabc..4ad70189 100644
+--- a/crates/ironrdp-testsuite-core/tests/egfx/external_h264.rs
++++ b/crates/ironrdp-testsuite-core/tests/egfx/external_h264.rs
+@@ -366,6 +366,30 @@ fn avc444_versions_are_advertised_by_a_handler_that_asks_for_them() {
+     assert_eq!(advertised(&mut client), [CapabilityVersion::V8]);
+ }
+ 
++#[test]
++fn empty_avc444_views_do_not_wait_for_a_decoder_callback() {
++    let mut client = client();
++    let sent = process_all(&mut client, &[start(1), avc444(Encoding::CHROMA, &[], None), end(1)]);
++    assert!(client.take_h264_frames().is_empty());
++    assert_eq!(acks(&sent), [(1, 0)]);
++
++    for (main, auxiliary, displayed) in [(IDR_ACCESS_UNIT, &[][..], true), (&[][..], IDR_ACCESS_UNIT, false)] {
++        let sent = process_all(
++            &mut client,
++            &[
++                start(2),
++                avc444(Encoding::LUMA_AND_CHROMA, main, Some(auxiliary)),
++                end(2),
++            ],
++        );
++        assert!(acks(&sent).is_empty());
++        let frames = client.take_h264_frames();
++        assert_eq!(frames.len(), 1);
++        assert_eq!(!frames[0].regions.is_empty(), displayed);
++        assert_eq!(acks(&client.complete_h264_frame(frames[0].id, None).unwrap()), [(2, 0)]);
++    }
++}
++
+ #[test]
+ fn avc444_main_views_are_shown_and_auxiliary_views_only_decoded() {
+     let mut client = client();
+-- 
+2.54.0 (Apple Git-157)
+
