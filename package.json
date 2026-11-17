@@ -1,6 +1,6 @@
 {
   "name": "tabby-rdp",
-  "version": "0.6.4",
+  "version": "0.6.5",
   "description": "Windows and Linux remote desktops in Tabby, through SSH, direct RDP or RD Gateway. IronRDP and FreeRDP clients.",
   "keywords": [
     "tabby-plugin",
